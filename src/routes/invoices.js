@@ -166,7 +166,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST /api/invoices
-router.post('/', async (req, res) => {
+router.post('/', validate(schemas.createInvoice), async (req, res) => {
   try {
     const { client_id, billing_period_start, billing_period_end, tax_type, is_rcm_applicable, discount_amount, notes, invoice_date } = req.body;
     

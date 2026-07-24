@@ -293,44 +293,61 @@ async function buildPeriodData(fromDate, toDate) {
 
 async function buildMonthlyTrend(startYear, endYear) {
   const months = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
-  const trend = [];
+  const startMonthStr = `${startYear}-04`;
+  const endMonthStr = `${endYear}-03`;
 
+  // Bulk query 1: Revenue & Billed by month
+  const revRes = await query(
+    `SELECT strftime('%Y-%m', invoice_date) as ym,
+            COALESCE(SUM(payment_received), 0) as revenue,
+            COALESCE(SUM(final_amount), 0) as billed
+     FROM invoices
+     WHERE status != 'cancelled'
+       AND strftime('%Y-%m', invoice_date) >= $1
+       AND strftime('%Y-%m', invoice_date) <= $2
+     GROUP BY ym`,
+    [startMonthStr, endMonthStr]
+  );
+  const revMap = new Map(revRes.rows.map(r => [r.ym, r]));
+
+  // Bulk query 2: Payroll by month
+  const payRes = await query(
+    `SELECT strftime('%Y-%m', payroll_month) as ym,
+            COALESCE(SUM(gross_salary), 0) as payroll
+     FROM payroll
+     WHERE strftime('%Y-%m', payroll_month) >= $1
+       AND strftime('%Y-%m', payroll_month) <= $2
+     GROUP BY ym`,
+    [startMonthStr, endMonthStr]
+  );
+  const payMap = new Map(payRes.rows.map(r => [r.ym, parseFloat(r.payroll)]));
+
+  // Bulk query 3: Expenses by month
+  const expRes = await query(
+    `SELECT strftime('%Y-%m', expense_date) as ym,
+            COALESCE(SUM(amount), 0) as expenses
+     FROM expenses
+     WHERE status IN ('approved', 'paid')
+       AND strftime('%Y-%m', expense_date) >= $1
+       AND strftime('%Y-%m', expense_date) <= $2
+     GROUP BY ym`,
+    [startMonthStr, endMonthStr]
+  );
+  const expMap = new Map(expRes.rows.map(r => [r.ym, parseFloat(r.expenses)]));
+
+  const trend = [];
   for (let i = 0; i < 12; i++) {
     const monthIdx = (i + 3) % 12; // April=3 → March=2
     const year = monthIdx >= 3 ? startYear : endYear;
     const monthNum = monthIdx + 1;
-    const monthStart = `${year}-${String(monthNum).padStart(2, '0')}-01`;
+    const ym = `${year}-${String(monthNum).padStart(2, '0')}`;
 
-    // Revenue
-    const rev = await query(
-      `SELECT COALESCE(SUM(payment_received), 0) as revenue,
-              COALESCE(SUM(final_amount), 0) as billed
-       FROM invoices
-       WHERE status != 'cancelled'
-         AND strftime('%Y-%m', invoice_date) = $1`,
-      [`${year}-${String(monthNum).padStart(2, '0')}`]
-    );
+    const revRow = revMap.get(ym);
+    const revenue = revRow ? parseFloat(revRow.revenue) : 0;
+    const billed = revRow ? parseFloat(revRow.billed) : 0;
+    const payroll = payMap.get(ym) || 0;
+    const expenses = expMap.get(ym) || 0;
 
-    // Payroll
-    const pay = await query(
-      `SELECT COALESCE(SUM(gross_salary), 0) as payroll
-       FROM payroll
-       WHERE strftime('%Y-%m', payroll_month) = $1`,
-      [`${year}-${String(monthNum).padStart(2, '0')}`]
-    );
-
-    // Expenses
-    const exp = await query(
-      `SELECT COALESCE(SUM(amount), 0) as expenses
-       FROM expenses
-       WHERE status IN ('approved', 'paid')
-         AND strftime('%Y-%m', expense_date) = $1`,
-      [`${year}-${String(monthNum).padStart(2, '0')}`]
-    );
-
-    const revenue = parseFloat(rev.rows[0].revenue);
-    const payroll = parseFloat(pay.rows[0].payroll);
-    const expenses = parseFloat(exp.rows[0].expenses);
     const totalCosts = payroll + expenses;
     const profit = revenue - totalCosts;
 
@@ -339,7 +356,7 @@ async function buildMonthlyTrend(startYear, endYear) {
       month_num: monthNum,
       year,
       revenue,
-      billed: parseFloat(rev.rows[0].billed),
+      billed,
       payroll,
       expenses,
       total_costs: totalCosts,

@@ -46,6 +46,22 @@ function validate(schema) {
   };
 }
 
+/**
+ * Validates that a route parameter (default 'id') is a valid positive integer.
+ */
+function validateIdParam(paramName = 'id') {
+  return (req, res, next) => {
+    const val = req.params[paramName];
+    if (val && !/^\d+$/.test(val)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid ${paramName}: must be a positive integer`
+      });
+    }
+    next();
+  };
+}
+
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 
 // POST /api/clients
@@ -147,8 +163,10 @@ const createInvoiceSchema = Joi.object({
   billing_period_end: Joi.date().iso().min(Joi.ref('billing_period_start')).required()
     .messages({ 'date.min': 'Billing period end must be on or after start date' })
     .label('Billing period end'),
+  tax_type: Joi.string().valid('none', 'cgst_sgst', 'igst').optional().allow('', null).label('Tax type'),
+  is_rcm_applicable: Joi.boolean().optional().label('Is RCM applicable'),
   tax_rate: Joi.number().min(0).max(100).optional().label('Tax rate (%)'),
-  discount_amount: Joi.number().min(0).optional().label('Discount amount'),
+  discount_amount: Joi.number().min(0).optional().allow(null, '').label('Discount amount'),
   notes: Joi.string().max(2000).optional().allow('', null).label('Notes'),
 });
 
@@ -226,6 +244,7 @@ const loginSchema = Joi.object({
 
 module.exports = {
   validate,
+  validateIdParam,
   schemas: {
     createClient: createClientSchema,
     updateClient: updateClientSchema,

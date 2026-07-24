@@ -13,8 +13,23 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Security middleware
-app.use(helmet());
+// Security middleware with Content Security Policy
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+        fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
+        imgSrc: ["'self'", 'data:', 'blob:', 'http://localhost:*', 'http://127.0.0.1:*'],
+        connectSrc: ["'self'", 'http://localhost:*', 'http://127.0.0.1:*', 'ws://localhost:*'],
+        objectSrc: ["'none'"],
+        upgradeInsecureRequests: null,
+      },
+    },
+  })
+);
 
 // CORS: Restrict origins to prevent CSRF attacks
 if (process.env.NODE_ENV === 'production') {

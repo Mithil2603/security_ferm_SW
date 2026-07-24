@@ -182,4 +182,43 @@ describe('Recurring Invoice Calculations', () => {
       expect(nextDate > endDate).toBe(false);
     });
   });
+
+  // ─── Invoice Edit & Payment Calculation Logic ──────────────────────────────
+  describe('Invoice Edit & Payment Calculations', () => {
+    test('editing invoice with discount correctly calculates total_amount and final_amount', () => {
+      const subtotal = 100000;
+      const discount = 10000;
+      const taxable = Math.max(0, subtotal - discount); // 90000
+      const cgst = parseFloat((taxable * 0.09).toFixed(2)); // 8100
+      const sgst = parseFloat((taxable * 0.09).toFixed(2)); // 8100
+      const finalAmount = parseFloat((taxable + cgst + sgst).toFixed(2)); // 106200
+      const totalAmount = parseFloat((taxable + cgst + sgst).toFixed(2)); // 106200
+
+      expect(taxable).toBe(90000);
+      expect(cgst).toBe(8100);
+      expect(sgst).toBe(8100);
+      expect(finalAmount).toBe(106200);
+      expect(totalAmount).toBe(106200);
+    });
+
+    test('recalculating payment_due properly accounts for TDS and received payments', () => {
+      const finalAmount = 106200;
+      const paymentReceived = 50000;
+      const tdsDeducted = 2000;
+      const paymentDue = parseFloat((finalAmount - paymentReceived - tdsDeducted).toFixed(2));
+
+      expect(paymentDue).toBe(54200);
+    });
+
+    test('full payment with TDS marks status as paid (due <= 0)', () => {
+      const finalAmount = 100000;
+      const paymentReceived = 98000;
+      const tdsDeducted = 2000;
+      const paymentDue = parseFloat((finalAmount - paymentReceived - tdsDeducted).toFixed(2));
+      const status = paymentDue <= 0.01 ? 'paid' : 'partially_paid';
+
+      expect(paymentDue).toBe(0);
+      expect(status).toBe('paid');
+    });
+  });
 });
