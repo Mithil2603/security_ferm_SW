@@ -70,20 +70,25 @@ async function calculatePayroll(employee_id, payroll_month, manual_days_worked) 
   const annualizedGross = grossSalary.times(12).minus(standardDeduction);
   const taxableIncome = annualizedGross.greaterThan(0) ? annualizedGross : D(0);
   let annualTax = D(0);
-  if (taxableIncome.greaterThan(1500000)) {
-    annualTax = annualTax.plus(taxableIncome.minus(1500000).times(0.3)).plus(150000);
+  if (taxableIncome.greaterThan(2400000)) {
+    annualTax = annualTax.plus(taxableIncome.minus(2400000).times(0.3)).plus(300000);
+  } else if (taxableIncome.greaterThan(2000000)) {
+    annualTax = annualTax.plus(taxableIncome.minus(2000000).times(0.25)).plus(200000);
+  } else if (taxableIncome.greaterThan(1600000)) {
+    annualTax = annualTax.plus(taxableIncome.minus(1600000).times(0.2)).plus(120000);
   } else if (taxableIncome.greaterThan(1200000)) {
-    annualTax = annualTax.plus(taxableIncome.minus(1200000).times(0.2)).plus(90000);
-  } else if (taxableIncome.greaterThan(900000)) {
-    annualTax = annualTax.plus(taxableIncome.minus(900000).times(0.15)).plus(45000);
-  } else if (taxableIncome.greaterThan(600000)) {
-    annualTax = annualTax.plus(taxableIncome.minus(600000).times(0.1)).plus(15000);
-  } else if (taxableIncome.greaterThan(300000)) {
-    annualTax = annualTax.plus(taxableIncome.minus(300000).times(0.05));
+    annualTax = annualTax.plus(taxableIncome.minus(1200000).times(0.15)).plus(60000);
+  } else if (taxableIncome.greaterThan(800000)) {
+    annualTax = annualTax.plus(taxableIncome.minus(800000).times(0.1)).plus(20000);
+  } else if (taxableIncome.greaterThan(400000)) {
+    annualTax = annualTax.plus(taxableIncome.minus(400000).times(0.05));
   }
-  // Section 87A Rebate: if taxable income is <= 1200000 under new regime, tax is 0
-  if (annualizedGross.lessThanOrEqualTo(1200000)) {
+  // Section 87A Rebate: if taxable income is <= 1,200,000 under new regime, tax is 0
+  if (taxableIncome.lessThanOrEqualTo(1200000)) {
     annualTax = D(0);
+  } else {
+    // 4% Health & Education Cess
+    annualTax = annualTax.times(1.04);
   }
   const taxDeduction = annualTax.dividedBy(12).toDecimalPlaces(2);
 

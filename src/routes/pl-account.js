@@ -228,7 +228,7 @@ async function buildPeriodData(fromDate, toDate) {
   // ── CALCULATIONS ───────────────────────────────────────────────────────────
   const totalIncome = parseFloat(revenueTotal.rows[0].total_collected);
   const totalBilled = parseFloat(revenueTotal.rows[0].total_billed);
-  const totalPayroll = parseFloat(payrollTotal.rows[0].total_payroll);
+  const totalPayroll = parseFloat(payrollTotal.rows[0].total_gross);
   const totalExpenses = parseFloat(expenseTotal.rows[0].total_expenses);
   const grossProfit = totalIncome - totalPayroll;
   const grossMargin = totalIncome > 0 ? parseFloat((grossProfit / totalIncome * 100).toFixed(2)) : 0;
@@ -313,7 +313,7 @@ async function buildMonthlyTrend(startYear, endYear) {
 
     // Payroll
     const pay = await query(
-      `SELECT COALESCE(SUM(net_salary), 0) as payroll
+      `SELECT COALESCE(SUM(gross_salary), 0) as payroll
        FROM payroll
        WHERE strftime('%Y-%m', payroll_month) = $1`,
       [`${year}-${String(monthNum).padStart(2, '0')}`]

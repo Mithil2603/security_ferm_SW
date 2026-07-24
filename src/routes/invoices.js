@@ -90,7 +90,7 @@ function calculateInvoiceAmounts(monthly_rate, billing_period_start, billing_per
     cgst_amount: parseFloat(cgst_amount.toString()),
     sgst_amount: parseFloat(sgst_amount.toString()),
     igst_amount: parseFloat(igst_amount.toString()),
-    total_amount: parseFloat(amount_subtotal.plus(cgst_amount).plus(sgst_amount).plus(igst_amount).toString()),
+    total_amount: parseFloat(total_amount.toString()),
     final_amount: parseFloat(final_amount.toString()),
   };
 }
@@ -670,10 +670,10 @@ router.put('/:id', async (req, res) => {
       final_amount += cgst_amount + sgst_amount + igst_amount;
     }
     final_amount = parseFloat(final_amount.toFixed(2));
-    const total_amount = parseFloat((sub + cgst_amount + sgst_amount + igst_amount).toFixed(2));
+    const total_amount = parseFloat((taxable_value + cgst_amount + sgst_amount + igst_amount).toFixed(2));
     
     // Recalculate payment due
-    const payment_due = parseFloat((final_amount - invoice.payment_received).toFixed(2));
+    const payment_due = parseFloat((final_amount - (invoice.payment_received || 0) - (invoice.tds_deducted || 0)).toFixed(2));
     let status = invoice.status;
     if (payment_due <= 0 && status !== 'cancelled') {
       status = 'paid';

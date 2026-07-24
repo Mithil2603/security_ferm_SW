@@ -230,7 +230,7 @@ async function buildBalanceSheet(asOnDate) {
   `, [fyStart, asOnDate]);
 
   const totalPayroll = await query(`
-    SELECT COALESCE(SUM(net_salary), 0) as total
+    SELECT COALESCE(SUM(gross_salary), 0) as total
     FROM payroll
     WHERE payroll_month >= $1 AND payroll_month <= $2
   `, [fyStart, asOnDate]);
