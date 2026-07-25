@@ -1,11 +1,13 @@
 /**
  * src/utils/secureLogger.js
- * Phase 4.5 — Custom Morgan logger that strips sensitive fields from logs.
+ * Custom Express logger middleware that strips sensitive fields from logs.
+ * Replaces morgan with a zero-dependency implementation.
+ *
  * Sensitive fields: password, password_hash, aadhar_number, pan_number,
  *                   bank_account_number, token, jwt, otp
  */
 
-const morgan = require('morgan');
+const logger = require('./logger');
 
 // Fields that must NEVER appear in any log output
 const SENSITIVE_FIELDS = new Set([
@@ -45,8 +47,10 @@ function redactSensitive(obj, depth = 0) {
   return result;
 }
 
-// Register a custom token: sanitised request body (max 300 chars)
-morgan.token('safe-body', (req) => {
+/**
+ * Get sanitised request body string (max 300 chars).
+ */
+function getSafeBody(req) {
   try {
     if (!req.body || Object.keys(req.body).length === 0) return '-';
     const sanitised = redactSensitive(req.body);
@@ -55,33 +59,50 @@ morgan.token('safe-body', (req) => {
   } catch {
     return '-';
   }
-});
+}
 
-// Register a custom token: user info (id + role, never the JWT itself)
-morgan.token('user-info', (req) => {
+/**
+ * Get user info string (id + role, never the JWT itself).
+ */
+function getUserInfo(req) {
   if (!req.user) return 'anonymous';
   return `uid=${req.user.userId || '?'} role=${req.user.role || '?'}`;
-});
+}
 
 /**
- * Secure development format — shows method, URL, status, response-time, user, and sanitised body.
- */
-const secureDev = morgan(
-  ':method :url :status :response-time ms | :user-info | body::safe-body'
-);
-
-/**
- * Secure production format — compact, no body logged.
- */
-const secureProd = morgan(
-  ':remote-addr - :user-info ":method :url HTTP/:http-version" :status :res[content-length] - :response-time ms'
-);
-
-/**
- * Returns the appropriate logger middleware based on NODE_ENV.
+ * Returns an Express middleware that logs requests.
+ * - Production: compact format (no body logged)
+ * - Development: verbose format with sanitised body
  */
 function createLogger() {
-  return process.env.NODE_ENV === 'production' ? secureProd : secureDev;
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  return (req, res, next) => {
+    const startTime = Date.now();
+
+    // Hook into the response finish event to log after response is sent
+    res.on('finish', () => {
+      const duration = Date.now() - startTime;
+      const userInfo = getUserInfo(req);
+
+      if (isProduction) {
+        // Compact production format
+        const remoteAddr = req.ip || req.connection?.remoteAddress || '-';
+        const contentLength = res.getHeader('content-length') || '-';
+        logger.info(
+          `${remoteAddr} - ${userInfo} "${req.method} ${req.originalUrl} HTTP/${req.httpVersion}" ${res.statusCode} ${contentLength} - ${duration} ms`
+        );
+      } else {
+        // Verbose dev format with sanitised body
+        const safeBody = getSafeBody(req);
+        logger.info(
+          `${req.method} ${req.originalUrl} ${res.statusCode} ${duration} ms | ${userInfo} | body:${safeBody}`
+        );
+      }
+    });
+
+    next();
+  };
 }
 
 module.exports = { createLogger, redactSensitive };
