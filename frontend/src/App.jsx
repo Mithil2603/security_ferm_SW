@@ -1,7 +1,9 @@
+import { useState, useEffect } from 'react';
 import { HashRouter as Router, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import Layout from './components/layout/Layout';
 import './services/errorInterceptor'; // Import to initialize
+import LicenseActivation from './pages/LicenseActivation';
 
 // Pages
 import Login from './pages/Login';
@@ -35,6 +37,52 @@ import AuditLogs from './pages/AuditLogs';
 import HelpDocumentation from './pages/HelpDocumentation';
 
 function App() {
+  const [licenseStatus, setLicenseStatus] = useState('checking'); // 'checking' | 'unlicensed' | 'licensed'
+
+  useEffect(() => {
+    checkLicense();
+  }, []);
+
+  const checkLicense = async () => {
+    try {
+      const response = await fetch('http://127.0.0.1:5000/api/license/status');
+      const data = await response.json();
+      
+      if (data.success && data.licensed) {
+        setLicenseStatus('licensed');
+      } else {
+        setLicenseStatus('unlicensed');
+      }
+    } catch (err) {
+      // If server isn't ready yet, retry after a short delay
+      setTimeout(() => {
+        checkLicense();
+      }, 1500);
+    }
+  };
+
+  // Show a loading spinner while checking license
+  if (licenseStatus === 'checking') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-12 h-12 border-4 border-teal-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-slate-400 text-sm">Verifying license...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show license activation screen if not licensed
+  if (licenseStatus === 'unlicensed') {
+    return (
+      <LicenseActivation
+        onActivated={() => setLicenseStatus('licensed')}
+      />
+    );
+  }
+
+  // Licensed — show the full app
   return (
     <Router>
       <AuthProvider>

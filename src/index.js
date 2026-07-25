@@ -160,6 +160,7 @@ app.use('/api/workflows', require('./routes/workflows'));
 app.use('/api/backups', require('./routes/backups'));
 app.use('/api/audit-logs', require('./routes/audit-logs'));
 app.use('/api/budgets', require('./routes/budgets'));
+app.use('/api/license', require('./routes/license'));
 
 // Health check
 app.get('/health', (req, res) => {
