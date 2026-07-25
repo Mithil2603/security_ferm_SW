@@ -195,7 +195,9 @@ function createWindow() {
     require('./src/index.js');
     console.log('Express server loaded successfully inside Electron.');
   } catch (err) {
-    fs.writeFileSync(path.join(app.getPath('desktop'), 'electron-debug-log.txt'), 'Failed to load Express server: ' + err.stack);
+    const errLogPath = path.join(userDataPath, 'electron-error.log');
+    fs.writeFileSync(errLogPath, 'Failed to load Express server:\n' + err.stack);
+    dialog.showErrorBox('🔴 Express Server Error', `Failed to start local API server:\n${err.message}\n\nCheck electron-error.log in AppData.`);
     console.error('Failed to load Express server:', err);
   }
 

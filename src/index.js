@@ -188,8 +188,8 @@ startScheduledJobs();
 startBackupJob();
 initCronJobs();
 
-app.listen(PORT, '0.0.0.0', () => {
-  logger.info(`\n🚀 Security Firm API Server running on port ${PORT} (0.0.0.0)`);
+app.listen(PORT, '127.0.0.1', () => {
+  logger.info(`\n🚀 Security Firm API Server running on port ${PORT} (127.0.0.1)`);
   logger.info(`📊 Environment: ${process.env.NODE_ENV}`);
   logger.info(`🗄️  Database: SQLite @ ${process.env.DB_PATH || 'database.sqlite'}\n`);
 });
