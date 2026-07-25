@@ -104,7 +104,11 @@ api.interceptors.response.use(
       });
     }
 
-    return Promise.reject(error.response?.data || { message: 'An unexpected error occurred' });
+    const errorMessage = error.response?.data?.message || 
+      (error.message === 'Network Error' ? 'Cannot connect to backend server. Please check your network setup.' : error.message) || 
+      'An unexpected error occurred';
+
+    return Promise.reject(error.response?.data || { message: errorMessage });
   }
 );
 

@@ -4,6 +4,13 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 
+// Ensure single instance to prevent port 5000 conflicts
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+  process.exit(0);
+}
+
 // Ensure userData directory exists for the database and uploads
 const userDataPath = app.getPath('userData');
 
@@ -103,7 +110,7 @@ autoUpdater.autoDownload = true;         // Download updates silently in the bac
 autoUpdater.autoInstallOnAppQuit = true;  // Install when the user closes the app
 
 // Log auto-updater events for debugging
-autoUpdater.logger = require('electron').app.isPackaged ? null : console;
+autoUpdater.logger = console;
 
 function setupAutoUpdater() {
   // Check for updates silently (no error dialog if offline)
@@ -271,6 +278,13 @@ ipcMain.handle('save-file', async (event, { buffer, defaultName, filters }) => {
 });
 
 app.whenReady().then(() => {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+
   createWindow();
 
   // Start checking for updates after the window is ready (with a short delay)
