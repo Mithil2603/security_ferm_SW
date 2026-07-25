@@ -177,6 +177,35 @@ ipcMain.handle('get-app-version', () => {
   return app.getVersion();
 });
 
+// ── IPC: Get Hardware ID (machine-unique identifier for licensing) ───
+let cachedHardwareId = null;
+ipcMain.handle('get-hardware-id', async () => {
+  if (cachedHardwareId) return cachedHardwareId;
+  try {
+    const { execSync } = require('child_process');
+    const raw = execSync('wmic csproduct get uuid', { encoding: 'utf8' });
+    const uuid = raw.split('\n').map(l => l.trim()).filter(l => l && l !== 'UUID')[0];
+    if (uuid && uuid.length > 8) {
+      // Create a shorter, friendlier hardware ID from the UUID
+      const hash = crypto.createHash('sha256').update(uuid).digest('hex');
+      cachedHardwareId = `HWID-${hash.substring(0, 4).toUpperCase()}-${hash.substring(4, 8).toUpperCase()}-${hash.substring(8, 12).toUpperCase()}`;
+    } else {
+      cachedHardwareId = `HWID-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
+    }
+  } catch (err) {
+    console.error('Failed to get hardware ID:', err.message);
+    cachedHardwareId = `HWID-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
+  }
+  // Persist the hardware ID so it stays consistent
+  const hwidPath = path.join(userDataPath, 'hwid.txt');
+  if (fs.existsSync(hwidPath)) {
+    cachedHardwareId = fs.readFileSync(hwidPath, 'utf8').trim();
+  } else {
+    fs.writeFileSync(hwidPath, cachedHardwareId, { encoding: 'utf8' });
+  }
+  return cachedHardwareId;
+});
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,

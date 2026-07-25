@@ -1,7 +1,7 @@
 /**
  * src/routes/license.js
  * License activation and status API.
- * These endpoints are PUBLIC (no auth required) — they're called before login.
+ * These endpoints are PUBLIC (no auth required) — called before login.
  */
 
 const express = require('express');
@@ -9,6 +9,68 @@ const router = express.Router();
 const { query } = require('../database/connection');
 const { verifyLicense, isLicenseExpired } = require('../utils/licenseKeys');
 const logger = require('../utils/logger');
+const path = require('path');
+const fs = require('fs');
+
+/**
+ * Read this machine's hardware ID from the persisted file.
+ */
+function getMachineHwid() {
+  try {
+    const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || 'C:\\Users\\Default', 'AppData', 'Roaming');
+    const userDataDir = path.join(appData, 'secuirty-agency-software');
+    const hwidPath = path.join(userDataDir, 'hwid.txt');
+    if (fs.existsSync(hwidPath)) {
+      return fs.readFileSync(hwidPath, 'utf8').trim();
+    }
+  } catch {
+    // skip
+  }
+  return null;
+}
+
+/**
+ * GET /api/license/hardware-id
+ * Returns this machine's Hardware ID over HTTP. No auth required.
+ */
+router.get('/hardware-id', (req, res) => {
+  try {
+    const crypto = require('crypto');
+    const { execSync } = require('child_process');
+
+    const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || 'C:\\Users\\Default', 'AppData', 'Roaming');
+    const userDataDir = path.join(appData, 'secuirty-agency-software');
+    const hwidPath = path.join(userDataDir, 'hwid.txt');
+
+    if (fs.existsSync(hwidPath)) {
+      const cached = fs.readFileSync(hwidPath, 'utf8').trim();
+      return res.json({ success: true, hardwareId: cached });
+    }
+
+    let hwid;
+    try {
+      const raw = execSync('wmic csproduct get uuid', { encoding: 'utf8' });
+      const uuid = raw.split('\n').map(l => l.trim()).filter(l => l && l !== 'UUID')[0];
+      if (uuid && uuid.length > 8) {
+        const hash = crypto.createHash('sha256').update(uuid).digest('hex');
+        hwid = `HWID-${hash.substring(0, 4).toUpperCase()}-${hash.substring(4, 8).toUpperCase()}-${hash.substring(8, 12).toUpperCase()}`;
+      } else {
+        hwid = `HWID-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
+      }
+    } catch {
+      hwid = `HWID-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
+    }
+
+    if (!fs.existsSync(userDataDir)) {
+      fs.mkdirSync(userDataDir, { recursive: true });
+    }
+    fs.writeFileSync(hwidPath, hwid, { encoding: 'utf8' });
+
+    return res.json({ success: true, hardwareId: hwid });
+  } catch (err) {
+    return res.json({ success: false, hardwareId: 'HWID-A1B2-C3D4' });
+  }
+});
 
 /**
  * GET /api/license/status
@@ -29,7 +91,8 @@ router.get('/status', async (req, res) => {
     }
 
     const storedKey = result.rows[0].setting_value;
-    const verification = verifyLicense(storedKey);
+    const machineHwid = getMachineHwid();
+    const verification = verifyLicense(storedKey, machineHwid);
 
     if (!verification.valid) {
       return res.json({
@@ -73,11 +136,9 @@ router.post('/activate', async (req, res) => {
       });
     }
 
-    // Clean up the key (remove whitespace/newlines from copy-paste)
     const cleanKey = licenseKey.replace(/\s+/g, '');
-
-    // Verify the license key cryptographically
-    const verification = verifyLicense(cleanKey);
+    const machineHwid = getMachineHwid();
+    const verification = verifyLicense(cleanKey, machineHwid);
 
     if (!verification.valid) {
       logger.warn(`License activation failed: ${verification.error}`);
@@ -87,8 +148,7 @@ router.post('/activate', async (req, res) => {
       });
     }
 
-    // Store the license key in system_settings
-    // Use UPSERT pattern (INSERT ... ON CONFLICT UPDATE)
+    // Store the license key
     await query(
       `INSERT INTO system_settings (setting_key, setting_value, updated_at)
        VALUES ('license_key', $1, datetime('now'))

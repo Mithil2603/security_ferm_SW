@@ -84,4 +84,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Get app version
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+
+  // Get hardware ID for license activation
+  getHardwareId: () => ipcRenderer.invoke('get-hardware-id'),
 });
