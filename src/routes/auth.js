@@ -10,6 +10,27 @@ const { sendEmail } = require('../utils/email');
 const rateLimit = require('express-rate-limit');
 const { logError } = require('../utils/errorLogger');
 
+const ERROR_CODES = {
+  // Auth errors
+  INVALID_CREDENTIALS: 'INVALID_CREDENTIALS',
+  USER_INACTIVE: 'USER_INACTIVE',
+  USER_NOT_FOUND: 'USER_NOT_FOUND',
+  
+  // Validation errors
+  MISSING_FIELDS: 'MISSING_FIELDS',
+  INVALID_EMAIL_FORMAT: 'INVALID_EMAIL_FORMAT',
+  PASSWORD_TOO_SHORT: 'PASSWORD_TOO_SHORT',
+  
+  // Rate limit
+  TOO_MANY_ATTEMPTS: 'TOO_MANY_ATTEMPTS',
+  
+  // Server errors
+  DATABASE_ERROR: 'DATABASE_ERROR',
+  JWT_ERROR: 'JWT_ERROR',
+  INTERNAL_SERVER_ERROR: 'INTERNAL_SERVER_ERROR',
+  EMAIL_SEND_ERROR: 'EMAIL_SEND_ERROR'
+};
+
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 15, // Limit each IP to 15 login requests per windowMs
@@ -22,21 +43,55 @@ const loginLimiter = rateLimit({
 router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
+    
+    // Validation
     if (!email || !password) {
-      return res.status(400).json({ success: false, message: 'Email and password are required' });
+      return res.status(400).json({
+        success: false,
+        errorCode: ERROR_CODES.MISSING_FIELDS,
+        message: 'Email and password are required',
+        details: {
+          missingFields: [!email && 'email', !password && 'password'].filter(Boolean)
+        }
+      });
     }
 
+    // Email format validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        errorCode: ERROR_CODES.INVALID_EMAIL_FORMAT,
+        message: 'Invalid email format',
+        details: { email: email }
+      });
+    }
+
+    // Find user
     const result = await query('SELECT * FROM users WHERE email = $1 AND is_active = true', [email.toLowerCase()]);
+    
     if (result.rows.length === 0) {
       logger.warn(`⚠️ Failed login attempt: Unknown user or inactive (${email}) from IP ${req.ip}`);
-      return res.status(401).json({ success: false, message: 'Invalid email or password' });
+      return res.status(401).json({
+        success: false,
+        errorCode: ERROR_CODES.INVALID_CREDENTIALS,
+        message: 'Invalid email or password',
+        details: { attemptedEmail: email }
+      });
     }
 
     const user = result.rows[0];
+    
+    // Verify password
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
     if (!isValidPassword) {
       logger.warn(`⚠️ Failed login attempt: Invalid password for ${email} from IP ${req.ip}`);
-      return res.status(401).json({ success: false, message: 'Invalid email or password' });
+      return res.status(401).json({
+        success: false,
+        errorCode: ERROR_CODES.INVALID_CREDENTIALS,
+        message: 'Invalid email or password',
+        details: { attemptedEmail: email }
+      });
     }
 
     // Update last login
@@ -44,36 +99,39 @@ router.post('/login', loginLimiter, async (req, res) => {
 
     const parsedPermissions = user.permissions ? JSON.parse(user.permissions) : [];
     
+    // Create JWT token
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role, name: user.full_name, permissions: parsedPermissions },
       process.env.JWT_SECRET,
       { expiresIn: '15m' }
     );
 
+    // Create refresh token
     const refreshToken = crypto.randomBytes(40).toString('hex');
     const refreshExpires = new Date();
-    refreshExpires.setDate(refreshExpires.getDate() + 7); // 7 days
+    refreshExpires.setDate(refreshExpires.getDate() + 7);
 
     await query(
       'INSERT INTO refresh_tokens (user_id, token, expires_at, ip_address) VALUES ($1, $2, $3, $4)',
       [user.id, refreshToken, refreshExpires, req.ip]
     );
 
-    // Set JWT in httpOnly cookie
+    // Set cookies
     res.cookie('token', token, {
       httpOnly: true,
-      secure: false, // Must be false because Electron app uses http://localhost:5000
+      secure: false,
       sameSite: 'strict',
-      maxAge: 15 * 60 * 1000 // 15 mins
+      maxAge: 15 * 60 * 1000
     });
     
-    // Set Refresh Token in httpOnly cookie
     res.cookie('refreshToken', refreshToken, {
       httpOnly: true,
       secure: false,
       sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      maxAge: 7 * 24 * 60 * 60 * 1000
     });
+
+    logger.info(`✅ Successful login: ${email} from IP ${req.ip}`);
 
     res.json({
       success: true,
@@ -92,9 +150,36 @@ router.post('/login', loginLimiter, async (req, res) => {
       }
     });
   } catch (error) {
-    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'auth' });
+    // Specific error handling
+    if (error.name === 'JsonWebTokenError') {
+      logError(error, req, { feature: 'auth', severity: 'high' });
+      return res.status(500).json({
+        success: false,
+        errorCode: ERROR_CODES.JWT_ERROR,
+        message: 'Token generation failed',
+        details: { error: error.message }
+      });
+    }
+
+    if (error.code === 'ECONNREFUSED' || error.code === '3D000' || error.message?.includes('database')) {
+      logError(error, req, { feature: 'auth', severity: 'critical' });
+      return res.status(500).json({
+        success: false,
+        errorCode: ERROR_CODES.DATABASE_ERROR,
+        message: 'Database connection error',
+        details: { message: 'Could not connect to database' }
+      });
+    }
+
+    // Generic server error
+    logError(error, req, { feature: 'auth', severity: 'high' });
     logger.error('Login error:', error);
-    res.status(500).json({ success: false, message: error.message ? `Server error: ${error.message}` : 'Internal server error' });
+    res.status(500).json({
+      success: false,
+      errorCode: ERROR_CODES.INTERNAL_SERVER_ERROR,
+      message: 'An internal server error occurred',
+      details: { timestamp: new Date().toISOString() }
+    });
   }
 });
 
@@ -117,18 +202,40 @@ router.post('/logout', async (req, res) => {
 router.post('/refresh', async (req, res) => {
   try {
     const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken || req.headers['x-refresh-token'];
-    if (!refreshToken) return res.status(401).json({ success: false, message: 'No refresh token' });
+    
+    if (!refreshToken) {
+      return res.status(401).json({
+        success: false,
+        errorCode: 'NO_REFRESH_TOKEN',
+        message: 'Refresh token is required'
+      });
+    }
 
-    const result = await query('SELECT * FROM refresh_tokens WHERE token = $1 AND expires_at > CURRENT_TIMESTAMP', [refreshToken]);
+    const result = await query(
+      'SELECT * FROM refresh_tokens WHERE token = $1 AND expires_at > CURRENT_TIMESTAMP',
+      [refreshToken]
+    );
+    
     if (result.rows.length === 0) {
-      return res.status(401).json({ success: false, message: 'Invalid or expired refresh token' });
+      return res.status(401).json({
+        success: false,
+        errorCode: 'INVALID_REFRESH_TOKEN',
+        message: 'Refresh token is invalid or expired'
+      });
     }
 
     const userId = result.rows[0].user_id;
-    const userResult = await query('SELECT * FROM users WHERE id = $1 AND is_active = true', [userId]);
+    const userResult = await query(
+      'SELECT * FROM users WHERE id = $1 AND is_active = true',
+      [userId]
+    );
     
     if (userResult.rows.length === 0) {
-      return res.status(401).json({ success: false, message: 'User not found or inactive' });
+      return res.status(401).json({
+        success: false,
+        errorCode: ERROR_CODES.USER_INACTIVE,
+        message: 'User is no longer active'
+      });
     }
 
     const user = userResult.rows[0];
@@ -149,8 +256,13 @@ router.post('/refresh', async (req, res) => {
 
     res.json({ success: true, token });
   } catch (err) {
+    logError(err, req, { feature: 'auth' });
     logger.error('Refresh error:', err);
-    res.status(500).json({ success: false, message: 'Refresh failed' });
+    res.status(500).json({
+      success: false,
+      errorCode: ERROR_CODES.INTERNAL_SERVER_ERROR,
+      message: 'Token refresh failed'
+    });
   }
 });
 

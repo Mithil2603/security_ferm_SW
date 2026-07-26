@@ -6,20 +6,22 @@ const AuthContext = createContext();
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     const initAuth = async () => {
-      // We no longer check localStorage for token, just ping /auth/me
-      // If the cookie is present and valid, it will succeed
       try {
         const response = await api.get('/auth/me');
-        if (response.success) {
+        if (response.success || response.data) {
           setUser(response.data);
           localStorage.setItem('user', JSON.stringify(response.data));
+          setError(null);
         }
       } catch (error) {
-        console.error('Session expired or not logged in', error);
+        console.debug('Session expired or not logged in');
         localStorage.removeItem('user');
+        localStorage.removeItem('token');
+        localStorage.removeItem('refreshToken');
       }
       setLoading(false);
     };
@@ -28,20 +30,52 @@ export const AuthProvider = ({ children }) => {
 
     const handleAuthError = () => {
       setUser(null);
+      setError({ message: 'Session expired. Please log in again.' });
     };
+    
     window.addEventListener('auth-error', handleAuthError);
     return () => window.removeEventListener('auth-error', handleAuthError);
   }, []);
 
   const login = async (email, password) => {
-    const response = await api.post('/auth/login', { email, password });
-    localStorage.setItem('token', response.data.token);
-    if (response.data.refreshToken) {
-      localStorage.setItem('refreshToken', response.data.refreshToken);
+    try {
+      if (!email || !password) {
+        throw {
+          status: 400,
+          response: {
+            data: {
+              errorCode: 'MISSING_FIELDS',
+              message: 'Email and password are required'
+            }
+          }
+        };
+      }
+
+      const response = await api.post('/auth/login', { email, password });
+      
+      // Handle success
+      if (response.success || response.data) {
+        const userData = response.data;
+        localStorage.setItem('token', userData.token);
+        if (userData.refreshToken) {
+          localStorage.setItem('refreshToken', userData.refreshToken);
+        }
+        localStorage.setItem('user', JSON.stringify(userData.user));
+        setUser(userData.user);
+        setError(null);
+        return userData;
+      }
+    } catch (err) {
+      // Re-throw with enhanced error info
+      const error = {
+        ...err,
+        status: err.status || err.response?.status,
+        response: err.response,
+        message: err.response?.data?.message || err.message || 'Login failed'
+      };
+      setError(error);
+      throw error;
     }
-    localStorage.setItem('user', JSON.stringify(response.data.user));
-    setUser(response.data.user);
-    return response.data;
   };
 
   const logout = async () => {
@@ -49,16 +83,18 @@ export const AuthProvider = ({ children }) => {
       const storedRefreshToken = localStorage.getItem('refreshToken');
       await api.post('/auth/logout', { refreshToken: storedRefreshToken });
     } catch (e) {
-      console.error('Logout error', e);
+      console.warn('Logout request failed, clearing local data:', e);
+    } finally {
+      localStorage.removeItem('token');
+      localStorage.removeItem('refreshToken');
+      localStorage.removeItem('user');
+      setUser(null);
+      setError(null);
     }
-    localStorage.removeItem('token');
-    localStorage.removeItem('refreshToken');
-    localStorage.removeItem('user');
-    setUser(null);
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, error, login, logout }}>
       {!loading && children}
     </AuthContext.Provider>
   );
