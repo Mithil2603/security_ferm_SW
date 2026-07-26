@@ -45,8 +45,9 @@ api.interceptors.response.use(
   (response) => response.data,
   async (error) => {
     const originalRequest = error.config;
+    const isAuthEndpoint = originalRequest.url?.includes('auth/login') || originalRequest.url?.includes('auth/refresh');
 
-    if (error.response?.status === 401 && !originalRequest._retry && originalRequest.url !== '/auth/login' && originalRequest.url !== '/auth/refresh') {
+    if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
       if (isRefreshing) {
         return new Promise(function(resolve, reject) {
           failedQueue.push({ resolve, reject });
@@ -62,7 +63,17 @@ api.interceptors.response.use(
       isRefreshing = true;
 
       try {
-        const { data } = await axios.post(`${baseURL}/auth/refresh`, {}, { withCredentials: true });
+        const storedRefreshToken = localStorage.getItem('refreshToken');
+        const { data } = await axios.post(
+          `${baseURL}/auth/refresh`,
+          { refreshToken: storedRefreshToken },
+          {
+            withCredentials: true,
+            headers: {
+              'x-refresh-token': storedRefreshToken || ''
+            }
+          }
+        );
         
         if (data.success && data.token) {
           localStorage.setItem('token', data.token);
@@ -76,6 +87,7 @@ api.interceptors.response.use(
       } catch (err) {
         processQueue(err, null);
         localStorage.removeItem('token');
+        localStorage.removeItem('refreshToken');
         localStorage.removeItem('user');
         window.dispatchEvent(new Event('auth-error'));
         return Promise.reject(err?.response?.data || err);
@@ -84,6 +96,7 @@ api.interceptors.response.use(
       }
     } else if (error.response?.status === 401) {
       localStorage.removeItem('token');
+      localStorage.removeItem('refreshToken');
       localStorage.removeItem('user');
       window.dispatchEvent(new Event('auth-error'));
     }

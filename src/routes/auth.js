@@ -80,6 +80,7 @@ router.post('/login', loginLimiter, async (req, res) => {
       message: 'Login successful',
       data: {
         token,
+        refreshToken,
         user: {
           id: user.id,
           email: user.email,
@@ -93,13 +94,13 @@ router.post('/login', loginLimiter, async (req, res) => {
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'auth' });
     logger.error('Login error:', error);
-    res.status(500).json({ success: false, message: 'Login failed, please try again' });
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 });
 
 // POST /api/auth/logout
 router.post('/logout', async (req, res) => {
-  const refreshToken = req.cookies.refreshToken;
+  const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken || req.headers['x-refresh-token'];
   if (refreshToken) {
     try {
       await query('DELETE FROM refresh_tokens WHERE token = $1', [refreshToken]);
@@ -115,7 +116,7 @@ router.post('/logout', async (req, res) => {
 // POST /api/auth/refresh
 router.post('/refresh', async (req, res) => {
   try {
-    const refreshToken = req.cookies.refreshToken;
+    const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken || req.headers['x-refresh-token'];
     if (!refreshToken) return res.status(401).json({ success: false, message: 'No refresh token' });
 
     const result = await query('SELECT * FROM refresh_tokens WHERE token = $1 AND expires_at > CURRENT_TIMESTAMP', [refreshToken]);
