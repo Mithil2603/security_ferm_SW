@@ -94,7 +94,7 @@ router.post('/login', loginLimiter, async (req, res) => {
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'auth' });
     logger.error('Login error:', error);
-    res.status(500).json({ success: false, message: 'Internal server error' });
+    res.status(500).json({ success: false, message: error.message ? `Server error: ${error.message}` : 'Internal server error' });
   }
 });
 

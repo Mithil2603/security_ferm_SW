@@ -118,6 +118,7 @@ api.interceptors.response.use(
     }
 
     const errorMessage = error.response?.data?.message || 
+      error.response?.data?.error ||
       (error.message === 'Network Error' ? 'Cannot connect to backend server. Please check your network setup.' : error.message) || 
       'An unexpected error occurred';
 

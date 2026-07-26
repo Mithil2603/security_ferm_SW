@@ -21,7 +21,8 @@ export default function Login() {
       await login(email, password);
       navigate('/');
     } catch (err) {
-      setError(err.message || 'Invalid email or password');
+      const errorMsg = typeof err === 'string' ? err : (err?.message || err?.error || err?.response?.data?.message || 'Login failed. Please check your credentials.');
+      setError(errorMsg);
     } finally {
       setIsSubmitting(false);
     }
