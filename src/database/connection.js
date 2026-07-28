@@ -31,21 +31,8 @@ function initDB() {
       db.exec(schemaSql);
       logger.info('Database initialized with schema.sql');
       
-      // Ensure seed admin data
-      try {
-        const checkAdmin = db.prepare('SELECT id FROM users WHERE email = ?').get('admin@admin.com');
-        if (!checkAdmin) {
-          const hash = bcrypt.hashSync('password123', 12);
-          const insertUser = db.prepare(`
-            INSERT INTO users (email, password_hash, full_name, role, is_active)
-            VALUES (?, ?, ?, ?, 1)
-          `);
-          insertUser.run('admin@admin.com', hash, 'System Administrator', 'admin');
-          logger.info('Seed Admin user created: admin@admin.com / password123');
-        }
-      } catch (err) {
-        logger.error('Error seeding admin user:', err);
-      }
+      // Note: First admin account is created via the Setup Wizard (frontend/src/pages/Setup.jsx)
+      // The POST /api/auth/setup-init endpoint handles admin creation on first launch.
     } else {
       logger.error('schema.sql not found at', schemaPath);
     }

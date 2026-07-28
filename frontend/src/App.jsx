@@ -4,6 +4,7 @@ import { AuthProvider } from './context/AuthContext';
 import Layout from './components/layout/Layout';
 import './services/errorInterceptor'; // Import to initialize
 import LicenseActivation from './pages/LicenseActivation';
+import Setup from './pages/Setup';
 
 // Pages
 import Login from './pages/Login';
@@ -38,6 +39,7 @@ import HelpDocumentation from './pages/HelpDocumentation';
 
 function App() {
   const [licenseStatus, setLicenseStatus] = useState('checking'); // 'checking' | 'unlicensed' | 'licensed'
+  const [setupStatus, setSetupStatus] = useState('checking'); // 'checking' | 'needs-setup' | 'complete'
 
   useEffect(() => {
     checkLicense();
@@ -50,6 +52,8 @@ function App() {
       
       if (data.success && data.licensed) {
         setLicenseStatus('licensed');
+        // After license is confirmed, check setup status
+        checkSetupStatus();
       } else {
         setLicenseStatus('unlicensed');
       }
@@ -58,6 +62,23 @@ function App() {
       setTimeout(() => {
         checkLicense();
       }, 1500);
+    }
+  };
+
+  const checkSetupStatus = async () => {
+    try {
+      const response = await fetch('http://127.0.0.1:5000/api/auth/setup-status');
+      const data = await response.json();
+      
+      if (data.success && data.setupComplete) {
+        setSetupStatus('complete');
+      } else {
+        setSetupStatus('needs-setup');
+      }
+    } catch (err) {
+      // If setup-status check fails, assume setup is complete (safe fallback for existing installs)
+      console.warn('Setup status check failed, assuming complete:', err.message);
+      setSetupStatus('complete');
     }
   };
 
@@ -77,12 +98,32 @@ function App() {
   if (licenseStatus === 'unlicensed') {
     return (
       <LicenseActivation
-        onActivated={() => setLicenseStatus('licensed')}
+        onActivated={() => {
+          setLicenseStatus('licensed');
+          checkSetupStatus();
+        }}
       />
     );
   }
 
-  // Licensed — show the full app
+  // Show loading spinner while checking setup status
+  if (setupStatus === 'checking') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-12 h-12 border-4 border-teal-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-slate-400 text-sm">Initializing...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show Setup Wizard if first-time install (no admin exists)
+  if (setupStatus === 'needs-setup') {
+    return <Setup />;
+  }
+
+  // Licensed & setup complete — show the full app
   return (
     <Router>
       <AuthProvider>
@@ -125,3 +166,4 @@ function App() {
 }
 
 export default App;
+

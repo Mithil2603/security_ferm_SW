@@ -468,4 +468,165 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
+// ============================================================
+// SETUP ENDPOINTS - For first-time initialization
+// ============================================================
+
+// GET /api/auth/setup-status
+// Check if initial setup is complete (unauthenticated)
+router.get('/setup-status', async (req, res) => {
+  try {
+    const result = await query('SELECT COUNT(*) as count FROM users WHERE role = ?', ['admin']);
+    const adminCount = result.rows[0].count;
+
+    res.json({
+      success: true,
+      setupComplete: adminCount > 0,
+      message: adminCount > 0 ? 'Setup complete' : 'Setup required'
+    });
+  } catch (err) {
+    logger.error('Error checking setup status:', err);
+    res.status(500).json({
+      success: false,
+      errorCode: ERROR_CODES.DATABASE_ERROR,
+      message: 'Error checking setup status'
+    });
+  }
+});
+
+// POST /api/auth/setup-init
+// Initialize first admin account (unauthenticated, one-time use)
+router.post('/setup-init', async (req, res) => {
+  try {
+    const { email, password, full_name, seed_test_data } = req.body;
+
+    // Validation
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        errorCode: ERROR_CODES.MISSING_FIELDS,
+        message: 'Email and password are required'
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        errorCode: ERROR_CODES.PASSWORD_TOO_SHORT,
+        message: 'Password must be at least 6 characters'
+      });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        errorCode: ERROR_CODES.INVALID_EMAIL_FORMAT,
+        message: 'Invalid email format'
+      });
+    }
+
+    // Security guard: refuse if admin already exists
+    const adminCheck = await query('SELECT COUNT(*) as count FROM users WHERE role = ?', ['admin']);
+    if (adminCheck.rows[0].count > 0) {
+      return res.status(400).json({
+        success: false,
+        errorCode: 'ADMIN_EXISTS',
+        message: 'Admin account already exists. Setup is complete.'
+      });
+    }
+
+    // Hash password and create admin
+    const hash = bcrypt.hashSync(password, parseInt(process.env.BCRYPT_ROUNDS) || 12);
+
+    await query(`
+      INSERT INTO users (email, password_hash, full_name, role, is_active, created_at)
+      VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+    `, [
+      email.toLowerCase().trim(),
+      hash,
+      full_name || 'Administrator',
+      'admin'
+    ]);
+
+    logger.info(`✅ Admin account created during setup: ${email}`);
+
+    // Seed test data if user opted in
+    if (seed_test_data) {
+      try {
+        await seedTestData();
+        logger.info('✅ Test data seeded during setup');
+      } catch (seedErr) {
+        logger.warn('⚠️ Test data seeding failed (non-critical):', seedErr.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Admin account created successfully. You can now login.'
+    });
+
+  } catch (err) {
+    logError(err, req, { feature: 'setup' });
+    logger.error('Setup init error:', err);
+    res.status(500).json({
+      success: false,
+      errorCode: ERROR_CODES.INTERNAL_SERVER_ERROR,
+      message: 'Failed to create admin account'
+    });
+  }
+});
+
+// Helper: Seed test data (clients)
+async function seedTestData() {
+  const clientsData = [
+    { name: 'Royal Residency', rate: 45000 },
+    { name: 'Green Heights', rate: 50000 },
+    { name: 'Sunrise Tower', rate: 55000 },
+    { name: 'Shanti Complex', rate: 48000 },
+    { name: 'Metro Apartments', rate: 52000 },
+    { name: 'Golden Villa', rate: 60000 },
+    { name: 'Silver Park', rate: 42000 },
+    { name: 'Diamond Enclave', rate: 65000 },
+    { name: 'Pearl Heights', rate: 58000 },
+    { name: 'Crystal Point', rate: 51000 },
+    { name: 'Heritage Square', rate: 46000 },
+    { name: 'Prestige Gardens', rate: 54000 },
+    { name: 'Elite Tower', rate: 62000 },
+    { name: 'Prime Avenue', rate: 49000 },
+    { name: 'Supreme Horizon', rate: 57000 },
+    { name: 'Grand Skyline', rate: 64000 },
+    { name: 'Saffron Palace', rate: 43000 },
+    { name: 'Lotus Garden', rate: 53000 },
+    { name: 'Maple Enclave', rate: 47000 },
+    { name: 'Cedar Point', rate: 61000 }
+  ];
+
+  const today = new Date().toISOString().split('T')[0];
+
+  for (const client of clientsData) {
+    try {
+      await query(`
+        INSERT INTO clients (name, address, city, state, postal_code, email, phone, contact_person,
+          contract_start_date, monthly_rate, billing_cycle, is_active, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
+      `, [
+        client.name,
+        '123, Ahmedabad',
+        'Ahmedabad',
+        'Gujarat',
+        '380001',
+        `${client.name.toLowerCase().replace(/\s+/g, '.')}@test.com`,
+        '9999999999',
+        'Test Contact',
+        today,
+        client.rate,
+        1
+      ]);
+    } catch (err) {
+      // Skip if insert fails (e.g., duplicate)
+    }
+  }
+}
+
 module.exports = router;
