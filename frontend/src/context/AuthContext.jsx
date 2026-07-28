@@ -69,9 +69,9 @@ export const AuthProvider = ({ children }) => {
       // Re-throw with enhanced error info
       const error = {
         ...err,
-        status: err.status || err.response?.status,
-        response: err.response,
-        message: err.response?.data?.message || err.message || 'Login failed'
+        status: err.status || err.statusCode || err.response?.status,
+        response: err.response || { data: err, status: err.status },
+        message: err.message || err.response?.data?.message || 'Login failed'
       };
       setError(error);
       throw error;

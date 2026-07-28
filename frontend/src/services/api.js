@@ -122,7 +122,14 @@ api.interceptors.response.use(
       (error.message === 'Network Error' ? 'Cannot connect to backend server. Please check your network setup.' : error.message) || 
       'An unexpected error occurred';
 
-    return Promise.reject(error.response?.data || { message: errorMessage });
+    const rejectedError = error.response?.data || { message: errorMessage };
+    if (typeof rejectedError === 'object' && rejectedError !== null) {
+      rejectedError.status = error.response?.status || error.status || 0;
+      rejectedError.response = error.response;
+      rejectedError.code = rejectedError.errorCode || rejectedError.code || error.code;
+    }
+
+    return Promise.reject(rejectedError);
   }
 );
 

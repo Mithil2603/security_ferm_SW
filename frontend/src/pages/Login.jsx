@@ -75,7 +75,6 @@ export default function Login() {
 
   // Categorize and structure errors
   const categorizeError = (err) => {
-    // Network errors
     if (!err) {
       return {
         code: 'UNKNOWN_ERROR',
@@ -89,6 +88,20 @@ export default function Login() {
       };
     }
 
+    // Extract responseData, backendCode and status regardless of error payload wrapper
+    const responseData = err.response?.data || (typeof err === 'object' && err !== null ? err : {});
+    const backendCode = err.errorCode || err.code || responseData.errorCode || responseData.code;
+    let statusCode = err.status || err.statusCode || err.response?.status || 0;
+
+    // Infer status code from backendCode if status is 0
+    if (!statusCode) {
+      if (['INVALID_CREDENTIALS', 'USER_INACTIVE', 'USER_NOT_FOUND'].includes(backendCode)) statusCode = 401;
+      else if (['MISSING_FIELDS', 'INVALID_EMAIL_FORMAT', 'VALIDATION_ERROR'].includes(backendCode)) statusCode = 400;
+      else if (['TOO_MANY_ATTEMPTS'].includes(backendCode)) statusCode = 429;
+      else if (['DATABASE_ERROR', 'INTERNAL_SERVER_ERROR', 'JWT_ERROR'].includes(backendCode)) statusCode = 500;
+    }
+
+    // Network errors
     if (err.code === 'ECONNREFUSED' || err.message?.includes('ECONNREFUSED')) {
       return {
         code: 'CONNECTION_REFUSED',
@@ -141,41 +154,42 @@ export default function Login() {
       };
     }
 
-    // HTTP status code errors
-    const statusCode = err.status || err.response?.status || 0;
-    const responseData = err.response?.data || {};
-
     // 401 - Authentication errors
-    if (statusCode === 401) {
-      const backendCode = responseData.errorCode || 'INVALID_CREDENTIALS';
+    if (statusCode === 401 || ['INVALID_CREDENTIALS', 'USER_INACTIVE', 'USER_NOT_FOUND'].includes(backendCode)) {
+      const code = backendCode || 'INVALID_CREDENTIALS';
+      const msg = responseData.message || (typeof err === 'string' ? err : err.message) || 'Invalid email or password';
+      const actionText = ERROR_MESSAGES[code]?.action || 'Please check your email and password and try again';
       return {
-        code: backendCode,
+        code: code,
         type: 'AUTH_ERROR',
-        message: responseData.message || 'Authentication failed',
-        details: `Status: 401 Unauthorized. Code: ${backendCode}`,
+        message: msg,
+        details: `Status: 401 Unauthorized. Code: ${code}`,
         statusCode: 401,
-        action: 'Check your email and password',
+        action: actionText,
         retryable: true,
         timestamp: new Date().toISOString()
       };
     }
 
     // 400 - Validation errors
-    if (statusCode === 400) {
+    if (statusCode === 400 || ['MISSING_FIELDS', 'INVALID_EMAIL_FORMAT', 'VALIDATION_ERROR'].includes(backendCode)) {
+      const code = backendCode || 'VALIDATION_ERROR';
+      const msg = responseData.message || (typeof err === 'string' ? err : err.message) || 'Missing required fields';
+      const actionText = ERROR_MESSAGES[code]?.action || 'Check that all fields are filled in correctly';
       return {
-        code: 'VALIDATION_ERROR',
+        code: code,
         type: 'VALIDATION_ERROR',
-        message: responseData.message || 'Invalid input',
-        details: `Status: 400 Bad Request. ${responseData.details || ''}`,
+        message: msg,
+        details: `Status: 400 Bad Request. Code: ${code}`,
         statusCode: 400,
-        action: 'Check that all fields are filled in correctly',
+        action: actionText,
         retryable: false,
         timestamp: new Date().toISOString()
       };
     }
 
     // 429 - Rate limit
-    if (statusCode === 429) {
+    if (statusCode === 429 || backendCode === 'TOO_MANY_ATTEMPTS') {
       return {
         code: 'TOO_MANY_ATTEMPTS',
         type: 'RATE_LIMIT_ERROR',
@@ -189,15 +203,17 @@ export default function Login() {
     }
 
     // 500 - Server errors
-    if (statusCode === 500) {
-      const errorType = responseData.errorCode || 'INTERNAL_SERVER_ERROR';
+    if (statusCode === 500 || ['DATABASE_ERROR', 'INTERNAL_SERVER_ERROR', 'JWT_ERROR'].includes(backendCode)) {
+      const errorType = backendCode || 'INTERNAL_SERVER_ERROR';
+      const msg = responseData.message || (typeof err === 'string' ? err : err.message) || 'Server error occurred';
+      const actionText = ERROR_MESSAGES[errorType]?.action || 'A server error occurred. Please try again or contact support';
       return {
         code: errorType,
         type: 'SERVER_ERROR',
-        message: 'Server error',
-        details: `Status: 500. Type: ${errorType}. Message: ${responseData.message || 'Internal server error'}`,
+        message: msg,
+        details: `Status: 500 Internal Server Error. Type: ${errorType}`,
         statusCode: 500,
-        action: 'The server is experiencing issues. Please try again in a few moments',
+        action: actionText,
         retryable: true,
         timestamp: new Date().toISOString()
       };
@@ -206,10 +222,10 @@ export default function Login() {
     // Generic HTTP errors
     if (statusCode >= 400 && statusCode < 500) {
       return {
-        code: 'HTTP_CLIENT_ERROR',
+        code: backendCode || 'HTTP_CLIENT_ERROR',
         type: 'UNKNOWN_ERROR',
-        message: responseData.message || 'Request error',
-        details: `HTTP ${statusCode}. ${responseData.details || ''}`,
+        message: responseData.message || err.message || 'Request error',
+        details: `HTTP ${statusCode}. Code: ${backendCode || 'N/A'}`,
         statusCode: statusCode,
         action: 'An error occurred while processing your request',
         retryable: true,
@@ -219,10 +235,10 @@ export default function Login() {
 
     if (statusCode >= 500) {
       return {
-        code: 'HTTP_SERVER_ERROR',
+        code: backendCode || 'HTTP_SERVER_ERROR',
         type: 'SERVER_ERROR',
-        message: 'Server error',
-        details: `HTTP ${statusCode}. ${responseData.message || 'Server error'}`,
+        message: responseData.message || err.message || 'Server error',
+        details: `HTTP ${statusCode}. Code: ${backendCode || 'N/A'}`,
         statusCode: statusCode,
         action: 'The server is experiencing issues. Please try again later',
         retryable: true,
@@ -232,11 +248,11 @@ export default function Login() {
 
     // Fallback for unknown errors
     return {
-      code: 'UNKNOWN_ERROR',
+      code: backendCode || 'UNKNOWN_ERROR',
       type: 'UNKNOWN_ERROR',
-      message: typeof err === 'string' ? err : (err?.message || 'An unknown error occurred'),
-      details: JSON.stringify(err, Object.getOwnPropertyNames(err)),
-      statusCode: 0,
+      message: typeof err === 'string' ? err : (err?.message || responseData.message || 'An unknown error occurred'),
+      details: typeof err === 'string' ? err : JSON.stringify(err),
+      statusCode: statusCode || 0,
       action: 'Try refreshing the page or restarting the application',
       retryable: true,
       timestamp: new Date().toISOString()
