@@ -35,6 +35,7 @@ async function main() {
 
   const suites = [
     { name: 'Auth Flow',             module: './test-auth-flow' },
+    { name: 'Login & Setup Flow',    module: './test-login-setup-flow' },
     { name: 'Employee CRUD',         module: './test-employee-crud' },
     { name: 'Payroll Math',          module: './test-payroll-math' },
     { name: 'Invoice PDF',           module: './test-invoice-pdf' },

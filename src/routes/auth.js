@@ -476,7 +476,7 @@ router.post('/reset-password', async (req, res) => {
 // Check if initial setup is complete (unauthenticated)
 router.get('/setup-status', async (req, res) => {
   try {
-    const result = await query('SELECT COUNT(*) as count FROM users WHERE role = ?', ['admin']);
+    const result = await query('SELECT COUNT(*) as count FROM users WHERE role = $1', ['admin']);
     const adminCount = result.rows[0].count;
 
     res.json({
@@ -527,7 +527,7 @@ router.post('/setup-init', async (req, res) => {
     }
 
     // Security guard: refuse if admin already exists
-    const adminCheck = await query('SELECT COUNT(*) as count FROM users WHERE role = ?', ['admin']);
+    const adminCheck = await query('SELECT COUNT(*) as count FROM users WHERE role = $1', ['admin']);
     if (adminCheck.rows[0].count > 0) {
       return res.status(400).json({
         success: false,
@@ -541,7 +541,7 @@ router.post('/setup-init', async (req, res) => {
 
     await query(`
       INSERT INTO users (email, password_hash, full_name, role, is_active, created_at)
-      VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, 1, CURRENT_TIMESTAMP)
     `, [
       email.toLowerCase().trim(),
       hash,
@@ -609,7 +609,7 @@ async function seedTestData() {
       await query(`
         INSERT INTO clients (name, address, city, state, postal_code, email, phone, contact_person,
           contract_start_date, monthly_rate, billing_cycle, is_active, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, 1)
       `, [
         client.name,
         '123, Ahmedabad',
