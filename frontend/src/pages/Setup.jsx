@@ -1,5 +1,4 @@
-import { useState, useEffect } from 'react';
-import api from '../services/api';
+import { useState } from 'react';
 import { 
   Lock, Mail, User, Check, AlertCircle, 
   Database, Loader, PackageOpen
@@ -73,12 +72,27 @@ export default function Setup({ onSetupComplete }) {
     setSetupProgress('Creating admin account...');
 
     try {
-      const response = await api.post('/auth/setup-init', {
-        email: formData.email.toLowerCase().trim(),
-        password: formData.password,
-        full_name: formData.fullName.trim(),
-        seed_test_data: seedTestData
+      const savedServerIP = localStorage.getItem('serverIP');
+      const baseURL = savedServerIP 
+        ? `http://${savedServerIP}:5000/api` 
+        : 'http://127.0.0.1:5000/api';
+
+      const response = await fetch(`${baseURL}/auth/setup-init`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: formData.email.toLowerCase().trim(),
+          password: formData.password,
+          full_name: formData.fullName.trim(),
+          seed_test_data: seedTestData
+        })
       });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to create admin account');
+      }
 
       // Setup complete
       setSetupComplete(true);
@@ -93,7 +107,7 @@ export default function Setup({ onSetupComplete }) {
       }, 2000);
 
     } catch (err) {
-      const msg = err?.message || err?.response?.data?.message || 'Failed to create admin account';
+      const msg = err?.message || 'Failed to create admin account';
       setError(msg);
       setSetupProgress('');
     } finally {
