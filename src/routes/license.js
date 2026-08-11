@@ -92,14 +92,14 @@ router.get('/status', async (req, res) => {
 
     const storedKey = result.rows[0].setting_value;
     const machineHwid = getMachineHwid();
-    const verification = verifyLicense(storedKey, machineHwid);
+    const verification = await verifyLicense(storedKey, machineHwid);
 
     if (!verification.valid) {
       return res.json({
         success: true,
         licensed: false,
         message: verification.error || 'License is invalid or expired.',
-        expired: verification.payload ? isLicenseExpired(verification.payload) : false,
+        expired: verification.payload ? await isLicenseExpired(verification.payload) : false,
       });
     }
 
@@ -138,7 +138,7 @@ router.post('/activate', async (req, res) => {
 
     const cleanKey = licenseKey.replace(/\s+/g, '');
     const machineHwid = getMachineHwid();
-    const verification = verifyLicense(cleanKey, machineHwid);
+    const verification = await verifyLicense(cleanKey, machineHwid);
 
     if (!verification.valid) {
       logger.warn(`License activation failed: ${verification.error}`);

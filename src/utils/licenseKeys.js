@@ -18,19 +18,59 @@ r0EOGsMcEfHamL9ks4If425jejhNdkr7QbV61GuhfXBfESjlj3ofIzYjQD73xb9e
 zwIDAQAB
 -----END PUBLIC KEY-----`;
 
+// Stable JSON stringify for canonicalization (sorts keys alphabetically)
+function stableStringify(obj) {
+  if (typeof obj !== 'object' || obj === null) return JSON.stringify(obj);
+  if (Array.isArray(obj)) return `[${obj.map(stableStringify).join(',')}]`;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map(k => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
+}
+
+/**
+ * Fetch trusted UTC time from a public API, fallback to local system time.
+ */
+async function getTrustedTime() {
+  try {
+    const res = await fetch('http://worldtimeapi.org/api/timezone/Etc/UTC', { signal: AbortSignal.timeout(3000) });
+    if (res.ok) {
+      const data = await res.json();
+      return new Date(data.utc_datetime);
+    }
+  } catch (e) {
+    // Network error or timeout, fallback to system clock
+  }
+  return new Date();
+}
+
+/**
+ * Fetch revoked license IDs blocklist.
+ */
+async function isRevoked(licenseId) {
+  try {
+    // Example remote blocklist URL controlled by admin
+    const url = 'https://raw.githubusercontent.com/het1621/SecurManage-License-Manager/main/revoked.json';
+    const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+    if (res.ok) {
+      const revokedList = await res.json();
+      return Array.isArray(revokedList) && revokedList.includes(licenseId);
+    }
+  } catch (e) {
+    // Fails open if network is down
+  }
+  return false;
+}
+
 /**
  * Decode and verify a license key string.
  * 
  * @param {string} licenseKeyString - Base64-encoded license key
- * @param {string} [machineHwid] - This machine's hardware ID (optional, for hardware binding check)
- * @returns {{ valid: boolean, payload: object|null, error: string|null }}
+ * @param {string} [machineHwid] - This machine's hardware ID
+ * @returns {Promise<{ valid: boolean, payload: object|null, error: string|null }>}
  */
-function verifyLicense(licenseKeyString, machineHwid) {
+async function verifyLicense(licenseKeyString, machineHwid) {
   try {
-    // Step 1: Decode base64
     const decoded = Buffer.from(licenseKeyString.trim(), 'base64').toString('utf8');
     
-    // Step 2: Parse JSON
     let licenseData;
     try {
       licenseData = JSON.parse(decoded);
@@ -38,45 +78,53 @@ function verifyLicense(licenseKeyString, machineHwid) {
       return { valid: false, payload: null, error: 'Invalid license key format' };
     }
 
-    // Step 3: Validate structure
     if (!licenseData.payload || !licenseData.signature) {
       return { valid: false, payload: null, error: 'Malformed license key' };
     }
 
     const { payload, signature } = licenseData;
 
-    // Step 4: Verify required payload fields
     if (!payload.company || !payload.issuedAt || !payload.licenseId) {
       return { valid: false, payload: null, error: 'Incomplete license data' };
     }
 
-    // Step 5: Verify RSA signature
-    const payloadString = JSON.stringify(payload);
+    // Task 3: Canonicalize payload
+    const payloadString = stableStringify(payload);
+    
     const verify = crypto.createVerify('SHA256');
     verify.update(payloadString);
     verify.end();
 
-    const isValid = verify.verify(PUBLIC_KEY, signature, 'base64');
+    // Task 4: Pin to PSS padding
+    const isValid = verify.verify({
+      key: PUBLIC_KEY,
+      padding: crypto.constants.RSA_PKCS1_PSS_PADDING
+    }, signature, 'base64');
+
     if (!isValid) {
       return { valid: false, payload: null, error: 'Invalid license key — signature verification failed' };
     }
 
-    // Step 6: Check hardware ID binding
+    // Check Revocation (Task 7)
+    if (await isRevoked(payload.licenseId)) {
+      return { valid: false, payload, error: 'This license has been permanently revoked by the administrator' };
+    }
+
     if (payload.hwid && machineHwid) {
       if (payload.hwid !== machineHwid) {
         return { valid: false, payload, error: 'This license key is registered to a different computer' };
       }
     }
 
-    // Step 7: Check expiry
     if (payload.expiresAt) {
-      const expiryDate = new Date(payload.expiresAt + 'T23:59:59');
-      if (expiryDate < new Date()) {
+      // Task 6: Trusted Time Check
+      const now = await getTrustedTime();
+      const expiryDate = new Date(payload.expiresAt + 'T23:59:59Z'); // Enforce UTC
+      if (expiryDate < now) {
         return { valid: false, payload, error: `License expired on ${payload.expiresAt}` };
       }
     }
 
-    // ✅ Valid license
     return { valid: true, payload, error: null };
 
   } catch (err) {
@@ -85,12 +133,13 @@ function verifyLicense(licenseKeyString, machineHwid) {
 }
 
 /**
- * Check if a license payload has expired.
+ * Check if a license payload has expired using trusted time.
  */
-function isLicenseExpired(payload) {
+async function isLicenseExpired(payload) {
   if (!payload || !payload.expiresAt) return false;
-  const expiryDate = new Date(payload.expiresAt + 'T23:59:59');
-  return expiryDate < new Date();
+  const now = await getTrustedTime();
+  const expiryDate = new Date(payload.expiresAt + 'T23:59:59Z');
+  return expiryDate < now;
 }
 
 module.exports = { verifyLicense, isLicenseExpired };
