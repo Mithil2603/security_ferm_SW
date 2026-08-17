@@ -100,6 +100,9 @@ function adaptSqlForMySQL(sql) {
   // 15. AUTOINCREMENT → AUTO_INCREMENT (SQLite vs MySQL spelling)
   q = q.replace(/\bAUTOINCREMENT\b/gi, 'AUTO_INCREMENT');
 
+  // 16. BEGIN TRANSACTION -> START TRANSACTION
+  q = q.replace(/^BEGIN TRANSACTION/i, 'START TRANSACTION');
+
   // 16. INTEGER PRIMARY KEY → INT AUTO_INCREMENT PRIMARY KEY (SQLite magic rowid)
   //     Only for CREATE TABLE context — this is handled in schema_mysql.sql directly
 
