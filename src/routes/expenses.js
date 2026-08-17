@@ -93,13 +93,13 @@ router.post('/categories', async (req, res) => {
     const { name, description } = req.body;
     if (!name) return res.status(400).json({ success: false, message: 'Category name is required' });
     const result = await query(
-      'INSERT INTO expense_categories (name, description) VALUES ($1, $2) RETURNING *',
-      [name.toLowerCase().replace(/\s+/g, '_'), description]
+      'INSERT INTO expense_categories (name) VALUES ($1) RETURNING *',
+      [name.toLowerCase().replace(/\s+/g, '_')]
     );
     res.status(201).json({ success: true, data: result.rows[0], message: 'Category added' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'expenses' });
-    if (error.message && error.message.includes('UNIQUE constraint failed')) {
+    if (error.code === 'ER_DUP_ENTRY' || (error.message && error.message.includes('UNIQUE constraint failed'))) {
       return res.status(400).json({ success: false, message: 'Category already exists' });
     }
     res.status(500).json({ success: false, message: 'Failed to add category' });

@@ -21,6 +21,7 @@ const poolConfig = {
   timezone:           '+05:30',    // IST — matches your location
   charset:            'utf8mb4',
   multipleStatements: true,        // Needed for schema init
+  dateStrings:        true,        // Emulate SQLite's behavior of returning native raw date strings instead of Date objects
 };
 
 let pool = null;
@@ -28,6 +29,12 @@ let pool = null;
 async function initPool() {
   try {
     pool = mysql.createPool(poolConfig);
+
+    // Set sql_mode to treat || as string concatenation (SQLite style) instead of Logical OR (MySQL style)
+    pool.on('connection', (connection) => {
+      connection.query("SET SESSION sql_mode=(SELECT CONCAT(@@sql_mode,',PIPES_AS_CONCAT'))");
+    });
+
     // Test the connection
     const conn = await pool.getConnection();
     logger.info('✅ MySQL connected successfully to ' + poolConfig.host + ':' + poolConfig.port + '/' + poolConfig.database);

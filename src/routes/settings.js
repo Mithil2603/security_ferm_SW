@@ -345,7 +345,7 @@ router.post('/expense-categories', async (req, res) => {
     res.status(201).json({ success: true, data: result.rows[0], message: 'Expense category created' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
-    if (error.message.includes('UNIQUE constraint failed')) {
+    if (error.code === 'ER_DUP_ENTRY' || (error.message && error.message.includes('UNIQUE constraint failed'))) {
       return res.status(409).json({ success: false, message: 'Category already exists' });
     }
     logger.error('Create expense category error:', error);
@@ -365,7 +365,7 @@ router.put('/expense-categories/:id', async (req, res) => {
     res.json({ success: true, data: result.rows[0], message: 'Category updated' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
-    if (error.message.includes('UNIQUE constraint failed')) {
+    if (error.code === 'ER_DUP_ENTRY' || (error.message && error.message.includes('UNIQUE constraint failed'))) {
       return res.status(409).json({ success: false, message: 'Category already exists' });
     }
     logger.error('Update expense category error:', error);
