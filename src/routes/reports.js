@@ -524,89 +524,108 @@ router.get('/alerts', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /api/reports/monthly-trend  — Revenue Trend + Year-End Forecast
+// GET /api/reports/monthly-trend  — Revenue Trend (date-range aware)
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/monthly-trend', async (req, res) => {
   try {
-    const year = req.query.year || new Date().getFullYear();
+    const { from_date, to_date, year } = req.query;
 
-    // Monthly revenue actuals for the year
+    // Build date boundaries
+    const fromDate = from_date || `${year || new Date().getFullYear()}-01-01`;
+    const toDate   = to_date   || new Date().toISOString().split('T')[0];
+
+    // Monthly revenue actuals within the date range
     const trend = await query(
       `SELECT
-         CASE strftime('%m', invoice_date) WHEN '01' THEN 'Jan' WHEN '02' THEN 'Feb' WHEN '03' THEN 'Mar' WHEN '04' THEN 'Apr' WHEN '05' THEN 'May' WHEN '06' THEN 'Jun' WHEN '07' THEN 'Jul' WHEN '08' THEN 'Aug' WHEN '09' THEN 'Sep' WHEN '10' THEN 'Oct' WHEN '11' THEN 'Nov' WHEN '12' THEN 'Dec' END AS month,
+         strftime('%Y-%m', invoice_date) AS ym,
+         CAST(strftime('%Y', invoice_date) AS INTEGER) AS yr,
          CAST(strftime('%m', invoice_date) AS INTEGER) AS month_num,
+         CASE strftime('%m', invoice_date)
+           WHEN '01' THEN 'Jan' WHEN '02' THEN 'Feb' WHEN '03' THEN 'Mar'
+           WHEN '04' THEN 'Apr' WHEN '05' THEN 'May' WHEN '06' THEN 'Jun'
+           WHEN '07' THEN 'Jul' WHEN '08' THEN 'Aug' WHEN '09' THEN 'Sep'
+           WHEN '10' THEN 'Oct' WHEN '11' THEN 'Nov' WHEN '12' THEN 'Dec'
+         END AS month_name,
          COALESCE(SUM(payment_received), 0) AS collected,
          COALESCE(SUM(final_amount), 0) AS billed
        FROM invoices
-       WHERE CAST(strftime('%Y', invoice_date) AS INTEGER) = $1
-         AND status != 'cancelled'
-       GROUP BY month, month_num
-       ORDER BY month_num`,
-      [year]
+       WHERE status != 'cancelled'
+         AND invoice_date >= date($1)
+         AND invoice_date <= date($2)
+       GROUP BY ym
+       ORDER BY ym`,
+      [fromDate, toDate]
     );
 
-    // Monthly payroll + expenses as costs
+    // Monthly payroll costs within range
     const costs = await query(
       `SELECT
-         CAST(strftime('%m', payroll_month) AS INTEGER) AS month_num,
+         strftime('%Y-%m', payroll_month) AS ym,
          COALESCE(SUM(net_salary), 0) AS payroll_cost
        FROM payroll
-       WHERE CAST(strftime('%Y', payroll_month) AS INTEGER) = $1
-       GROUP BY month_num`,
-      [year]
+       WHERE date(payroll_month, 'start of month') <= date($2)
+         AND date(payroll_month, 'start of month', '+1 month', '-1 day') >= date($1)
+       GROUP BY ym`,
+      [fromDate, toDate]
     );
     const costMap = {};
-    costs.rows.forEach(r => { costMap[parseInt(r.month_num)] = parseFloat(r.payroll_cost); });
+    costs.rows.forEach(r => { costMap[r.ym] = parseFloat(r.payroll_cost); });
 
     const expCosts = await query(
       `SELECT
-         CAST(strftime('%m', expense_date) AS INTEGER) AS month_num,
+         strftime('%Y-%m', expense_date) AS ym,
          COALESCE(SUM(amount), 0) AS exp_cost
        FROM expenses
-       WHERE CAST(strftime('%Y', expense_date) AS INTEGER) = $1
-         AND status IN ('approved', 'paid')
-       GROUP BY month_num`,
-      [year]
+       WHERE status IN ('approved', 'paid')
+         AND expense_date >= date($1)
+         AND expense_date <= date($2)
+       GROUP BY ym`,
+      [fromDate, toDate]
     );
     expCosts.rows.forEach(r => {
-      const m = parseInt(r.month_num);
-      costMap[m] = (costMap[m] || 0) + parseFloat(r.exp_cost);
+      costMap[r.ym] = (costMap[r.ym] || 0) + parseFloat(r.exp_cost);
     });
 
-    // Build full 12-month array
-    const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    const currentMonth = new Date().getMonth() + 1; // 1-indexed
-    const monthlyData = monthNames.map((name, idx) => {
-      const mNum = idx + 1;
-      const row  = trend.rows.find(r => parseInt(r.month_num) === mNum);
-      return {
-        month: name,
-        month_num: mNum,
+    // Build a rolling month list from fromDate to toDate
+    const monthlyData = [];
+    const start = new Date(fromDate + 'T00:00:00');
+    const end   = new Date(toDate   + 'T00:00:00');
+    const now   = new Date();
+    let cur = new Date(start.getFullYear(), start.getMonth(), 1);
+    const monthLabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+    while (cur <= end) {
+      const ym  = `${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,'0')}`;
+      const row = trend.rows.find(r => r.ym === ym);
+      const isFuture = cur > now;
+      monthlyData.push({
+        month:     `${monthLabels[cur.getMonth()]} ${cur.getFullYear()}`,
+        month_num: cur.getMonth() + 1,
+        ym,
         collected: row ? parseFloat(row.collected) : 0,
         billed:    row ? parseFloat(row.billed)    : 0,
-        costs:     costMap[mNum] || 0,
-        is_future: mNum > currentMonth
-      };
-    });
+        costs:     costMap[ym] || 0,
+        is_future: isFuture
+      });
+      cur.setMonth(cur.getMonth() + 1);
+    }
 
-    // Forecast: average of months with data → project remaining months
+    // Forecast from actual months
     const actualMonths = monthlyData.filter(m => !m.is_future && m.collected > 0);
     const runRate = actualMonths.length > 0
-      ? actualMonths.reduce((s, m) => s + m.collected, 0) / actualMonths.length
-      : 0;
+      ? actualMonths.reduce((s, m) => s + m.collected, 0) / actualMonths.length : 0;
     const ytdCollected = actualMonths.reduce((s, m) => s + m.collected, 0);
-    const remainingMonths = 12 - currentMonth;
+    const remainingMonths = Math.max(0, 12 - (now.getMonth() + 1));
     const forecast = ytdCollected + (runRate * remainingMonths);
 
     // MoM growth
     for (let i = 1; i < monthlyData.length; i++) {
-      const prev = monthlyData[i - 1].collected;
+      const prev = monthlyData[i-1].collected;
       const curr = monthlyData[i].collected;
       monthlyData[i].mom_pct = prev > 0 && curr > 0
-        ? parseFloat(((curr - prev) / prev * 100).toFixed(1))
-        : null;
+        ? parseFloat(((curr - prev) / prev * 100).toFixed(1)) : null;
     }
-    monthlyData[0].mom_pct = null;
+    if (monthlyData.length > 0) monthlyData[0].mom_pct = null;
 
     res.json({
       success: true,

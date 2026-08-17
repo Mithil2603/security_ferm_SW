@@ -1,37 +1,43 @@
 const logger = require('../../utils/logger.js');
 /**
- * Migration 010: Fix missing GST tax columns in existing invoices table.
- * Programmatic migration that adds columns only if they do not exist.
+ * Migration 011: Fix missing GST tax columns in invoices & permissions in users.
+ * Rewritten for MySQL — uses INFORMATION_SCHEMA instead of SQLite PRAGMA.
  */
-function up(db) {
-  // Get all current columns of the invoices table
-  const columns = db.prepare("PRAGMA table_info(invoices)").all();
-  const existingCols = columns.map(c => c.name);
+async function up(conn) {
+  const database = process.env.DB_NAME || 'security_firm_db';
 
-  const missingColumns = [
-    { name: 'tax_type', definition: "VARCHAR(20) DEFAULT 'none'" },
-    { name: 'cgst_amount', definition: 'REAL DEFAULT 0' },
-    { name: 'sgst_amount', definition: 'REAL DEFAULT 0' },
-    { name: 'igst_amount', definition: 'REAL DEFAULT 0' },
-    { name: 'is_rcm_applicable', definition: 'INTEGER DEFAULT 0' },
-    { name: 'duty_days_worked', definition: 'INT' },
-    { name: 'is_ad_hoc', definition: 'INTEGER DEFAULT 0' }
+  // Helper: check if a column exists in a table
+  async function columnExists(table, column) {
+    const [rows] = await conn.execute(
+      `SELECT COUNT(*) as cnt FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+      [database, table, column]
+    );
+    return rows[0].cnt > 0;
+  }
+
+  // Add missing columns to invoices
+  const invoiceColumns = [
+    { name: 'tax_type',          definition: "VARCHAR(20) DEFAULT 'none'" },
+    { name: 'cgst_amount',       definition: 'DOUBLE DEFAULT 0' },
+    { name: 'sgst_amount',       definition: 'DOUBLE DEFAULT 0' },
+    { name: 'igst_amount',       definition: 'DOUBLE DEFAULT 0' },
+    { name: 'is_rcm_applicable', definition: 'TINYINT(1) DEFAULT 0' },
+    { name: 'duty_days_worked',  definition: 'INT' },
+    { name: 'is_ad_hoc',         definition: 'TINYINT(1) DEFAULT 0' },
   ];
 
-  for (const col of missingColumns) {
-    if (!existingCols.includes(col.name)) {
-      logger.info(`     -> Adding missing column "${col.name}" to invoices table...`);
-      db.exec(`ALTER TABLE invoices ADD COLUMN ${col.name} ${col.definition};`);
+  for (const col of invoiceColumns) {
+    if (!(await columnExists('invoices', col.name))) {
+      logger.info(`     -> Adding column "${col.name}" to invoices...`);
+      await conn.execute(`ALTER TABLE invoices ADD COLUMN ${col.name} ${col.definition}`);
     }
   }
 
-  // Check and fix users table
-  const userColumns = db.prepare("PRAGMA table_info(users)").all();
-  const existingUserCols = userColumns.map(c => c.name);
-
-  if (!existingUserCols.includes('permissions')) {
-    logger.info('     -> Adding missing column "permissions" to users table...');
-    db.exec('ALTER TABLE users ADD COLUMN permissions TEXT;');
+  // Add permissions column to users if missing
+  if (!(await columnExists('users', 'permissions'))) {
+    logger.info('     -> Adding column "permissions" to users...');
+    await conn.execute('ALTER TABLE users ADD COLUMN permissions TEXT');
   }
 }
 

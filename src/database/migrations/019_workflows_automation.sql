@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS auto_approval_rules (
   requires_budget_check BOOLEAN DEFAULT 0,
   
   -- Who can auto-approve
-  applicable_roles TEXT DEFAULT 'admin',
+  applicable_roles TEXT DEFAULT ('admin'),
   
   is_active BOOLEAN DEFAULT 1,
   approval_count INTEGER DEFAULT 0,

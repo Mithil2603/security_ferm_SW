@@ -32,52 +32,34 @@ app.use(
 );
 
 // CORS: Restrict origins to prevent CSRF attacks
-if (process.env.NODE_ENV === 'production') {
-  // In Electron: frontend and backend are in same process
-  // Allow localhost only, reject cross-domain requests
-  const allowedOrigins = [
-    'http://localhost:5000',
-    'http://127.0.0.1:5000',
-  ];
-
-  app.use(cors({
-    origin: function(origin, callback) {
-      // Allow non-browser requests (mobile apps, curl, etc.)
-      if (!origin) {
-        return callback(null, true);
-      }
-
-      // Check if origin is in whitelist
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      // Reject disallowed origins
-      logger.warn(`⚠️  CORS blocked origin: ${origin}`);
-      callback(new Error('Not allowed by CORS'));
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-master-passcode'],
-    maxAge: 86400  // Cache CORS policy for 24 hours
-  }));
-} else {
-  // Development: allow localhost and 127.0.0.1
-  app.use(cors({
-    origin: function(origin, callback) {
-      if (!origin) return callback(null, true);
-      if (origin.startsWith('http://localhost:') || 
-          origin.startsWith('http://127.0.0.1:') ||
-          origin.startsWith('http://[::1]:')) {
-        return callback(null, true);
-      }
-      return callback(new Error('Not allowed by CORS'));
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-master-passcode']
-  }));
+// LAN-aware CORS — allows localhost AND all private LAN IP ranges
+// This is required for browser-only client PCs on the same WiFi network
+function isLanOrigin(origin) {
+  if (!origin) return true; // non-browser (curl, mobile app)
+  try {
+    const url = new URL(origin);
+    const host = url.hostname;
+    // localhost variants
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+    // LAN private ranges: 192.168.x.x, 10.x.x.x, 172.16-31.x.x
+    if (/^192\.168\./.test(host)) return true;
+    if (/^10\./.test(host)) return true;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+  } catch (_) {}
+  return false;
 }
+
+app.use(cors({
+  origin: function(origin, callback) {
+    if (isLanOrigin(origin)) return callback(null, true);
+    logger.warn(`⚠️  CORS blocked origin: ${origin}`);
+    callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-master-passcode'],
+  maxAge: 86400
+}));
 app.use(cookieParser());
 
 // Rate limiting
@@ -189,10 +171,38 @@ startScheduledJobs();
 startBackupJob();
 initCronJobs();
 
-app.listen(PORT, '127.0.0.1', () => {
-  logger.info(`\n🚀 Security Firm API Server running on port ${PORT} (127.0.0.1)`);
-  logger.info(`📊 Environment: ${process.env.NODE_ENV}`);
-  logger.info(`🗄️  Database: SQLite @ ${process.env.DB_PATH || 'database.sqlite'}\n`);
-});
+// ── Async startup: init MySQL pool, then start HTTP server ──────────
+const { initDB } = require('./database/connection');
+const os = require('os');
+
+function getLanIP() {
+  const interfaces = os.networkInterfaces();
+  for (const iface of Object.values(interfaces)) {
+    for (const alias of iface) {
+      if (alias.family === 'IPv4' && !alias.internal) {
+        return alias.address;
+      }
+    }
+  }
+  return 'unknown';
+}
+
+initDB()
+  .then(() => {
+    app.listen(PORT, '0.0.0.0', () => {
+      const lanIP = getLanIP();
+      process.env.SERVER_LAN_IP = lanIP;
+      logger.info(`\n🚀 Security Firm Server running on port ${PORT}`);
+      logger.info(`🖥️  Local:   http://localhost:${PORT}`);
+      logger.info(`🌐 Network: http://${lanIP}:${PORT}  ← Share this with LAN users`);
+      logger.info(`📊 Environment: ${process.env.NODE_ENV}`);
+      logger.info(`🗄️  Database: MySQL @ ${process.env.DB_HOST}:${process.env.DB_PORT || 3306}/${process.env.DB_NAME}\n`);
+    });
+  })
+  .catch(err => {
+    logger.error('❌ Failed to start server — database connection error:', err.message);
+    logger.error('   Check your MySQL credentials in .env or the app settings.');
+    process.exit(1);
+  });
 
 module.exports = app;

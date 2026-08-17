@@ -36,6 +36,7 @@ import Workflows from './pages/Workflows';
 import DeveloperConsole from './pages/DeveloperConsole';
 import AuditLogs from './pages/AuditLogs';
 import HelpDocumentation from './pages/HelpDocumentation';
+import SketchbookOfUsPreview from './pages/SketchbookOfUsPreview';
 
 function App() {
   const [licenseStatus, setLicenseStatus] = useState('checking'); // 'checking' | 'unlicensed' | 'licensed'
@@ -132,6 +133,7 @@ function App() {
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password/:token" element={<ResetPassword />} />
           <Route path="/developer" element={<DeveloperConsole />} />
+          <Route path="/sketchbook" element={<SketchbookOfUsPreview />} />
           <Route element={<Layout />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/clients" element={<Clients />} />

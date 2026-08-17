@@ -12,6 +12,7 @@ const router = express.Router();
 const Joi = require('joi');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const workflowEngine = require('../services/workflows/workflowEngine');
+const { logError } = require('../utils/errorLogger');
 
 router.use(authMiddleware);
 

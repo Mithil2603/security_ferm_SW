@@ -35,7 +35,8 @@ function validateAndSafePath(envKey, defaultPath) {
   return resolved;
 }
 
-process.env.DB_PATH = validateAndSafePath('DB_PATH', path.join(userDataPath, 'database.sqlite'));
+// MySQL credentials are loaded from .env (set via Setup Screen on first launch)
+// No file-path setup needed — MySQL is a network connection
 process.env.UPLOAD_DIR = validateAndSafePath('UPLOAD_DIR', path.join(userDataPath, 'uploads'));
 process.env.LOG_DIR = validateAndSafePath('LOG_DIR', path.join(userDataPath, 'logs'));
 process.env.NODE_ENV = 'production';
@@ -64,24 +65,9 @@ function ensureJWTSecret() {
     }
   }
 
-  // If database exists but secret is missing/invalid, this is an error
-  if (fs.existsSync(process.env.DB_PATH)) {
-    dialog.showErrorBox(
-      '🔴 Critical: JWT Secret Missing',
-      'The JWT secret key and backup are both missing.\n\n' +
-      'This is likely due to:\n' +
-      '• Accidental file deletion\n' +
-      '• Corrupted user data directory\n\n' +
-      'To prevent all users from being logged out:\n' +
-      '1. Check if a backup file exists\n' +
-      '2. Contact support with your backup key\n' +
-      '3. Do NOT proceed without the original secret.key'
-    );
-    app.quit();
-    process.exit(1);
-  }
-
-  // Database doesn't exist → safe to generate new secret
+  // No secret found — generate a fresh one.
+  // For upgrades: existing users will simply need to re-login once.
+  // For fresh installs: this is the normal path.
   console.log('🔑 Generating new JWT secret...');
   const newSecret = crypto.randomBytes(64).toString('hex');
 
@@ -175,6 +161,66 @@ ipcMain.handle('check-for-updates', async () => {
 // ── IPC: Get current app version ────────────────────────────────────
 ipcMain.handle('get-app-version', () => {
   return app.getVersion();
+});
+
+// ── IPC: Get server LAN IP (for display on admin dashboard) ─────────
+ipcMain.handle('get-server-url', () => {
+  const serverIP = process.env.SERVER_LAN_IP || 'localhost';
+  const port = process.env.PORT || '5000';
+  return {
+    local:   `http://localhost:${port}`,
+    network: `http://${serverIP}:${port}`,
+    ip:      serverIP,
+    port
+  };
+});
+
+// ── IPC: Save MySQL connection settings ─────────────────────────────
+ipcMain.handle('save-db-config', async (event, config) => {
+  try {
+    const envPath = path.join(__dirname, '.env');
+    let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+
+    const set = (key, val) => {
+      const regex = new RegExp(`^${key}=.*$`, 'm');
+      if (regex.test(envContent)) {
+        envContent = envContent.replace(regex, `${key}=${val}`);
+      } else {
+        envContent += `\n${key}=${val}`;
+      }
+    };
+
+    set('DB_HOST',     config.host     || 'localhost');
+    set('DB_PORT',     config.port     || '3306');
+    set('DB_NAME',     config.database || 'security_firm_db');
+    set('DB_USER',     config.user     || 'root');
+    set('DB_PASSWORD', config.password || '');
+
+    fs.writeFileSync(envPath, envContent, 'utf8');
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// ── IPC: Test MySQL connection before saving ─────────────────────────
+ipcMain.handle('test-db-connection', async (event, config) => {
+  try {
+    const mysql = require('mysql2/promise');
+    const conn = await mysql.createConnection({
+      host:     config.host     || 'localhost',
+      port:     parseInt(config.port || '3306'),
+      user:     config.user     || 'root',
+      password: config.password || '',
+      database: config.database || 'security_firm_db',
+      connectTimeout: 5000,
+    });
+    await conn.ping();
+    await conn.end();
+    return { success: true, message: 'Connection successful!' };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });
 
 // ── IPC: Get Hardware ID (machine-unique identifier for licensing) ───

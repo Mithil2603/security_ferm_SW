@@ -1,96 +1,118 @@
 const fs = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
 const archiver = require('archiver');
 const logger = require('../utils/logger');
-const { db } = require('../database/connection'); // To checkpoint WAL
 
 const BACKUPS_DIR = path.join(process.cwd(), 'backups');
 
-// Ensure backups directory exists
 if (!fs.existsSync(BACKUPS_DIR)) {
   fs.mkdirSync(BACKUPS_DIR, { recursive: true });
 }
 
 /**
- * Creates a zip backup of the SQLite database.
+ * Creates a MySQL dump backup compressed into a zip.
+ * Uses mysqldump which is included with MySQL installation.
  * @returns {Promise<string>} The path to the created backup zip file.
  */
 async function createBackup() {
-  return new Promise((resolve, reject) => {
-    try {
-      const dbPath = process.env.DB_PATH || path.join(process.cwd(), 'database.sqlite');
-      const walPath = `${dbPath}-wal`;
-      const shmPath = `${dbPath}-shm`;
+  const host     = process.env.DB_HOST     || 'localhost';
+  const port     = process.env.DB_PORT     || '3306';
+  const user     = process.env.DB_USER     || 'root';
+  const password = process.env.DB_PASSWORD || '';
+  const database = process.env.DB_NAME     || 'security_firm_db';
 
-      // Perform a WAL checkpoint to ensure all data is in the main database file before copying.
-      // TRUNCATE: Checkpoints the database and truncates the WAL file to zero length.
-      try {
-        db.pragma('wal_checkpoint(TRUNCATE)');
-      } catch (err) {
-        logger.warn('Failed to checkpoint WAL before backup (this may be normal if no changes occurred):', err.message);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const dumpFilename = `dump-${timestamp}.sql`;
+  const backupFilename = `backup-${timestamp}.zip`;
+  const dumpPath   = path.join(BACKUPS_DIR, dumpFilename);
+  const backupPath = path.join(BACKUPS_DIR, backupFilename);
+
+  // Step 1: Run mysqldump to create a SQL dump file
+  await new Promise((resolve, reject) => {
+    // Find mysqldump — check common MySQL installation paths on Windows
+    const mysqldumpPaths = [
+      'mysqldump',
+      'C:\\Program Files\\MySQL\\MySQL Server 8.4\\bin\\mysqldump.exe',
+      'C:\\Program Files\\MySQL\\MySQL Server 8.0\\bin\\mysqldump.exe',
+      'C:\\xampp\\mysql\\bin\\mysqldump.exe',
+    ];
+
+    const args = [
+      `--host=${host}`,
+      `--port=${port}`,
+      `--user=${user}`,
+      password ? `--password=${password}` : '--password=',
+      '--single-transaction',     // Non-locking backup for InnoDB
+      '--routines',
+      '--triggers',
+      '--add-drop-table',
+      database,
+    ];
+
+    // Try each path until one works
+    let tried = 0;
+    function tryNext(paths) {
+      if (paths.length === 0) {
+        return reject(new Error('mysqldump not found. Make sure MySQL is installed and in PATH.'));
       }
-
-      if (!fs.existsSync(dbPath)) {
-        throw new Error(`Database file not found at ${dbPath}`);
-      }
-
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const backupFilename = `backup-${timestamp}.zip`;
-      const backupPath = path.join(BACKUPS_DIR, backupFilename);
-
-      const output = fs.createWriteStream(backupPath);
-      const archive = archiver('zip', {
-        zlib: { level: 9 } // Maximum compression
+      const [current, ...rest] = paths;
+      const child = execFile(current, args, { maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
+        if (err) {
+          if (rest.length > 0) return tryNext(rest);
+          return reject(new Error(`mysqldump failed: ${stderr || err.message}`));
+        }
+        // Write dump to file
+        fs.writeFileSync(dumpPath, stdout, 'utf8');
+        resolve();
       });
-
-      output.on('close', () => {
-        logger.info(`Backup created successfully: ${backupFilename} (${archive.pointer()} total bytes)`);
-        cleanOldBackups();
-        resolve(backupPath);
-      });
-
-      archive.on('error', (err) => {
-        logger.error('Error during backup archiving:', err);
-        reject(err);
-      });
-
-      archive.pipe(output);
-
-      // Append files
-      archive.file(dbPath, { name: 'database.sqlite' });
-      if (fs.existsSync(walPath)) archive.file(walPath, { name: 'database.sqlite-wal' });
-      if (fs.existsSync(shmPath)) archive.file(shmPath, { name: 'database.sqlite-shm' });
-
-      archive.finalize();
-    } catch (error) {
-      logger.error('Failed to create backup:', error);
-      reject(error);
     }
+    tryNext(mysqldumpPaths);
   });
+
+  // Step 2: Compress the dump into a zip
+  await new Promise((resolve, reject) => {
+    const output = fs.createWriteStream(backupPath);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+
+    output.on('close', () => {
+      // Remove the raw SQL dump — we have the zip now
+      try { fs.unlinkSync(dumpPath); } catch (_) {}
+      logger.info(`✅ Backup created: ${backupFilename} (${archive.pointer()} bytes)`);
+      cleanOldBackups();
+      resolve(backupPath);
+    });
+
+    archive.on('error', reject);
+    archive.pipe(output);
+    archive.file(dumpPath, { name: dumpFilename });
+    archive.finalize();
+  });
+
+  return backupPath;
 }
 
 /**
- * Cleans up old backups keeping only the last 30 days.
+ * Cleans up old backups — keeps only the last 30 days.
  */
 function cleanOldBackups() {
   try {
     const files = fs.readdirSync(BACKUPS_DIR);
     const now = Date.now();
     const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
-
     let deletedCount = 0;
+
     for (const file of files) {
       if (file.startsWith('backup-') && file.endsWith('.zip')) {
         const filePath = path.join(BACKUPS_DIR, file);
         const stats = fs.statSync(filePath);
-        
         if (now - stats.mtimeMs > thirtyDaysMs) {
           fs.unlinkSync(filePath);
           deletedCount++;
         }
       }
     }
-    
+
     if (deletedCount > 0) {
       logger.info(`Cleaned up ${deletedCount} old backup(s).`);
     }
@@ -105,27 +127,17 @@ function cleanOldBackups() {
 function getAvailableBackups() {
   try {
     const files = fs.readdirSync(BACKUPS_DIR);
-    const backups = files
+    return files
       .filter(f => f.startsWith('backup-') && f.endsWith('.zip'))
       .map(f => {
         const stats = fs.statSync(path.join(BACKUPS_DIR, f));
-        return {
-          filename: f,
-          sizeBytes: stats.size,
-          createdAt: stats.mtime
-        };
+        return { filename: f, sizeBytes: stats.size, createdAt: stats.mtime };
       })
-      .sort((a, b) => b.createdAt - a.createdAt); // Newest first
-    return backups;
+      .sort((a, b) => b.createdAt - a.createdAt);
   } catch (error) {
     logger.error('Error listing backups:', error);
     return [];
   }
 }
 
-module.exports = {
-  createBackup,
-  cleanOldBackups,
-  getAvailableBackups,
-  BACKUPS_DIR
-};
+module.exports = { createBackup, cleanOldBackups, getAvailableBackups, BACKUPS_DIR };

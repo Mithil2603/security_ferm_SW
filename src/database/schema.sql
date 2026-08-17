@@ -347,16 +347,6 @@ CREATE INDEX IF NOT EXISTS idx_errors_severity_created ON error_logs(severity, c
 CREATE INDEX IF NOT EXISTS idx_errors_feature_created ON error_logs(feature, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_errors_is_resolved ON error_logs(is_resolved);
 
--- ============================================================
--- DEFAULT ADMIN USER (password: Admin@123)
--- ============================================================
-INSERT INTO users (email, password_hash, full_name, role)
-VALUES (
-    'admin@securityfirm.com',
-    '$2b$12$eEzxhJcQIcPFxMLQHJKnw.PPMkkBhW/oU151k9ufmiw6aYarEpCT.',
-    'System Administrator',
-    'admin'
-) ON CONFLICT (email) DO NOTHING;
 
 -- ============================================================
 -- SAMPLE SALARY STRUCTURES
@@ -405,35 +395,4 @@ CREATE INDEX IF NOT EXISTS idx_payments_created_by ON payments(created_by);
 CREATE INDEX IF NOT EXISTS idx_payroll_created_by ON payroll(created_by);
 CREATE INDEX IF NOT EXISTS idx_expenses_approver_id ON expenses(approver_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_created_by ON expenses(created_by);
-CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);- -   M i g r a t i o n   0 1 3 :   A d v a n c e d   V o u c h e r s   F e a t u r e s   ( B u d g e t s ,   R e c u r r i n g ,   P a y m e n t   T e r m s )  
-  
- - -   1 .   B u d g e t s   T a b l e  
- C R E A T E   T A B L E   I F   N O T   E X I S T S   b u d g e t s   (  
-         i d   I N T E G E R   P R I M A R Y   K E Y   A U T O I N C R E M E N T ,  
-         e n t i t y _ t y p e   V A R C H A R ( 5 0 )   N O T   N U L L   C H E C K   ( e n t i t y _ t y p e   I N   ( ' g l o b a l ' ,   ' c l i e n t ' ,   ' v e n d o r ' ,   ' s i t e ' ) ) ,  
-         e n t i t y _ i d   I N T ,  
-         b u d g e t _ c a t e g o r y   V A R C H A R ( 1 0 0 ) ,  
-         a m o u n t   R E A L   N O T   N U L L   C H E C K   ( a m o u n t   >   0 ) ,  
-         p e r i o d _ s t a r t   D A T E   N O T   N U L L ,  
-         p e r i o d _ e n d   D A T E   N O T   N U L L ,  
-         c r e a t e d _ a t   T I M E S T A M P   D E F A U L T   C U R R E N T _ T I M E S T A M P  
- ) ;  
-  
- - -   2 .   R e c u r r i n g   V o u c h e r s   T a b l e  
- C R E A T E   T A B L E   I F   N O T   E X I S T S   r e c u r r i n g _ v o u c h e r s   (  
-         i d   I N T E G E R   P R I M A R Y   K E Y   A U T O I N C R E M E N T ,  
-         t e m p l a t e _ v o u c h e r _ i d   I N T   N O T   N U L L   R E F E R E N C E S   v o u c h e r s ( i d )   O N   D E L E T E   C A S C A D E ,  
-         f r e q u e n c y   V A R C H A R ( 2 0 )   N O T   N U L L   C H E C K   ( f r e q u e n c y   I N   ( ' d a i l y ' ,   ' w e e k l y ' ,   ' m o n t h l y ' ,   ' q u a r t e r l y ' ,   ' y e a r l y ' ) ) ,  
-         n e x t _ r u n _ d a t e   D A T E   N O T   N U L L ,  
-         i s _ a c t i v e   B O O L E A N   D E F A U L T   1 ,  
-         c r e a t e d _ a t   T I M E S T A M P   D E F A U L T   C U R R E N T _ T I M E S T A M P ,  
-         c r e a t e d _ b y   I N T   R E F E R E N C E S   u s e r s ( i d )  
- ) ;  
-  
- - -   3 .   V e n d o r s   A l t e r  
- A L T E R   T A B L E   v e n d o r s   A D D   C O L U M N   p a y m e n t _ t e r m s _ d a y s   I N T E G E R   D E F A U L T   0 ;  
-  
- - -   4 .   V o u c h e r s   A l t e r  
- A L T E R   T A B L E   v o u c h e r s   A D D   C O L U M N   d u e _ d a t e   D A T E ;  
- A L T E R   T A B L E   v o u c h e r s   A D D   C O L U M N   c a t e g o r y   V A R C H A R ( 1 0 0 ) ;  
- 
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);

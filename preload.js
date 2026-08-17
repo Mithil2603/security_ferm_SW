@@ -87,4 +87,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Get hardware ID for license activation
   getHardwareId: () => ipcRenderer.invoke('get-hardware-id'),
+
+  // ── MySQL / LAN Setup ───────────────────────────────────────────────
+  // Get the server's LAN IP and URL for display on admin dashboard
+  getServerUrl: () => ipcRenderer.invoke('get-server-url'),
+
+  // Test a MySQL connection before saving it
+  testDbConnection: (config) => ipcRenderer.invoke('test-db-connection', config),
+
+  // Save MySQL credentials to .env
+  saveDbConfig: (config) => ipcRenderer.invoke('save-db-config', config),
 });

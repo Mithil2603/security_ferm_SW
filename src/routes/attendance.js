@@ -85,14 +85,17 @@ router.post('/', validate(schemas.markAttendance), async (req, res) => {
     const result = await query(
       `INSERT INTO attendance (employee_id, client_id, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, created_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-       ON CONFLICT (employee_id, attendance_date) DO UPDATE SET
-         client_id=EXCLUDED.client_id, check_in_time=EXCLUDED.check_in_time, check_out_time=EXCLUDED.check_out_time,
-         hours_worked=EXCLUDED.hours_worked, status=EXCLUDED.status, notes=EXCLUDED.notes, updated_at=CURRENT_TIMESTAMP
-       RETURNING *`,
+       ON DUPLICATE KEY UPDATE
+         client_id=VALUES(client_id), check_in_time=VALUES(check_in_time), check_out_time=VALUES(check_out_time),
+         hours_worked=VALUES(hours_worked), status=VALUES(status), notes=VALUES(notes), updated_at=CURRENT_TIMESTAMP`,
       [employee_id, client_id || null, attendance_date, check_in_time || null, check_out_time || null, hours_worked, status, notes, req.user.userId]
     );
 
-    res.status(201).json({ success: true, data: result.rows[0], message: 'Attendance marked successfully' });
+    // Fetch the inserted/updated row
+    const fetched = await query(
+      'SELECT * FROM attendance WHERE employee_id = $1 AND attendance_date = $2',
+      [employee_id, attendance_date]
+    );
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'attendance' });
     logger.error('Mark attendance error:', error);
@@ -125,7 +128,7 @@ router.post('/bulk', validate(schemas.bulkAttendance), async (req, res) => {
         await query(
           `INSERT INTO attendance (employee_id, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, created_by)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-           ON CONFLICT (employee_id, attendance_date) DO UPDATE SET status=EXCLUDED.status`,
+           ON DUPLICATE KEY UPDATE status=VALUES(status)`,
           [employee_id, attendance_date, check_in_time || null, check_out_time || null, hours_worked, status, notes, req.user.userId]
         );
         successCount++;
@@ -230,9 +233,9 @@ router.post('/bulk-upload', upload.single('file'), (req, res) => {
           await query(
             `INSERT INTO attendance (employee_id, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, created_by)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-             ON CONFLICT (employee_id, attendance_date) DO UPDATE SET 
-               check_in_time=EXCLUDED.check_in_time, check_out_time=EXCLUDED.check_out_time, 
-               hours_worked=EXCLUDED.hours_worked, status=EXCLUDED.status, notes=EXCLUDED.notes`,
+             ON DUPLICATE KEY UPDATE
+               check_in_time=VALUES(check_in_time), check_out_time=VALUES(check_out_time),
+               hours_worked=VALUES(hours_worked), status=VALUES(status), notes=VALUES(notes)`,
             [empId, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, req.user.userId]
           );
           successCount++;

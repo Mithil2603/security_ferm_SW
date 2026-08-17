@@ -95,11 +95,14 @@ async function verifyLicense(licenseKeyString, machineHwid) {
     verify.update(payloadString);
     verify.end();
 
-    // Task 4: Pin to PSS padding
+    // Task 4: Pin to PSS padding with explicit salt length to ensure
+    // compatibility between Node.js standalone and Electron's bundled OpenSSL
     const isValid = verify.verify({
       key: PUBLIC_KEY,
-      padding: crypto.constants.RSA_PKCS1_PSS_PADDING
+      padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+      saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST
     }, signature, 'base64');
+
 
     if (!isValid) {
       return { valid: false, payload: null, error: 'Invalid license key — signature verification failed' };

@@ -85,7 +85,7 @@ export default function Reports() {
   const [costPerGuardData, setCostPerGuardData] = useState(null);
   const [tdsData, setTdsData] = useState([]);
   const [dateRange, setDateRange] = useState({
-    from_date: `${new Date().getFullYear()}-01-01`,
+    from_date: '2024-08-01',
     to_date: new Date().toISOString().split('T')[0]
   });
 
@@ -267,17 +267,17 @@ export default function Reports() {
         api.get(`/reports/profit-loss${queryStr}`),
         api.get(`/reports/tds${queryStr}`)
       ]);
-      setExpenseData(expenseRes.data?.by_category || []);
-      setPlData(plRes.data);
+      setExpenseData(expenseRes.data?.data?.by_category || []);
+      setPlData(plRes.data?.data || plRes.data || null);
       if (tdsRes.data?.success) setTdsData(tdsRes.data.data);
 
       const year = new Date(dateRange.from_date).getFullYear();
       const [trendRes, agingRes] = await Promise.all([
-        api.get(`/reports/monthly-trend?year=${year}`),
+        api.get(`/reports/monthly-trend?from_date=${dateRange.from_date}&to_date=${dateRange.to_date}`),
         api.get('/reports/receivables-aging')
       ]);
-      if (trendRes.success) setTrendData(trendRes);
-      if (agingRes.success) setAgingData(agingRes);
+      if (trendRes.data?.success) setTrendData(trendRes.data);
+      if (agingRes.data?.success) setAgingData(agingRes.data);
     } catch (err) {
       console.error('Failed to fetch reports', err);
     } finally {
@@ -297,9 +297,9 @@ export default function Reports() {
         api.get(`/reports/business-analytics${queryStr}`),
         api.get(`/reports/cost-per-guard${queryStr}`)
       ]);
-      setAdvancedData(advRes.data);
-      if (bizRes.success) setBizData(bizRes);
-      if (cpgRes.success) setCostPerGuardData(cpgRes.data);
+      setAdvancedData(advRes.data?.data || advRes.data || null);
+      if (bizRes.data?.success) setBizData(bizRes.data);
+      if (cpgRes.data?.success) setCostPerGuardData(cpgRes.data?.data ?? cpgRes.data);
     } catch (err) {
       console.error('Failed to fetch advanced reports', err);
     }

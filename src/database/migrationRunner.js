@@ -1,51 +1,103 @@
 const logger = require('../utils/logger.js');
-/**
- * src/database/migrationRunner.js
- * 
- * Automatic Database Migration System
- * 
- * On every app startup, this runner:
- * 1. Checks the current schema version stored in system_settings
- * 2. Scans the migrations/ folder for numbered .sql files
- * 3. Runs any migration files with a number greater than the current version
- * 4. Updates the schema version after each successful migration
- * 
- * Migration files must be named: 001_description.sql, 002_description.sql, etc.
- * Each migration runs inside a transaction — if it fails, it rolls back cleanly.
- */
-
 const fs = require('fs');
 const path = require('path');
 
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 
 /**
- * Run all pending database migrations.
- * @param {import('better-sqlite3').Database} db - The SQLite database instance
+ * Convert SQLite migration SQL to MySQL-compatible SQL.
+ * This is a more aggressive adapter for migration files which
+ * contain more SQLite-specific constructs than runtime queries.
  */
-function runMigrations(db) {
-  // Ensure system_settings table exists (it might not on very old installs)
-  db.exec(`
+function adaptMigrationSQL(sql) {
+  let q = sql;
+
+  // 1. strftime conversions
+  q = q.replace(/strftime\s*\(\s*'%Y-%m'\s*,\s*([^)]+)\)/gi, "DATE_FORMAT($1, '%Y-%m')");
+  q = q.replace(/strftime\s*\(\s*'%Y'\s*,\s*([^)]+)\)/gi, 'YEAR($1)');
+  q = q.replace(/strftime\s*\(\s*'%m'\s*,\s*([^)]+)\)/gi, 'MONTH($1)');
+  q = q.replace(/strftime\s*\(\s*'%d'\s*,\s*([^)]+)\)/gi, 'DAY($1)');
+  q = q.replace(/strftime\s*\(\s*'%H:%M'\s*,\s*([^)]+)\)/gi, "TIME_FORMAT($1, '%H:%i')");
+
+  // 2. date() functions
+  q = q.replace(/\bdate\s*\(\s*'now'\s*,?\s*'?localtime'?\s*\)/gi, 'CURDATE()');
+  q = q.replace(/\bdate\s*\(\s*'now'\s*\)/gi, 'CURDATE()');
+  q = q.replace(/\bdatetime\s*\(\s*'now'\s*\)/gi, 'NOW()');
+
+  // 3. AUTOINCREMENT → AUTO_INCREMENT
+  q = q.replace(/\bAUTOINCREMENT\b/gi, 'AUTO_INCREMENT');
+
+  // 4. INTEGER PRIMARY KEY → INT AUTO_INCREMENT PRIMARY KEY
+  q = q.replace(/\bINTEGER\s+PRIMARY\s+KEY\s+AUTO_INCREMENT\b/gi, 'INT AUTO_INCREMENT PRIMARY KEY');
+  q = q.replace(/\bINTEGER\s+PRIMARY\s+KEY\b/gi, 'INT AUTO_INCREMENT PRIMARY KEY');
+
+  // 5. REAL → DOUBLE
+  q = q.replace(/\bREAL\b/g, 'DOUBLE');
+
+  // 6. BOOLEAN → TINYINT(1) (MySQL 8.4 is fine with BOOLEAN but this is safer)
+  // q = q.replace(/\bBOOLEAN\b/gi, 'TINYINT(1)');
+
+  // 7. INSERT OR IGNORE → INSERT IGNORE
+  q = q.replace(/\bINSERT\s+OR\s+IGNORE\s+INTO\b/gi, 'INSERT IGNORE INTO');
+
+  // 8. ON CONFLICT DO NOTHING — remove (use INSERT IGNORE instead, handled above via 7+9)
+  q = q.replace(/\s+ON\s+CONFLICT\s+DO\s+NOTHING/gi, '');
+
+  // 9. ON CONFLICT(col) DO UPDATE SET → ON DUPLICATE KEY UPDATE
+  q = q.replace(/ON\s+CONFLICT\s*\([^)]+\)\s*DO\s+UPDATE\s+SET/gi, 'ON DUPLICATE KEY UPDATE');
+
+  // 10. CREATE INDEX IF NOT EXISTS → CREATE INDEX
+  //     MySQL 8.4 does NOT support IF NOT EXISTS for indexes.
+  //     Duplicate index errors (errno 1061) are caught and ignored in the runner below.
+  q = q.replace(/CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\b/gi, 'CREATE INDEX');
+
+  // 11. Inline REFERENCES (SQLite allows, MySQL parses but ignores inline FKs without failing)
+  q = q.replace(/\bTEXT\s+PRIMARY\s+KEY\b/gi, 'VARCHAR(255) PRIMARY KEY');
+
+  // 12. CURRENT_DATE for column default
+  q = q.replace(/DEFAULT CURRENT_DATE/gi, "DEFAULT (CURDATE())");
+
+  // 13. TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP — already MySQL native
+
+  // 14. VARCHAR(n) for TEXT primary keys — fine in MySQL
+
+  // 15. CHECK constraints with NULL (MySQL 8.0.16+ supports CHECK)
+  // Keep as-is, MySQL 8 supports them
+
+  // 16. PRAGMA statements — remove completely
+  q = q.replace(/PRAGMA\s+[^;]+;?/gi, '');
+
+  return q;
+}
+
+/**
+ * Run all pending database migrations against MySQL.
+ * @param {import('mysql2/promise').Pool} pool - The MySQL pool
+ * @param {Function} query - The query() helper from connection.js
+ */
+async function runMigrations(pool, query) {
+  // Ensure system_settings table exists
+  await pool.execute(`
     CREATE TABLE IF NOT EXISTS system_settings (
       setting_key VARCHAR(50) PRIMARY KEY,
       setting_value TEXT NOT NULL,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )
   `);
 
   // Get current schema version
   let currentVersion = 0;
   try {
-    const row = db.prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'schema_version'").get();
-    if (row) {
-      currentVersion = parseInt(row.setting_value) || 0;
+    const [rows] = await pool.execute(
+      "SELECT setting_value FROM system_settings WHERE setting_key = 'schema_version'"
+    );
+    if (rows.length > 0) {
+      currentVersion = parseInt(rows[0].setting_value) || 0;
     }
   } catch (err) {
-    // Table might not have the row yet — that's fine, we start from 0
     logger.info('No schema_version found, starting from 0');
   }
 
-  // Scan migrations directory
   if (!fs.existsSync(MIGRATIONS_DIR)) {
     logger.info('No migrations directory found — skipping migrations.');
     return;
@@ -53,7 +105,7 @@ function runMigrations(db) {
 
   const migrationFiles = fs.readdirSync(MIGRATIONS_DIR)
     .filter(f => f.endsWith('.sql') || f.endsWith('.js'))
-    .sort() // Ensures 001, 002, 003 order
+    .sort()
     .map(f => {
       const match = f.match(/^(\d+)_/);
       return {
@@ -70,82 +122,81 @@ function runMigrations(db) {
     return;
   }
 
-  // Take a pre-migration backup for safe rollback
-  try {
-    const dbPath = process.env.DB_PATH || path.join(process.cwd(), 'database.sqlite');
-    if (fs.existsSync(dbPath)) {
-      const backupDir = process.env.BACKUP_DIR || path.join(path.dirname(dbPath), 'auto-backups');
-      if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
-      const preMigratePath = path.join(backupDir, `database-pre-migration-v${currentVersion}-${Date.now()}.sqlite.backup`);
-      fs.copyFileSync(dbPath, preMigratePath);
-      logger.info(`📦 Pre-migration backup saved to ${preMigratePath} for safe rollback.`);
-    }
-  } catch (backupErr) {
-    logger.warn('Could not create pre-migration backup. Proceeding with caution.', backupErr);
-  }
-
   logger.info(`\n📦 Running ${pendingMigrations.length} pending migration(s)...`);
 
   for (const migration of pendingMigrations) {
     logger.info(`   ⬆ Running migration ${migration.filename}...`);
+    const conn = await pool.getConnection();
 
     try {
-      // Run the entire migration in a transaction for safety
-      db.exec('BEGIN TRANSACTION');
+      await conn.beginTransaction();
 
       if (migration.filename.endsWith('.js')) {
-        // Run JavaScript programmatic migration
         const run = require(migration.path);
         if (typeof run === 'function') {
-          run(db);
+          await run(conn, query);
         } else if (run && typeof run.up === 'function') {
-          run.up(db);
+          await run.up(conn, query);
         } else {
-          throw new Error('JS migration must export a function or an object with an "up" function');
+          throw new Error('JS migration must export a function or { up }');
         }
       } else {
-        // Run SQL migration
-        const sql = fs.readFileSync(migration.path, 'utf8');
-        db.exec(sql);
+        const rawSql = fs.readFileSync(migration.path, 'utf8');
+        const adaptedSql = adaptMigrationSQL(rawSql);
+
+        // Strip full-line and inline SQL comments safely before splitting
+        const sqlNoComments = adaptedSql.replace(/--.*$/gm, '');
+        const statements = sqlNoComments
+          .split(';')
+          .map(s => s.trim())
+          .filter(s => s.length > 0);
+
+        for (const stmt of statements) {
+          try {
+            await conn.query(stmt);
+          } catch (stmtErr) {
+            const ignoredErrors = [
+              1060, // Duplicate column name (ALTER TABLE ADD COLUMN already exists)
+              1061, // Duplicate key name (CREATE INDEX already exists)
+              1050, // Table already exists
+              1091, // Can't DROP; check that column/key exists
+              1146, // Table doesn't exist (for migrations on tables from old schema)
+            ];
+            if (ignoredErrors.includes(stmtErr.errno)) {
+              logger.warn(`   ⚠ Skipped (already done): ${stmtErr.message.slice(0, 80)}`);
+            } else if (stmtErr.message.includes('already exists')) {
+              logger.warn(`   ⚠ Already exists: ${stmtErr.message.slice(0, 80)}`);
+            } else {
+              // Re-throw for real errors
+              throw stmtErr;
+            }
+          }
+        }
       }
 
       // Update schema version
-      db.prepare(`
-        INSERT INTO system_settings (setting_key, setting_value, updated_at) 
-        VALUES ('schema_version', ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(setting_key) DO UPDATE SET setting_value = ?, updated_at = CURRENT_TIMESTAMP
-      `).run(String(migration.version), String(migration.version));
+      await conn.execute(
+        `INSERT INTO system_settings (setting_key, setting_value) VALUES ('schema_version', ?)
+         ON DUPLICATE KEY UPDATE setting_value = ?`,
+        [String(migration.version), String(migration.version)]
+      );
 
-      db.exec('COMMIT');
+      await conn.commit();
       logger.info(`   ✅ Migration ${migration.filename} applied successfully.`);
     } catch (err) {
-      // Roll back on failure — the database stays at the previous version
-      try { 
-        db.exec('ROLLBACK'); 
-        logger.warn(`⚠️  Rolled back: ${migration.filename}`);
-      } catch (rbErr) { 
-        logger.error(`Failed to rollback: ${rbErr.message}`);
-      }
-      
-      logger.error(`❌ Migration failed: ${migration.filename}`, {
-        error: err.message,
-        file: migration.path,
-        stack: err.stack
-      });
-      
-      // Don't continue with subsequent migrations if one fails
-      // Throw an error so the application stops and the developer/admin is warned immediately
-      throw new Error(
-        `Migration '${migration.filename}' failed and was rolled back. Details: ${err.message}`
-      );
+      try { await conn.rollback(); } catch (_) {}
+      logger.error(`❌ Migration failed: ${migration.filename} — ${err.message}`);
+      conn.release();
+      throw new Error(`Migration '${migration.filename}' failed: ${err.message}`);
     }
+
+    conn.release();
   }
 
-  // Log final version
   try {
-    const finalRow = db.prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'schema_version'").get();
-    logger.info(`📦 Database schema is now at version ${finalRow ? finalRow.setting_value : currentVersion}.\n`);
-  } catch (e) { /* ignore */ }
+    const [rows] = await pool.execute("SELECT setting_value FROM system_settings WHERE setting_key = 'schema_version'");
+    logger.info(`📦 Database schema is now at version ${rows[0]?.setting_value || currentVersion}.\n`);
+  } catch (_) {}
 }
 
 module.exports = { runMigrations };

@@ -12,6 +12,7 @@ const router = express.Router();
 const Joi = require('joi');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const reportService = require('../services/reports/financialReportingService');
+const { logError } = require('../utils/errorLogger');
 
 router.use(authMiddleware);
 router.use(requirePermission('manage_payroll'));
