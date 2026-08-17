@@ -30,25 +30,6 @@ if (!fs.existsSync(dbPath)) {
 // ── MySQL target ─────────────────────────────────────────────────────────────
 const mysql = require('mysql2/promise');
 
-const TABLES_IN_ORDER = [
-  'users',
-  'refresh_tokens',
-  'salary_structures',
-  'clients',
-  'employees',
-  'attendance',
-  'invoices',
-  'expense_categories',
-  'payments',
-  'payroll',
-  'expenses',
-  'audit_logs',
-  'error_logs',
-  'error_summary',
-  'error_notifications',
-  'system_settings',
-];
-
 // Column type conversions from SQLite to MySQL
 function convertValue(val) {
   if (val === null || val === undefined) return null;
@@ -77,22 +58,17 @@ async function migrate() {
   // Test MySQL connection
   const conn = await pool.getConnection();
   console.log('✅ MySQL connected to', process.env.DB_HOST + ':' + (process.env.DB_PORT || '3306'));
+  
+  // Disable Foreign Key checks for bulk import
+  await conn.query('SET FOREIGN_KEY_CHECKS = 0;');
   conn.release();
 
+  // Get ALL tables from SQLite
+  const sqliteTables = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name != 'sqlite_sequence'").all().map(r => r.name);
+  
   const report = [];
 
-  for (const table of TABLES_IN_ORDER) {
-    // Check if table exists in SQLite
-    const tableExists = sqlite.prepare(
-      `SELECT name FROM sqlite_master WHERE type='table' AND name=?`
-    ).get(table);
-
-    if (!tableExists) {
-      console.log(`⏭  Skipping '${table}' (not in SQLite)`);
-      report.push({ table, skipped: true, rows: 0 });
-      continue;
-    }
-
+  for (const table of sqliteTables) {
     // Get all rows from SQLite
     const rows = sqlite.prepare(`SELECT * FROM \`${table}\``).all();
 
@@ -139,6 +115,11 @@ async function migrate() {
       mysqlConn.release();
     }
   }
+
+  // Re-enable Foreign Key checks
+  const conn2 = await pool.getConnection();
+  await conn2.query('SET FOREIGN_KEY_CHECKS = 1;');
+  conn2.release();
 
   sqlite.close();
   await pool.end();

@@ -143,7 +143,12 @@ router.get('/:id', async (req, res) => {
 // POST /api/expenses
 router.post('/', upload.single('receipt_file'), validate(schemas.createExpense), async (req, res) => {
   try {
-    const { expense_date, category, description, amount, payment_method, vendor_id, receipt_number, notes } = req.body;
+    const { expense_date, description, amount, payment_method, vendor_id, receipt_number, notes } = req.body;
+    let { category } = req.body;
+    
+    // Normalize category
+    if (category) category = category.trim().toLowerCase().replace(/\s+/g, '_');
+    
     let receipt_url = req.file ? `/uploads/${req.file.filename}` : null;
 
     if (!expense_date || !category || !description || !amount || !payment_method) {
@@ -169,7 +174,12 @@ router.post('/', upload.single('receipt_file'), validate(schemas.createExpense),
 // PUT /api/expenses/:id
 router.put('/:id', upload.single('receipt_file'), async (req, res) => {
   try {
-    const { expense_date, category, description, amount, payment_method, vendor_id, receipt_number, notes } = req.body;
+    const { expense_date, description, amount, payment_method, vendor_id, receipt_number, notes } = req.body;
+    let { category } = req.body;
+    
+    // Normalize category
+    if (category) category = category.trim().toLowerCase().replace(/\s+/g, '_');
+
     let receipt_url = req.file ? `/uploads/${req.file.filename}` : null;
     
     // If no new file, keep existing receipt_url

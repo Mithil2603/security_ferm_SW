@@ -88,8 +88,10 @@ function adaptSqlForMySQL(sql) {
   q = q.replace(/\bdate\s*\(\s*(\$\d+)\s*\)/gi, 'DATE($1)');
 
   // 13. ON CONFLICT DO NOTHING → MySQL doesn't support this; use INSERT IGNORE
-  q = q.replace(/\s+ON CONFLICT\s+DO NOTHING/gi, '');
-  q = q.replace(/^INSERT INTO/i, 'INSERT IGNORE INTO');
+  if (/ON CONFLICT\s+DO NOTHING/i.test(q)) {
+    q = q.replace(/\s+ON CONFLICT\s+DO NOTHING/gi, '');
+    q = q.replace(/^INSERT INTO/i, 'INSERT IGNORE INTO');
+  }
 
   // 14. ON CONFLICT(col) DO UPDATE SET ... → ON DUPLICATE KEY UPDATE ...
   //     (handled per-query if needed — complex replacement)
@@ -144,6 +146,8 @@ const query = async (text, params = []) => {
     const mappedParams = expandedParams.map(p => {
       if (typeof p === 'boolean') return p ? 1 : 0;
       if (p instanceof Date) return p.toISOString().slice(0, 19).replace('T', ' ');
+      if (p === undefined) return null;
+      if (typeof p === 'number') return String(p);
       return p;
     });
 
@@ -156,8 +160,9 @@ const query = async (text, params = []) => {
     }
 
     // 6. Handle INSERT/UPDATE/DELETE result
-    if (Array.isArray(rows) && rows.length > 0 && rows[0].constructor && rows[0].constructor.name !== 'RowDataPacket') {
+    if (rows && !Array.isArray(rows)) {
       // It's a ResultSetHeader (INSERT/UPDATE/DELETE)
+      console.log('--- DEBUG EXECUTE RESULT ---', rows);
       const header = rows;
       const result = { rows: [], rowCount: header.affectedRows };
       if (hasReturning && header.insertId) {
