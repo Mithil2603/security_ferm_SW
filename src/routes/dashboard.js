@@ -60,19 +60,14 @@ router.get('/', async (req, res) => {
     // Last 6 months revenue trend
     const trendResult = await query(
       `SELECT 
-        CASE strftime('%m', invoice_date) 
-          WHEN '01' THEN 'Jan' WHEN '02' THEN 'Feb' WHEN '03' THEN 'Mar' 
-          WHEN '04' THEN 'Apr' WHEN '05' THEN 'May' WHEN '06' THEN 'Jun' 
-          WHEN '07' THEN 'Jul' WHEN '08' THEN 'Aug' WHEN '09' THEN 'Sep' 
-          WHEN '10' THEN 'Oct' WHEN '11' THEN 'Nov' WHEN '12' THEN 'Dec' 
-        END as month,
-        CAST(strftime('%m', invoice_date) AS INTEGER) as month_num,
-        CAST(strftime('%Y', invoice_date) AS INTEGER) as year,
+        DATE_FORMAT(invoice_date, '%b') as month,
+        CAST(DATE_FORMAT(invoice_date, '%m') AS UNSIGNED) as month_num,
+        CAST(DATE_FORMAT(invoice_date, '%Y') AS UNSIGNED) as year,
         COALESCE(SUM(payment_received), 0) as collected,
         COALESCE(SUM(final_amount), 0) as billed
        FROM invoices
-       WHERE invoice_date >= date('now', 'localtime', '-6 months') AND status != 'cancelled'
-       GROUP BY strftime('%m', invoice_date), strftime('%Y', invoice_date)
+       WHERE invoice_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH) AND status != 'cancelled'
+       GROUP BY DATE_FORMAT(invoice_date, '%m'), DATE_FORMAT(invoice_date, '%Y'), DATE_FORMAT(invoice_date, '%b')
        ORDER BY year ASC, month_num ASC`
     );
 
