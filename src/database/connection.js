@@ -132,6 +132,12 @@ function adaptSqlForMySQL(sql) {
   // 17. CAST(julianday('now') - julianday(v.due_date) AS INTEGER) -> DATEDIFF(CURDATE(), v.due_date)
   q = q.replace(/CAST\(\s*julianday\('now'\)\s*-\s*julianday\(([^)]+)\)\s*AS\s*INTEGER\s*\)/gi, 'DATEDIFF(CURDATE(), $1)');
 
+  // 17b. Simple date('now') subtraction -> DATEDIFF
+  q = q.replace(/\(\s*([^-\s]+)\s*-\s*date\('now'(?:,\s*'localtime')?\)\s*\)/gi, 'DATEDIFF($1, CURDATE())');
+  q = q.replace(/\(\s*date\('now'(?:,\s*'localtime')?\)\s*-\s*([^)\s]+)\s*\)/gi, 'DATEDIFF(CURDATE(), $1)');
+  q = q.replace(/date\('now'(?:,\s*'localtime')?\)\s*-\s*([a-zA-Z0-9_.]+)/gi, 'DATEDIFF(CURDATE(), $1)');
+  q = q.replace(/([a-zA-Z0-9_.]+)\s*-\s*date\('now'(?:,\s*'localtime')?\)/gi, 'DATEDIFF($1, CURDATE())');
+
   // 18. Remove SQLite-only pragma
   q = q.replace(/PRAGMA\s+\w+\s*=\s*\w+;?/gi, '');
 
