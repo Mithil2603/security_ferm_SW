@@ -1,6 +1,7 @@
-// WARNING: This seed script currently only supports SQLite.\n// Do not use for MySQL provisioning.\n/**
+(async () => {
+// WARNING: Converted to MySQL
+/**
  * Comprehensive Seed Script
- * Populates the database with realistic dummy data:
  * - 50 Clients (housing societies & commercial buildings in Ahmedabad)
  * - 100 Employees (security guards)
  * - Attendance records (Jan 2026 – Jul 2026)
@@ -13,7 +14,7 @@
  */
 
 require('dotenv').config();
-const Database = require('better-sqlite3');
+const { query, pool, initDB } = require('./connection');
 const bcrypt = require('bcryptjs');
 const path = require('path');
 const fs = require('fs');
@@ -23,10 +24,8 @@ if (process.env.NODE_ENV === 'production') {
   process.exit(1);
 }
 
-const dbPath = process.env.DB_PATH || path.join(process.cwd(), 'database.sqlite');
-const db = new Database(dbPath);
-db.pragma('foreign_keys = ON');
-db.pragma('journal_mode = WAL');
+await initDB();
+
 
 console.log('🌱 Starting comprehensive database seeding...\n');
 
@@ -98,26 +97,30 @@ const paymentMethods = ['cash', 'cheque', 'bank_transfer', 'upi', 'card'];
 
 // ─── 1. CLEAR EXISTING DATA ──────────────────────────────────────────
 console.log('🗑️  Clearing existing seed data...');
-db.pragma('foreign_keys = OFF');
-db.exec(`
-  DELETE FROM payments;
-  DELETE FROM attendance;
-  DELETE FROM payroll;
-  DELETE FROM expenses;
-  DELETE FROM invoices;
-  DELETE FROM employees WHERE employee_id NOT IN ('EMP-001');
-  DELETE FROM clients WHERE id > 0;
-  DELETE FROM invoice_counters;
-`);
-// Reset auto-increment for clean IDs
-db.exec(`DELETE FROM sqlite_sequence WHERE name IN ('clients', 'employees', 'attendance', 'invoices', 'payroll', 'payments', 'expenses');`);
-db.pragma('foreign_keys = ON');
+await query('SET FOREIGN_KEY_CHECKS = 0');
+await query('TRUNCATE TABLE payments');
+await query('TRUNCATE TABLE attendance');
+await query('TRUNCATE TABLE payroll');
+await query('TRUNCATE TABLE expenses');
+await query('TRUNCATE TABLE invoices');
+await query('DELETE FROM employees WHERE employee_id != "EMP-001"');
+await query('TRUNCATE TABLE clients');
+await query('TRUNCATE TABLE invoice_counters');
+await query('TRUNCATE TABLE users');
+await query('SET FOREIGN_KEY_CHECKS = 1');
+
+console.log('👤 Creating default admin user...');
+const adminPassword = await bcrypt.hash('admin123', 10);
+await query(
+  `INSERT INTO users (id, full_name, email, password_hash, role, is_active) VALUES (?, ?, ?, ?, ?, ?)`,
+  [1, 'Admin', 'admin@example.com', adminPassword, 'admin', 1]
+);
 
 // ─── 2. ENSURE SALARY STRUCTURES EXIST ───────────────────────────────
 console.log('💰 Ensuring salary structures...');
-const existingStructures = db.prepare('SELECT COUNT(*) as c FROM salary_structures').get();
+const existingStructures = (await query('SELECT COUNT(*) as c FROM salary_structures')).rows[0];
 if (existingStructures.c === 0) {
-  db.exec(`
+  await query(`
     INSERT INTO salary_structures (name, base_salary, dearness_allowance, house_rent_allowance, pf_percentage) VALUES
     ('Basic Watchman - Grade A', 18000, 2000, 1500, 12.0),
     ('Senior Watchman - Grade B', 22000, 2500, 2000, 12.0),
@@ -125,20 +128,23 @@ if (existingStructures.c === 0) {
     ('Supervisor - Grade D', 35000, 4000, 3000, 12.0);
   `);
 }
-const salaryStructures = db.prepare('SELECT id, base_salary, dearness_allowance, house_rent_allowance, other_allowances, pf_percentage FROM salary_structures WHERE is_active = 1').all();
+const salaryStructures = (await query('SELECT id, base_salary, dearness_allowance, house_rent_allowance, other_allowances, pf_percentage FROM salary_structures WHERE is_active = 1')).rows;
 
 // ─── 3. INSERT 50 CLIENTS ────────────────────────────────────────────
 console.log('🏢 Creating 20 clients...');
-const insertClient = db.prepare(`
+const insertClient = `
   INSERT INTO clients (name, address, city, state, postal_code, email, phone, contact_person, gst_number, 
     contract_start_date, monthly_rate, billing_cycle, is_active, created_by)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
-`);
+`;
 
 const usedNames = new Set();
 const clientIds = [];
 
-const insertClientsTransaction = db.transaction(() => {
+async function insertClientsTransaction() {
+  await query('START TRANSACTION');
+  try {
+    
   for (let i = 0; i < 20; i++) {
     let name;
     do {
@@ -157,25 +163,34 @@ const insertClientsTransaction = db.transaction(() => {
     const monthlyRate = randomInt(20, 120) * 1000; // 20k to 120k
     const billingCycle = randomPick([1, 1, 1, 2, 3]); // mostly monthly
 
-    const info = insertClient.run(name, address, 'Ahmedabad', 'Gujarat', postalCode, email, phone, contactPerson, gst, contractStart, monthlyRate, billingCycle);
-    clientIds.push(info.lastInsertRowid);
+    const info = await query(insertClient, [name, address, 'Ahmedabad', 'Gujarat', postalCode, email, phone, contactPerson, gst, contractStart, monthlyRate, billingCycle]);
+    clientIds.push(info.insertId);
   }
-});
-insertClientsTransaction();
+
+    await query('COMMIT');
+  } catch (err) {
+    await query('ROLLBACK');
+    throw err;
+  }
+}
+await insertClientsTransaction();
 console.log(`   ✅ ${clientIds.length} clients created`);
 
 // ─── 4. INSERT 100 EMPLOYEES ─────────────────────────────────────────
 console.log('👷 Creating 20 employees...');
-const insertEmployee = db.prepare(`
+const insertEmployee = `
   INSERT INTO employees (employee_id, full_name, phone, email, date_of_birth, address, city, 
     aadhar_number, pan_number, bank_account_number, bank_ifsc_code, bank_name, bank_account_holder_name,
     date_of_joining, designation, salary_structure_id, assigned_client_id, 
     emergency_contact_name, emergency_contact_phone, is_active)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-`);
+`;
 
 const employeeIds = [];
-const insertEmployeesTransaction = db.transaction(() => {
+async function insertEmployeesTransaction() {
+  await query('START TRANSACTION');
+  try {
+    
   for (let i = 0; i < 20; i++) {
     const empNum = (i + 1).toString().padStart(3, '0');
     const empId = `EMP-${empNum}`;
@@ -206,27 +221,33 @@ const insertEmployeesTransaction = db.transaction(() => {
     const emergPhone = `9${randomInt(700000000, 999999999)}`;
 
     try {
-      const info = insertEmployee.run(empId, fullName, phone, email, dob, address, 'Ahmedabad',
+      const info = await query(insertEmployee, [empId, fullName, phone, email, dob, address, 'Ahmedabad',
         aadhar, pan, bankAcc, ifsc, bankName, fullName,
-        joiningDate, designation, ssId, assignedClient, emergName, emergPhone);
-      employeeIds.push(info.lastInsertRowid);
+        joiningDate, designation, ssId, assignedClient, emergName, emergPhone]);
+      employeeIds.push(info.insertId);
     } catch (e) {
       // skip duplicates
     }
   }
-});
-insertEmployeesTransaction();
+
+    await query('COMMIT');
+  } catch (err) {
+    await query('ROLLBACK');
+    throw err;
+  }
+}
+await insertEmployeesTransaction();
 console.log(`   ✅ ${employeeIds.length} employees created`);
 
 // ─── 5. ATTENDANCE RECORDS (Jan 2026 – Jul 2026) ────────────────────
 console.log('📋 Creating attendance records (Jan–Jul 2026)...');
-const insertAttendance = db.prepare(`
-  INSERT OR IGNORE INTO attendance (employee_id, client_id, attendance_date, check_in_time, check_out_time, hours_worked, status, created_by)
+const insertAttendance = `
+  INSERT IGNORE INTO attendance (employee_id, client_id, attendance_date, check_in_time, check_out_time, hours_worked, status, created_by)
   VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-`);
+`;
 
 // Get employee details with their assigned clients
-const employees = db.prepare('SELECT id, assigned_client_id, date_of_joining FROM employees WHERE is_active = 1').all();
+const employees = (await query('SELECT id, assigned_client_id, date_of_joining FROM employees WHERE is_active = 1')).rows;
 
 let totalAttendance = 0;
 const months = [
@@ -235,7 +256,10 @@ const months = [
   { year: 2026, month: 7 }
 ];
 
-const insertAttendanceTransaction = db.transaction(() => {
+async function insertAttendanceTransaction() {
+  await query('START TRANSACTION');
+  try {
+    
   for (const { year, month } of months) {
     const days = daysInMonth(year, month);
     const today = new Date();
@@ -281,33 +305,39 @@ const insertAttendanceTransaction = db.transaction(() => {
         }
         
         try {
-          insertAttendance.run(emp.id, emp.assigned_client_id, dateStr, checkIn, checkOut, hours, status);
+          await query(insertAttendance, [emp.id, emp.assigned_client_id, dateStr, checkIn, checkOut, hours, status]);
           totalAttendance++;
         } catch (e) { /* skip duplicates */ }
       }
     }
     console.log(`   📅 ${year}-${String(month).padStart(2, '0')}: attendance generated`);
   }
-});
-insertAttendanceTransaction();
+
+    await query('COMMIT');
+  } catch (err) {
+    await query('ROLLBACK');
+    throw err;
+  }
+}
+await insertAttendanceTransaction();
 console.log(`   ✅ ${totalAttendance} attendance records created`);
 
 // ─── 6. PAYROLL RECORDS (Jan – Jun 2026) ─────────────────────────────
 console.log('💵 Creating payroll records (Jan–Jun 2026)...');
-const insertPayroll = db.prepare(`
-  INSERT OR IGNORE INTO payroll (employee_id, payroll_month, days_in_month, days_worked, days_absent, days_leave,
+const insertPayroll = `
+  INSERT INTO payroll (employee_id, payroll_month, days_in_month, days_worked, days_absent, days_leave,
     base_salary, da_amount, hra_amount, other_allowances, gross_salary,
     pf_deduction, esi_deduction, tax_deduction, other_deductions, total_deductions, net_salary,
     payment_status, payment_date, payment_method, created_by)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-`);
+`;
 
 const salaryMap = {};
 for (const ss of salaryStructures) {
   salaryMap[ss.id] = ss;
 }
 
-const empDetails = db.prepare('SELECT id, salary_structure_id, date_of_joining FROM employees WHERE is_active = 1').all();
+const empDetails = (await query('SELECT id, salary_structure_id, date_of_joining FROM employees WHERE is_active = 1')).rows;
 let totalPayroll = 0;
 
 const payrollMonths = [
@@ -315,7 +345,10 @@ const payrollMonths = [
   { year: 2026, month: 4 }, { year: 2026, month: 5 }, { year: 2026, month: 6 }
 ];
 
-const insertPayrollTransaction = db.transaction(() => {
+async function insertPayrollTransaction() {
+  await query('START TRANSACTION');
+  try {
+    
   for (const { year, month } of payrollMonths) {
     const dim = daysInMonth(year, month);
     const payrollMonth = `${year}-${String(month).padStart(2, '0')}-01`;
@@ -331,7 +364,7 @@ const insertPayrollTransaction = db.transaction(() => {
       const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
       const monthEnd = `${year}-${String(month).padStart(2, '0')}-${dim}`;
       
-      const attCounts = db.prepare(`
+      const attCounts = (await query(`
         SELECT 
           SUM(CASE WHEN status = 'present' THEN 1 ELSE 0 END) as present,
           SUM(CASE WHEN status = 'absent' THEN 1 ELSE 0 END) as absent,
@@ -340,7 +373,7 @@ const insertPayrollTransaction = db.transaction(() => {
           COUNT(*) as total
         FROM attendance 
         WHERE employee_id = ? AND attendance_date >= ? AND attendance_date <= ?
-      `).get(emp.id, monthStart, monthEnd);
+      `, [emp.id, monthStart, monthEnd])).rows[0];
       
       const daysWorked = (attCounts?.present || 0) + (attCounts?.half_days || 0);
       const daysAbsent = attCounts?.absent || 0;
@@ -369,22 +402,28 @@ const insertPayrollTransaction = db.transaction(() => {
       const paymentMethod = isPaid ? randomPick(['bank_transfer', 'bank_transfer', 'bank_transfer', 'upi', 'cash']) : null;
       
       try {
-        insertPayroll.run(emp.id, payrollMonth, dim, daysWorked, daysAbsent, daysLeave,
+        await query(insertPayroll, [emp.id, payrollMonth, dim, daysWorked, daysAbsent, daysLeave,
           baseSalary, da, hra, otherAllow, grossSalary,
           pfDeduction, esiDeduction, taxDeduction, otherDeductions, totalDeductions, netSalary,
-          paymentStatus, paymentDate, paymentMethod);
+          paymentStatus, paymentDate, paymentMethod]);
         totalPayroll++;
       } catch (e) { /* skip duplicates */ }
     }
     console.log(`   💵 ${year}-${String(month).padStart(2, '0')}: payroll generated`);
   }
-});
-insertPayrollTransaction();
+
+    await query('COMMIT');
+  } catch (err) {
+    await query('ROLLBACK');
+    throw err;
+  }
+}
+await insertPayrollTransaction();
 console.log(`   ✅ ${totalPayroll} payroll records created`);
 
 // ─── 7. INVOICES (Jan – Jul 2026) ───────────────────────────────────
 console.log('📄 Creating invoices (Jan–Jul 2026)...');
-const insertInvoice = db.prepare(`
+const insertInvoice = `
   INSERT INTO invoices (invoice_number, client_id, invoice_date, due_date, 
     billing_period_start, billing_period_end,
     amount_subtotal, tax_rate, tax_amount, total_amount, discount_amount, final_amount,
@@ -392,14 +431,14 @@ const insertInvoice = db.prepare(`
     tax_type, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable,
     duty_days_worked, notes, created_by)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-`);
+`;
 
-const insertPayment = db.prepare(`
+const insertPayment = `
   INSERT INTO payments (invoice_id, payment_date, amount_paid, payment_method, transaction_reference, created_by)
   VALUES (?, ?, ?, ?, ?, 1)
-`);
+`;
 
-const allClients = db.prepare('SELECT id, monthly_rate, name FROM clients').all();
+const allClients = (await query('SELECT id, monthly_rate, name FROM clients')).rows;
 let totalInvoices = 0;
 let totalPayments = 0;
 let invoiceSeq = 0;
@@ -410,7 +449,10 @@ const invoiceMonths = [
   { year: 2026, month: 7 }
 ];
 
-const insertInvoicesTransaction = db.transaction(() => {
+async function insertInvoicesTransaction() {
+  await query('START TRANSACTION');
+  try {
+    
   for (const { year, month } of invoiceMonths) {
     const dim = daysInMonth(year, month);
     const shortYear = year.toString().slice(-2);
@@ -468,47 +510,56 @@ const insertInvoicesTransaction = db.transaction(() => {
       const isRcm = Math.random() > 0.7 ? 1 : 0;
       
       try {
-        const info = insertInvoice.run(invoiceNumber, client.id, invoiceDate, dueDate,
+        const info = await query(insertInvoice, [invoiceNumber, client.id, invoiceDate, dueDate,
           billingStart, billingEnd,
           subtotal, taxType === 'none' ? 0 : 18, taxAmount, totalAmount, discount, finalAmount,
           status, paymentReceived, paymentDue,
           taxType, cgst, sgst, igst, isRcm,
-          dutyDays, null);
+          dutyDays, null]);
         totalInvoices++;
         
         // Create payment records for paid/partially_paid invoices
-        if (paymentReceived > 0 && info.lastInsertRowid) {
+        if (paymentReceived > 0 && info.insertId) {
           const payDate = `${year}-${padMonth}-${randomInt(5, Math.min(dim, 28)).toString().padStart(2, '0')}`;
           const method = randomPick(['bank_transfer', 'bank_transfer', 'cheque', 'upi']);
           const txnRef = method === 'bank_transfer' ? `TXN${randomInt(100000, 999999)}` : 
                          method === 'cheque' ? `CHQ${randomInt(100000, 999999)}` : 
                          `UPI${randomInt(100000, 999999)}`;
-          insertPayment.run(info.lastInsertRowid, payDate, paymentReceived, method, txnRef);
+          await query(insertPayment, [info.insertId, payDate, paymentReceived, method, txnRef]);
           totalPayments++;
         }
       } catch (e) { /* skip duplicates */ }
     }
     console.log(`   📄 ${year}-${String(month).padStart(2, '0')}: ${allClients.length} invoices generated`);
   }
-});
-insertInvoicesTransaction();
+
+    await query('COMMIT');
+  } catch (err) {
+    await query('ROLLBACK');
+    throw err;
+  }
+}
+await insertInvoicesTransaction();
 
 // Update the invoice_counters table with the last sequence
-db.prepare(`INSERT OR REPLACE INTO invoice_counters (fiscal_year, last_number, updated_at) VALUES ('2026-27', ?, CURRENT_TIMESTAMP)`).run(invoiceSeq);
+await query(`INSERT INTO invoice_counters (fiscal_year, last_number, updated_at) VALUES ('2026-27', ?, CURRENT_TIMESTAMP) ON DUPLICATE KEY UPDATE last_number = VALUES(last_number), updated_at = CURRENT_TIMESTAMP`, [invoiceSeq]);
 
 console.log(`   ✅ ${totalInvoices} invoices created`);
 console.log(`   ✅ ${totalPayments} payment records created`);
 
 // ─── 8. EXPENSES (Jan – Jul 2026) ───────────────────────────────────
 console.log('💸 Creating expense records...');
-const insertExpense = db.prepare(`
+const insertExpense = `
   INSERT INTO expenses (expense_date, category, description, amount, payment_method, vendor_name, 
     receipt_number, status, notes, created_by)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-`);
+`;
 
 let totalExpenses = 0;
-const insertExpensesTransaction = db.transaction(() => {
+async function insertExpensesTransaction() {
+  await query('START TRANSACTION');
+  try {
+    
   for (const { year, month } of months) {
     const dim = daysInMonth(year, month);
     // 15-30 expenses per month
@@ -535,13 +586,19 @@ const insertExpensesTransaction = db.transaction(() => {
                      month === 6 ? randomPick(['approved', 'pending', 'paid']) : 'pending';
       
       try {
-        insertExpense.run(dateStr, category, description, amount, method, vendor, receipt, status, null);
+        await query(insertExpense, [dateStr, category, description, amount, method, vendor, receipt, status, null]);
         totalExpenses++;
       } catch (e) { /* skip */ }
     }
   }
-});
-insertExpensesTransaction();
+
+    await query('COMMIT');
+  } catch (err) {
+    await query('ROLLBACK');
+    throw err;
+  }
+}
+await insertExpensesTransaction();
 console.log(`   ✅ ${totalExpenses} expense records created`);
 
 // ─── SUMMARY ─────────────────────────────────────────────────────────
@@ -557,5 +614,9 @@ console.log(`   💳 Payments:     ${totalPayments}`);
 console.log(`   💸 Expenses:     ${totalExpenses}`);
 console.log('════════════════════════════════════════\n');
 
-db.close();
+// Finished
 process.exit(0);
+
+console.log('✅ Seed complete');
+process.exit(0);
+})();

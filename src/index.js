@@ -187,9 +187,11 @@ function getLanIP() {
   return 'unknown';
 }
 
+let server;
+
 initDB()
   .then(() => {
-    app.listen(PORT, '0.0.0.0', () => {
+    server = app.listen(PORT, '0.0.0.0', () => {
       const lanIP = getLanIP();
       process.env.SERVER_LAN_IP = lanIP;
       logger.info(`\n🚀 Security Firm Server running on port ${PORT}`);
@@ -204,5 +206,30 @@ initDB()
     logger.error('   Check your MySQL credentials in .env or the app settings.');
     process.exit(1);
   });
+
+// ── Graceful Shutdown ────────────────────────────────────────────────────────
+const gracefulShutdown = async (signal) => {
+  logger.info(`\n${signal} signal received: closing HTTP server`);
+  if (server) {
+    server.close(async () => {
+      logger.info('HTTP server closed.');
+      try {
+        const { pool } = require('./database/connection');
+        if (pool) {
+          await pool.end();
+          logger.info('MySQL pool closed.');
+        }
+      } catch (err) {
+        logger.error('Error closing MySQL pool:', err.message);
+      }
+      process.exit(0);
+    });
+  } else {
+    process.exit(0);
+  }
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 module.exports = app;

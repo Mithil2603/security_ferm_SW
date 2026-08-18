@@ -132,14 +132,19 @@ const query = async (text, params = []) => {
   const start = Date.now();
   try {
     // 1. Convert PostgreSQL $1,$2 style params → MySQL ? style
-    const expandedParams = [];
-    let mysqlText = text.replace(/\$(\d+)/g, (match, num) => {
-      const pgIndex = parseInt(num) - 1;
-      if (pgIndex >= 0 && pgIndex < params.length) {
-        expandedParams.push(params[pgIndex]);
-      }
-      return '?';
-    });
+    let expandedParams = [];
+    let mysqlText = text;
+    if (/\$(\d+)/.test(text)) {
+      mysqlText = text.replace(/\$(\d+)/g, (match, num) => {
+        const pgIndex = parseInt(num) - 1;
+        if (pgIndex >= 0 && pgIndex < params.length) {
+          expandedParams.push(params[pgIndex]);
+        }
+        return '?';
+      });
+    } else {
+      expandedParams = [...params];
+    }
 
     // 2. Adapt SQLite-specific SQL to MySQL syntax
     mysqlText = adaptSqlForMySQL(mysqlText);
@@ -180,7 +185,7 @@ const query = async (text, params = []) => {
     if (rows && !Array.isArray(rows)) {
       // It's a ResultSetHeader (INSERT/UPDATE/DELETE)
       const header = rows;
-      const result = { rows: [], rowCount: header.affectedRows };
+      const result = { rows: [], rowCount: header.affectedRows, insertId: header.insertId };
       if (hasReturning && header.insertId) {
         // Simulate RETURNING by fetching the inserted row
         const tableMatch = mysqlText.match(/INSERT\s+(?:IGNORE\s+)?INTO\s+(`?\w+`?)/i);
@@ -224,7 +229,7 @@ async function initDB() {
 
     if (!tablesExist) {
       logger.info('🆕 MySQL database is empty. Initializing schema...');
-      const schemaPath = path.join(__dirname, 'schema_mysql.sql');
+      const schemaPath = path.join(__dirname, 'schema.sql');
       if (fs.existsSync(schemaPath)) {
         const schemaSql = fs.readFileSync(schemaPath, 'utf8');
 

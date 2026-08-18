@@ -80,7 +80,6 @@
     "winston": "^3.19.0"
   },
   "devDependencies": {
-    "better-sqlite3": "^13.0.3",
     "concurrently": "^10.0.3",
     "electron": "^43.1.0",
     "electron-builder": "^26.15.2",
