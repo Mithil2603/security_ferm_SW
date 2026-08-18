@@ -249,6 +249,46 @@ router.get('/next-number/:type', async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to get next voucher number' });
   }
 });
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/vouchers/aging — Get aging report for vendors
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/aging', async (req, res, next) => {
+  try {
+    const result = await query(`
+      SELECT 
+        v.id, v.voucher_number, v.voucher_date, v.amount, v.due_date,
+        v.party_id, v.party_name,
+        CAST(julianday('now') - julianday(v.due_date) AS INTEGER) as days_overdue
+      FROM vouchers v
+      WHERE v.party_type = 'vendor' 
+        AND v.status = 'posted'
+        AND v.due_date IS NOT NULL
+        AND v.due_date < date('now')
+      ORDER BY days_overdue DESC
+    `);
+    
+    // Group by aging buckets
+    const aging = {
+      '1_to_30': [],
+      '31_to_60': [],
+      '61_to_90': [],
+      'over_90': []
+    };
+    
+    result.rows.forEach(row => {
+      if (row.days_overdue <= 30) aging['1_to_30'].push(row);
+      else if (row.days_overdue <= 60) aging['31_to_60'].push(row);
+      else if (row.days_overdue <= 90) aging['61_to_90'].push(row);
+      else aging['over_90'].push(row);
+    });
+
+    res.json({ success: true, data: aging });
+  } catch (error) {
+    logger.error('Error fetching aging report:', error);
+    next(error);
+  }
+});
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/vouchers/:id — Get single voucher
@@ -534,18 +574,16 @@ router.post('/:id/recurring', async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Frequency and next run date are required' });
     }
 
-    const checkStmt = db.prepare('SELECT id FROM vouchers WHERE id = ?');
-    const voucher = checkStmt.get(req.params.id);
+    const checkRes = await query('SELECT id FROM vouchers WHERE id = $1', [req.params.id]);
+    const voucher = checkRes.rows[0];
     if (!voucher) {
       return res.status(404).json({ success: false, message: 'Voucher not found' });
     }
 
-    const insertStmt = db.prepare(`
+    await query(`
       INSERT INTO recurring_vouchers (template_voucher_id, frequency, next_run_date, created_by)
-      VALUES (?, ?, ?, ?)
-    `);
-    
-    insertStmt.run(req.params.id, frequency, next_run_date, req.user.id);
+      VALUES ($1, $2, $3, $4)
+    `, [req.params.id, frequency, next_run_date, req.user.userId]);
     
     res.json({ success: true, message: 'Voucher marked as recurring successfully' });
   } catch (error) {
@@ -554,42 +592,6 @@ router.post('/:id/recurring', async (req, res, next) => {
   }
 });
 
-// GET /api/vouchers/aging — Get aging report for vendors
-router.get('/aging', async (req, res, next) => {
-  try {
-    const result = await query(`
-      SELECT 
-        v.id, v.voucher_number, v.voucher_date, v.amount, v.due_date,
-        v.party_id, v.party_name,
-        CAST(julianday('now') - julianday(v.due_date) AS INTEGER) as days_overdue
-      FROM vouchers v
-      WHERE v.party_type = 'vendor' 
-        AND v.status = 'posted'
-        AND v.due_date IS NOT NULL
-        AND v.due_date < date('now')
-      ORDER BY days_overdue DESC
-    `);
-    
-    // Group by aging buckets
-    const aging = {
-      '1_to_30': [],
-      '31_to_60': [],
-      '61_to_90': [],
-      'over_90': []
-    };
-    
-    result.rows.forEach(row => {
-      if (row.days_overdue <= 30) aging['1_to_30'].push(row);
-      else if (row.days_overdue <= 60) aging['31_to_60'].push(row);
-      else if (row.days_overdue <= 90) aging['61_to_90'].push(row);
-      else aging['over_90'].push(row);
-    });
 
-    res.json({ success: true, data: aging });
-  } catch (error) {
-    logger.error('Error fetching aging report:', error);
-    next(error);
-  }
-});
 
 module.exports = router;

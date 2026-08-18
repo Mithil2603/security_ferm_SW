@@ -1,4 +1,4 @@
-/**
+// WARNING: This seed script currently only supports SQLite.\n// Do not use for MySQL provisioning.\n/**
  * Comprehensive Seed Script
  * Populates the database with realistic dummy data:
  * - 50 Clients (housing societies & commercial buildings in Ahmedabad)

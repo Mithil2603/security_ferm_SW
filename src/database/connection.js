@@ -113,8 +113,8 @@ function adaptSqlForMySQL(sql) {
   // 16. INTEGER PRIMARY KEY → INT AUTO_INCREMENT PRIMARY KEY (SQLite magic rowid)
   //     Only for CREATE TABLE context — this is handled in schema_mysql.sql directly
 
-  // 17. BOOLEAN → TINYINT(1) for older MySQL compat
-  // Already fine in MySQL 8 — skip
+  // 17. CAST(julianday('now') - julianday(v.due_date) AS INTEGER) -> DATEDIFF(CURDATE(), v.due_date)
+  q = q.replace(/CAST\(\s*julianday\('now'\)\s*-\s*julianday\(([^)]+)\)\s*AS\s*INTEGER\s*\)/gi, 'DATEDIFF(CURDATE(), $1)');
 
   // 18. Remove SQLite-only pragma
   q = q.replace(/PRAGMA\s+\w+\s*=\s*\w+;?/gi, '');
@@ -162,7 +162,14 @@ const query = async (text, params = []) => {
     });
 
     // 5. Execute
-    const [rows, fields] = await pool.execute(mysqlText, mappedParams);
+    let executeRows, fields;
+    if (/^(START TRANSACTION|COMMIT|ROLLBACK)/i.test(mysqlText)) {
+      // Transaction commands fail with pool.execute (prepared statements) in MySQL
+      [executeRows, fields] = await pool.query(mysqlText);
+    } else {
+      [executeRows, fields] = await pool.execute(mysqlText, mappedParams);
+    }
+    const rows = executeRows;
 
     const duration = Date.now() - start;
     if (duration > 1000) {
@@ -172,7 +179,6 @@ const query = async (text, params = []) => {
     // 6. Handle INSERT/UPDATE/DELETE result
     if (rows && !Array.isArray(rows)) {
       // It's a ResultSetHeader (INSERT/UPDATE/DELETE)
-      console.log('--- DEBUG EXECUTE RESULT ---', rows);
       const header = rows;
       const result = { rows: [], rowCount: header.affectedRows };
       if (hasReturning && header.insertId) {
