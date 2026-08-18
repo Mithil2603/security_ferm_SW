@@ -91,6 +91,22 @@ app.use('/uploads', express.static(uploadDir));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// Global Request Timeout (15 seconds)
+const timeout = require('connect-timeout');
+app.use(timeout('15s'));
+
+// Middleware to halt on timeout
+function haltOnTimedout(req, res, next) {
+  if (!req.timedout) next();
+}
+app.use(haltOnTimedout);
+
+// Middleware to disable timeout for heavy routes
+function extendTimeout(req, res, next) {
+  if (req.clearTimeout) req.clearTimeout();
+  next();
+}
+
 // Logging — secure logger redacts sensitive fields (passwords, Aadhaar, bank details)
 app.use(createLogger());
 
@@ -115,11 +131,12 @@ app.use('/api/auth', authRoutes);
 app.use('/api/employees', employeesRoutes);
 app.use('/api/clients', clientsRoutes);
 app.use('/api/attendance', attendanceRoutes);
-app.use('/api/payroll', payrollRoutes);
-app.use('/api/invoices', invoicesRoutes);
+// Payroll and Invoices can be heavy, extend timeout
+app.use('/api/payroll', extendTimeout, payrollRoutes);
+app.use('/api/invoices', extendTimeout, invoicesRoutes);
+app.use('/api/reports', extendTimeout, reportsRoutes);
 app.use('/api/expenses', expensesRoutes);
 app.use('/api/settings', settingsRoutes);
-app.use('/api/reports', reportsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/ledger', ledgerRoutes);
 app.use('/api/vendors', vendorsRoutes);

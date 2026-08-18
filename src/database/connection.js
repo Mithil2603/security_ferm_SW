@@ -8,20 +8,21 @@ const { runMigrations } = require('./migrationRunner');
 // MySQL Connection Pool
 // ─────────────────────────────────────────────────────────────────────────────
 const poolConfig = {
-  host:               process.env.DB_HOST     || 'localhost',
+  host:               process.env.DB_HOST     || '127.0.0.1',
   port:               parseInt(process.env.DB_PORT || '3306'),
   user:               process.env.DB_USER     || 'root',
   password:           process.env.DB_PASSWORD || '',
   database:           process.env.DB_NAME     || 'security_firm_db',
   waitForConnections: true,
-  connectionLimit:    10,          // Support up to 10 simultaneous LAN users
+  connectionLimit:    20,
   queueLimit:         0,
+  connectTimeout:     10000,
   enableKeepAlive:    true,
-  keepAliveInitialDelay: 30000,
-  timezone:           '+05:30',    // IST — matches your location
+  keepAliveInitialDelay: 0,
+  timezone:           '+05:30',
   charset:            'utf8mb4',
-  multipleStatements: true,        // Needed for schema init
-  dateStrings:        true,        // Emulate SQLite's behavior of returning native raw date strings instead of Date objects
+  multipleStatements: true,
+  dateStrings:        true,
 };
 
 let pool = null;
@@ -30,12 +31,23 @@ async function initPool() {
   try {
     pool = mysql.createPool(poolConfig);
 
-    // Set sql_mode to treat || as string concatenation (SQLite style) instead of Logical OR (MySQL style)
+    pool.on('error', (err) => {
+      logger.error('❌ Unexpected MySQL pool error:', err.message);
+      if (err.code === 'PROTOCOL_CONNECTION_LOST') {
+        logger.error('Database connection was closed.');
+      }
+      if (err.code === 'ER_CON_COUNT_ERROR') {
+        logger.error('Database has too many connections.');
+      }
+      if (err.code === 'ECONNREFUSED') {
+        logger.error('Database connection was refused.');
+      }
+    });
+
     pool.on('connection', (connection) => {
       connection.query("SET SESSION sql_mode=(SELECT CONCAT(@@sql_mode,',PIPES_AS_CONCAT'))");
     });
 
-    // Test the connection
     const conn = await pool.getConnection();
     logger.info('✅ MySQL connected successfully to ' + poolConfig.host + ':' + poolConfig.port + '/' + poolConfig.database);
     conn.release();

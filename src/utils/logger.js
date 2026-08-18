@@ -10,6 +10,25 @@ if (!fs.existsSync(logDir)) {
   fs.mkdirSync(logDir, { recursive: true });
 }
 
+const DailyRotateFile = require('winston-daily-rotate-file');
+
+const errorTransport = new DailyRotateFile({
+  filename: path.join(logDir, 'error-%DATE%.log'),
+  datePattern: 'YYYY-MM-DD',
+  zippedArchive: true,
+  maxSize: '20m',
+  maxFiles: '14d',
+  level: 'error'
+});
+
+const combinedTransport = new DailyRotateFile({
+  filename: path.join(logDir, 'combined-%DATE%.log'),
+  datePattern: 'YYYY-MM-DD',
+  zippedArchive: true,
+  maxSize: '20m',
+  maxFiles: '14d'
+});
+
 const logger = winston.createLogger({
   level: isDev ? 'debug' : 'info',
   format: winston.format.combine(
@@ -22,10 +41,8 @@ const logger = winston.createLogger({
   ),
   defaultMeta: { service: 'security-firm-api' },
   transports: [
-    // Write all logs with importance level of `error` or less to `error.log`
-    new winston.transports.File({ filename: path.join(logDir, 'error.log'), level: 'error' }),
-    // Write all logs with importance level of `info` or less to `combined.log`
-    new winston.transports.File({ filename: path.join(logDir, 'combined.log') }),
+    errorTransport,
+    combinedTransport
   ],
 });
 
