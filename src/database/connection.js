@@ -66,6 +66,10 @@ async function initPool() {
 function adaptSqlForMySQL(sql) {
   let q = sql;
 
+  // Boolean literals → MySQL integer equivalents
+  q = q.replace(/=\s*true\b/gi, '= 1');
+  q = q.replace(/=\s*false\b/gi, '= 0');
+
   // 1. strftime('%Y-%m', col) → DATE_FORMAT(col, '%Y-%m')
   q = q.replace(/strftime\s*\(\s*'%Y-%m'\s*,\s*([^)]+)\)/gi, "DATE_FORMAT($1, '%Y-%m')");
 

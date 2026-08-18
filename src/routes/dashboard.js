@@ -32,7 +32,7 @@ router.get('/', async (req, res) => {
     const empResult = await query(
       `SELECT 
         COUNT(*) as total_employees,
-        SUM(CASE WHEN is_active = true THEN 1 ELSE 0 END) as active_employees
+        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active_employees
        FROM employees`
     );
 
@@ -40,7 +40,7 @@ router.get('/', async (req, res) => {
     const clientResult = await query(
       `SELECT 
         COUNT(*) as total_clients,
-        SUM(CASE WHEN is_active = true THEN 1 ELSE 0 END) as active_clients
+        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active_clients
        FROM clients`
     );
 
