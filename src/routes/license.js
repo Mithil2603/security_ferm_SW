@@ -151,8 +151,8 @@ router.post('/activate', async (req, res) => {
     // Store the license key
     await query(
       `INSERT INTO system_settings (setting_key, setting_value, updated_at)
-       VALUES ('license_key', $1, datetime('now'))
-       ON CONFLICT(setting_key) DO UPDATE SET setting_value = $1, updated_at = datetime('now')`,
+       VALUES ('license_key', ?, CURRENT_TIMESTAMP)
+       ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP`,
       [cleanKey]
     );
 
