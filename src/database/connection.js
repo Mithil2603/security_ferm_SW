@@ -14,7 +14,7 @@ const poolConfig = {
   password:           process.env.DB_PASSWORD || '',
   database:           process.env.DB_NAME     || 'security_firm_db',
   waitForConnections: true,
-  connectionLimit:    20,          // Support up to 20 simultaneous LAN users
+  connectionLimit:    10,          // Support up to 10 simultaneous LAN users
   queueLimit:         0,
   enableKeepAlive:    true,
   keepAliveInitialDelay: 30000,
