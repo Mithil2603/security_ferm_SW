@@ -2,8 +2,8 @@ import axios from 'axios';
 import { errorInterceptor } from './errorInterceptor';
 
 const savedServerIP = localStorage.getItem('serverIP');
-const defaultAPI = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000/api';
-const baseURL = savedServerIP ? `http://${savedServerIP}:5000/api` : defaultAPI;
+const defaultAPI = import.meta.env.VITE_API_URL || 'http://127.0.0.1:3000/api';
+const baseURL = savedServerIP ? `http://${savedServerIP}:3000/api` : defaultAPI;
 
 const api = axios.create({
   baseURL,

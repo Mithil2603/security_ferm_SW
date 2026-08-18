@@ -74,8 +74,8 @@ export default function Setup({ onSetupComplete }) {
     try {
       const savedServerIP = localStorage.getItem('serverIP');
       const baseURL = savedServerIP 
-        ? `http://${savedServerIP}:5000/api` 
-        : 'http://127.0.0.1:5000/api';
+        ? `http://${savedServerIP}:3000/api` 
+        : 'http://127.0.0.1:3000/api';
 
       const response = await fetch(`${baseURL}/auth/setup-init`, {
         method: 'POST',

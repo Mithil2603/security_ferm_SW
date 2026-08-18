@@ -67,7 +67,7 @@ router.get('/', async (req, res) => {
         COALESCE(SUM(final_amount), 0) as billed
        FROM invoices
        WHERE invoice_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH) AND status != 'cancelled'
-       GROUP BY DATE_FORMAT(invoice_date, '%m'), DATE_FORMAT(invoice_date, '%Y'), DATE_FORMAT(invoice_date, '%b')
+       GROUP BY year, month_num, month
        ORDER BY year ASC, month_num ASC`
     );
 

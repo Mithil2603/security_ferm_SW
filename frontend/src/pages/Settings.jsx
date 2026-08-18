@@ -911,7 +911,7 @@ function AgencyProfileTab() {
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mb-6">
             <div className="w-24 h-24 border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center rounded-lg overflow-hidden flex-shrink-0">
               {agencySettings.agency_logo_url ? (
-                <img src={`http://localhost:5000${agencySettings.agency_logo_url}`} alt="Logo" className="w-full h-full object-contain" />
+                <img src={`http://localhost:3000${agencySettings.agency_logo_url}`} alt="Logo" className="w-full h-full object-contain" />
               ) : (
                 <span className="text-xs text-slate-400 text-center px-2">No Logo</span>
               )}
@@ -1039,7 +1039,7 @@ function AgencyProfileTab() {
                   if (res.data.success && res.data.data.length > 0) {
                     const latest = res.data.data[0].filename;
                     const token = localStorage.getItem('token');
-                    window.open(`http://localhost:5000/api/backups/download/${latest}?token=${token}`, '_blank');
+                    window.open(`http://localhost:3000/api/backups/download/${latest}?token=${token}`, '_blank');
                   } else {
                     alert('No backups available. Trigger one first.');
                   }

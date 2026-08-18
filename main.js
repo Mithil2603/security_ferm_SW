@@ -40,7 +40,7 @@ function validateAndSafePath(envKey, defaultPath) {
 process.env.UPLOAD_DIR = validateAndSafePath('UPLOAD_DIR', path.join(userDataPath, 'uploads'));
 process.env.LOG_DIR = validateAndSafePath('LOG_DIR', path.join(userDataPath, 'logs'));
 process.env.NODE_ENV = 'production';
-process.env.PORT = '5000';
+process.env.PORT = process.env.PORT || '3000';
 
 // === JWT SECRET MANAGEMENT ===
 const secretPath = path.join(userDataPath, 'secret.key');

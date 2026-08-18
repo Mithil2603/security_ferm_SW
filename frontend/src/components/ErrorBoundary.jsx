@@ -14,8 +14,8 @@ class ErrorBoundary extends React.Component {
 
   componentDidCatch(error, errorInfo) {
     const savedServerIP = localStorage.getItem('serverIP');
-    const defaultAPI = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-    const baseURL = savedServerIP ? `http://${savedServerIP}:5000/api` : defaultAPI;
+    const defaultAPI = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+    const baseURL = savedServerIP ? `http://${savedServerIP}:3000/api` : defaultAPI;
 
     try {
       axios.post(`${baseURL}/errors`, {

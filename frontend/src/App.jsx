@@ -48,7 +48,7 @@ function App() {
 
   const checkLicense = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:5000/api/license/status');
+      const response = await fetch('http://127.0.0.1:3000/api/license/status');
       const data = await response.json();
       
       if (data.success && data.licensed) {
@@ -68,7 +68,7 @@ function App() {
 
   const checkSetupStatus = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:5000/api/auth/setup-status');
+      const response = await fetch('http://127.0.0.1:3000/api/auth/setup-status');
       const data = await response.json();
       
       if (data.success && data.setupComplete) {

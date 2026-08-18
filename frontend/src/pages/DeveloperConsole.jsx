@@ -25,7 +25,7 @@ const DeveloperConsole = () => {
   // Fetch errors
   useEffect(() => {
     fetchErrors();
-    const intervalId = setInterval(() => fetchErrors(true), 5000); // Auto-refresh every 5s
+    const intervalId = setInterval(() => fetchErrors(true), 3000); // Auto-refresh every 5s
     return () => clearInterval(intervalId);
   }, [filter, page]);
 
@@ -43,7 +43,7 @@ const DeveloperConsole = () => {
       if (filter.search) params.append('search', filter.search);
 
       const response = await axios.get(
-        `http://localhost:5000/api/errors?${params}`,
+        `http://localhost:3000/api/errors?${params}`,
         {
           headers: { 
             'Authorization': `Bearer ${localStorage.getItem('token')}`,
@@ -78,7 +78,7 @@ const DeveloperConsole = () => {
   const resolveError = async (errorId) => {
     try {
       await axios.patch(
-        `http://localhost:5000/api/errors/${errorId}/resolve`,
+        `http://localhost:3000/api/errors/${errorId}/resolve`,
         {},
         { 
           headers: { 
