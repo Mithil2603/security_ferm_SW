@@ -1,5 +1,9 @@
 const { adaptSqlForMySQL } = require('./src/database/connection.js');
-console.log('5. ', adaptSqlForMySQL("date($2)"));
-console.log('6. ', adaptSqlForMySQL("date(payroll_month, 'start of month')"));
-console.log('7. ', adaptSqlForMySQL("date(payroll_month, 'start of month', '+1 month', '-1 day')"));
-console.log('8. ', adaptSqlForMySQL("date($1, 'start of month')"));
+const q = `SELECT
+         COALESCE(SUM(p.net_salary), 0) AS payroll,
+         COALESCE((SELECT SUM(payment_received) FROM invoices
+                   WHERE invoice_date >= date('now', 'localtime', '-30 days')), 0) AS revenue
+       FROM payroll p
+       WHERE p.payroll_month >= date('now', 'localtime', 'start of month', '-30 days')
+         AND p.payroll_month <= date('now', 'localtime', 'start of month')`;
+console.log(adaptSqlForMySQL(q));

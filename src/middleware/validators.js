@@ -9,8 +9,9 @@ const Joi = require('joi');
 // ─── Reusable helpers ────────────────────────────────────────────────────────
 
 const indianPhone = Joi.string()
-  .pattern(/^(?:\+91[\-\s]?|91[\-\s]?)?[0-9]{10}$/)
-  .messages({ 'string.pattern.base': 'Phone number must be a valid 10-digit Indian number, optionally starting with +91' });
+  .replace(/[\-\s]/g, '')
+  .pattern(/^(?:\+91|91|0)?[0-9]{10}$/)
+  .messages({ 'string.pattern.base': 'Phone number must be a valid 10-digit Indian number, optionally starting with +91 or 0' });
 
 const optionalEmail = Joi.string().email({ tlds: { allow: false } }).optional().allow('', null);
 
