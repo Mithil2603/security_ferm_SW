@@ -107,7 +107,7 @@ export default function Login() {
         code: 'CONNECTION_REFUSED',
         type: 'NETWORK_ERROR',
         message: 'Cannot connect to server',
-        details: `Connection refused at ${serverIP || 'localhost:5000'}. Is the server running?`,
+        details: `Connection refused at ${serverIP || 'localhost:3000'}. Is the server running?`,
         statusCode: 0,
         action: 'Check if the SecurManage server is running. Click "Network Setup" to configure the correct server IP',
         retryable: true,

@@ -166,7 +166,7 @@ ipcMain.handle('get-app-version', () => {
 // ── IPC: Get server LAN IP (for display on admin dashboard) ─────────
 ipcMain.handle('get-server-url', () => {
   const serverIP = process.env.SERVER_LAN_IP || 'localhost';
-  const port = process.env.PORT || '5000';
+  const port = process.env.PORT || '3000';
   return {
     local:   `http://localhost:${port}`,
     network: `http://${serverIP}:${port}`,
@@ -227,12 +227,40 @@ ipcMain.handle('test-db-connection', async (event, config) => {
 let cachedHardwareId = null;
 ipcMain.handle('get-hardware-id', async () => {
   if (cachedHardwareId) return cachedHardwareId;
+  const hwidPath = path.join(userDataPath, 'hwid.txt');
+  if (fs.existsSync(hwidPath)) {
+    try {
+      const saved = fs.readFileSync(hwidPath, 'utf8').trim();
+      if (saved && saved.length > 5) {
+        cachedHardwareId = saved;
+        return cachedHardwareId;
+      }
+    } catch {}
+  }
+
   try {
     const { execSync } = require('child_process');
-    const raw = execSync('wmic csproduct get uuid', { encoding: 'utf8' });
-    const uuid = raw.split('\n').map(l => l.trim()).filter(l => l && l !== 'UUID')[0];
+    let uuid;
+    try {
+      const raw = execSync('wmic csproduct get uuid', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+      uuid = raw.split('\n').map(l => l.trim()).filter(l => l && l !== 'UUID')[0];
+    } catch {}
+
+    if (!uuid || uuid.length < 8) {
+      try {
+        const raw = execSync('powershell -NoProfile -Command "(Get-CimInstance Win32_ComputerSystemProduct).UUID"', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+        uuid = raw.trim();
+      } catch {}
+    }
+
+    if (!uuid || uuid.length < 8) {
+      try {
+        const raw = execSync('powershell -NoProfile -Command "(Get-ItemProperty -Path \'HKLM:\\SOFTWARE\\Microsoft\\Cryptography\').MachineGuid"', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+        uuid = raw.trim();
+      } catch {}
+    }
+
     if (uuid && uuid.length > 8) {
-      // Create a shorter, friendlier hardware ID from the UUID
       const hash = crypto.createHash('sha256').update(uuid).digest('hex');
       cachedHardwareId = `HWID-${hash.substring(0, 4).toUpperCase()}-${hash.substring(4, 8).toUpperCase()}-${hash.substring(8, 12).toUpperCase()}`;
     } else {
@@ -242,13 +270,10 @@ ipcMain.handle('get-hardware-id', async () => {
     console.error('Failed to get hardware ID:', err.message);
     cachedHardwareId = `HWID-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
   }
-  // Persist the hardware ID so it stays consistent
-  const hwidPath = path.join(userDataPath, 'hwid.txt');
-  if (fs.existsSync(hwidPath)) {
-    cachedHardwareId = fs.readFileSync(hwidPath, 'utf8').trim();
-  } else {
+
+  try {
     fs.writeFileSync(hwidPath, cachedHardwareId, { encoding: 'utf8' });
-  }
+  } catch {}
   return cachedHardwareId;
 });
 

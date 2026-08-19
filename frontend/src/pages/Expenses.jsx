@@ -244,7 +244,12 @@ export default function Expenses() {
                       <div className="text-slate-400 text-xs mt-0.5 flex gap-2 items-center">
                         <span>By {expense.created_by_name}</span>
                         {expense.receipt_url && (
-                          <a href={`http://localhost:5000${expense.receipt_url}`} target="_blank" rel="noreferrer" className="text-teal-600 hover:underline flex items-center gap-1 ml-2">
+                          <a 
+                            href={`${(localStorage.getItem('serverIP') ? `http://${localStorage.getItem('serverIP')}:3000` : (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/\/api$/, '') : 'http://localhost:3000'))}${expense.receipt_url}`} 
+                            target="_blank" 
+                            rel="noreferrer" 
+                            className="text-teal-600 hover:underline flex items-center gap-1 ml-2"
+                          >
                             <Receipt className="w-3 h-3" /> View Receipt
                           </a>
                         )}

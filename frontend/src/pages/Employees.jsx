@@ -516,7 +516,7 @@ export default function Employees() {
                             </div>
                           </div>
                           <a 
-                            href={`${process.env.VITE_API_URL || 'http://localhost:5000'}/uploads/docs/${doc.file_path}`} 
+                            href={`${(localStorage.getItem('serverIP') ? `http://${localStorage.getItem('serverIP')}:3000` : (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/\/api$/, '') : 'http://localhost:3000'))}/uploads/docs/${doc.file_path}`} 
                             target="_blank" 
                             rel="noopener noreferrer"
                             className="p-2 text-teal-600 hover:bg-teal-50 rounded-lg transition-colors"

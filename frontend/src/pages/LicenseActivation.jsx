@@ -10,6 +10,12 @@ export default function LicenseActivation({ onActivated }) {
   const [hardwareId, setHardwareId] = useState('Loading...');
   const [hwidCopied, setHwidCopied] = useState(false);
 
+  const savedServerIP = localStorage.getItem('serverIP');
+  const getApiBaseUrl = () => {
+    if (savedServerIP) return `http://${savedServerIP}:3000/api`;
+    return import.meta.env.VITE_API_URL || 'http://127.0.0.1:3000/api';
+  };
+
   useEffect(() => {
     const fetchHwid = async () => {
       if (window.electronAPI?.getHardwareId) {
@@ -24,7 +30,8 @@ export default function LicenseActivation({ onActivated }) {
         }
       }
       try {
-        const res = await fetch('http://127.0.0.1:5000/api/license/hardware-id');
+        const baseUrl = getApiBaseUrl();
+        const res = await fetch(`${baseUrl}/license/hardware-id`);
         const data = await res.json();
         if (data.hardwareId) {
           setHardwareId(data.hardwareId);
@@ -56,7 +63,8 @@ export default function LicenseActivation({ onActivated }) {
 
     setIsSubmitting(true);
     try {
-      const response = await fetch('http://127.0.0.1:5000/api/license/activate', {
+      const baseUrl = getApiBaseUrl();
+      const response = await fetch(`${baseUrl}/license/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ licenseKey: licenseKey.trim() }),

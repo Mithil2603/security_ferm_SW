@@ -42,13 +42,20 @@ function App() {
   const [licenseStatus, setLicenseStatus] = useState('checking'); // 'checking' | 'unlicensed' | 'licensed'
   const [setupStatus, setSetupStatus] = useState('checking'); // 'checking' | 'needs-setup' | 'complete'
 
+  const savedServerIP = localStorage.getItem('serverIP');
+  const getApiBaseUrl = () => {
+    if (savedServerIP) return `http://${savedServerIP}:3000/api`;
+    return import.meta.env.VITE_API_URL || 'http://127.0.0.1:3000/api';
+  };
+
   useEffect(() => {
     checkLicense();
   }, []);
 
   const checkLicense = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:3000/api/license/status');
+      const baseUrl = getApiBaseUrl();
+      const response = await fetch(`${baseUrl}/license/status`);
       const data = await response.json();
       
       if (data.success && data.licensed) {
@@ -68,7 +75,8 @@ function App() {
 
   const checkSetupStatus = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:3000/api/auth/setup-status');
+      const baseUrl = getApiBaseUrl();
+      const response = await fetch(`${baseUrl}/auth/setup-status`);
       const data = await response.json();
       
       if (data.success && data.setupComplete) {

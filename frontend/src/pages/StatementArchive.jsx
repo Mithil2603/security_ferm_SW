@@ -110,7 +110,8 @@ export default function StatementArchive() {
   const handleExportAll = async () => {
     try {
       const token = localStorage.getItem('token');
-      const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+      const savedServerIP = localStorage.getItem('serverIP');
+      const baseUrl = savedServerIP ? `http://${savedServerIP}:3000/api` : (import.meta.env.VITE_API_URL || 'http://localhost:3000/api');
       const params = new URLSearchParams();
       if (activeDomain !== 'all') params.append('domain', activeDomain);
       if (dateRange.from_date) params.append('from_date', dateRange.from_date);

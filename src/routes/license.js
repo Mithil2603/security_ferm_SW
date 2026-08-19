@@ -12,21 +12,71 @@ const logger = require('../utils/logger');
 const path = require('path');
 const fs = require('fs');
 
+function computeMachineHwid() {
+  const crypto = require('crypto');
+  const { execSync } = require('child_process');
+
+  const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || 'C:\\Users\\Default', 'AppData', 'Roaming');
+  const userDataDir = path.join(appData, 'secuirty-agency-software');
+  const hwidPath = path.join(userDataDir, 'hwid.txt');
+
+  if (fs.existsSync(hwidPath)) {
+    try {
+      const cached = fs.readFileSync(hwidPath, 'utf8').trim();
+      if (cached && cached.length > 5) return cached;
+    } catch {}
+  }
+
+  let uuid;
+  // Method 1: WMIC
+  try {
+    const raw = execSync('wmic csproduct get uuid', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+    uuid = raw.split('\n').map(l => l.trim()).filter(l => l && l !== 'UUID')[0];
+  } catch {}
+
+  // Method 2: PowerShell CIM
+  if (!uuid || uuid.length < 8) {
+    try {
+      const raw = execSync('powershell -NoProfile -Command "(Get-CimInstance Win32_ComputerSystemProduct).UUID"', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+      uuid = raw.trim();
+    } catch {}
+  }
+
+  // Method 3: PowerShell MachineGuid from Registry
+  if (!uuid || uuid.length < 8) {
+    try {
+      const raw = execSync('powershell -NoProfile -Command "(Get-ItemProperty -Path \'HKLM:\\SOFTWARE\\Microsoft\\Cryptography\').MachineGuid"', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+      uuid = raw.trim();
+    } catch {}
+  }
+
+  let hwid;
+  if (uuid && uuid.length > 8) {
+    const hash = crypto.createHash('sha256').update(uuid).digest('hex');
+    hwid = `HWID-${hash.substring(0, 4).toUpperCase()}-${hash.substring(4, 8).toUpperCase()}-${hash.substring(8, 12).toUpperCase()}`;
+  } else {
+    hwid = `HWID-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
+  }
+
+  try {
+    if (!fs.existsSync(userDataDir)) {
+      fs.mkdirSync(userDataDir, { recursive: true });
+    }
+    fs.writeFileSync(hwidPath, hwid, { encoding: 'utf8' });
+  } catch {}
+
+  return hwid;
+}
+
 /**
- * Read this machine's hardware ID from the persisted file.
+ * Read this machine's hardware ID from the persisted file or compute it.
  */
 function getMachineHwid() {
   try {
-    const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || 'C:\\Users\\Default', 'AppData', 'Roaming');
-    const userDataDir = path.join(appData, 'secuirty-agency-software');
-    const hwidPath = path.join(userDataDir, 'hwid.txt');
-    if (fs.existsSync(hwidPath)) {
-      return fs.readFileSync(hwidPath, 'utf8').trim();
-    }
+    return computeMachineHwid();
   } catch {
-    // skip
+    return null;
   }
-  return null;
 }
 
 /**
@@ -35,37 +85,7 @@ function getMachineHwid() {
  */
 router.get('/hardware-id', (req, res) => {
   try {
-    const crypto = require('crypto');
-    const { execSync } = require('child_process');
-
-    const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || 'C:\\Users\\Default', 'AppData', 'Roaming');
-    const userDataDir = path.join(appData, 'secuirty-agency-software');
-    const hwidPath = path.join(userDataDir, 'hwid.txt');
-
-    if (fs.existsSync(hwidPath)) {
-      const cached = fs.readFileSync(hwidPath, 'utf8').trim();
-      return res.json({ success: true, hardwareId: cached });
-    }
-
-    let hwid;
-    try {
-      const raw = execSync('wmic csproduct get uuid', { encoding: 'utf8' });
-      const uuid = raw.split('\n').map(l => l.trim()).filter(l => l && l !== 'UUID')[0];
-      if (uuid && uuid.length > 8) {
-        const hash = crypto.createHash('sha256').update(uuid).digest('hex');
-        hwid = `HWID-${hash.substring(0, 4).toUpperCase()}-${hash.substring(4, 8).toUpperCase()}-${hash.substring(8, 12).toUpperCase()}`;
-      } else {
-        hwid = `HWID-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
-      }
-    } catch {
-      hwid = `HWID-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
-    }
-
-    if (!fs.existsSync(userDataDir)) {
-      fs.mkdirSync(userDataDir, { recursive: true });
-    }
-    fs.writeFileSync(hwidPath, hwid, { encoding: 'utf8' });
-
+    const hwid = computeMachineHwid();
     return res.json({ success: true, hardwareId: hwid });
   } catch (err) {
     return res.json({ success: false, hardwareId: 'HWID-A1B2-C3D4' });

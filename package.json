@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "build:frontend": "cd frontend && npm run build",
-    "build": "npm run build:frontend && electron-builder",
+    "build": "npm run build:frontend && electron-builder --config.directories.output=\"%TEMP%/electron-build-output\" && powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path 'electron-dist'; Copy-Item -Path ($env:TEMP + '/electron-build-output/*') -Destination 'electron-dist/' -Recurse -Force\"",
     "test": "jest --forceExit --detectOpenHandles",
     "test:coverage": "jest --coverage --forceExit --detectOpenHandles",
     "test:watch": "jest --watch",

@@ -356,7 +356,9 @@ export default function Reports() {
 
   const downloadRawData = (type) => {
     const token = localStorage.getItem('token');
-    const url = `${process.env.VITE_API_URL || 'http://localhost:5000'}/api/reports/export-excel?type=${type}&from_date=${dateRange.from_date}&to_date=${dateRange.to_date}&token=${token}`;
+    const savedServerIP = localStorage.getItem('serverIP');
+    const baseUrl = savedServerIP ? `http://${savedServerIP}:3000` : (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/\/api$/, '') : 'http://localhost:3000');
+    const url = `${baseUrl}/api/reports/export-excel?type=${type}&from_date=${dateRange.from_date}&to_date=${dateRange.to_date}&token=${token}`;
     window.open(url, '_blank');
   };
 
