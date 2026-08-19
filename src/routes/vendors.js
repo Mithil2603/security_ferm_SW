@@ -43,11 +43,13 @@ router.put('/:id', async (req, res) => {
   try {
     const { name, contact_info, is_active, payment_terms_days } = req.body;
     const result = await query(
-      'UPDATE vendors SET name=$1, contact_info=$2, is_active=$3, payment_terms_days=$4, updated_at=CURRENT_TIMESTAMP WHERE id=$5 RETURNING *',
+      'UPDATE vendors SET name=$1, contact_info=$2, is_active=$3, payment_terms_days=$4, updated_at=CURRENT_TIMESTAMP WHERE id=$5',
       [name, contact_info, is_active !== undefined ? is_active : 1, payment_terms_days || 0, req.params.id]
     );
-    if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'Vendor not found' });
-    res.json({ success: true, data: result.rows[0], message: 'Vendor updated successfully' });
+    if (result.rowCount === 0) return res.status(404).json({ success: false, message: 'Vendor not found' });
+    
+    const updated = await query('SELECT * FROM vendors WHERE id=$1', [req.params.id]);
+    res.json({ success: true, data: updated.rows[0], message: 'Vendor updated successfully' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'vendors' });
     logger.error('Update vendor error:', error);

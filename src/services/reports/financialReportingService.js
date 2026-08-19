@@ -42,7 +42,8 @@ class FinancialReportingService {
 
     const payroll = await query(
       `SELECT COALESCE(SUM(net_salary), 0) as paid
-       FROM salary_slips WHERE payroll_month >= strftime('%Y-%m', $1) AND payroll_month <= strftime('%Y-%m', $2)
+       FROM salary_slips WHERE DATE_FORMAT(payroll_month, '%Y-%m') >= DATE_FORMAT($1, '%Y-%m')
+         AND DATE_FORMAT(payroll_month, '%Y-%m') <= DATE_FORMAT($2, '%Y-%m')
        AND status = 'paid'`,
       [startDate, endDate]
     );
@@ -55,7 +56,7 @@ class FinancialReportingService {
     );
     const arEnd = await query(
       `SELECT COALESCE(SUM(payment_due), 0) as ar FROM invoices
-       WHERE invoice_date <= $2 AND status IN ('sent', 'partially_paid', 'overdue')`,
+       WHERE invoice_date <= $1 AND status IN ('sent', 'partially_paid', 'overdue')`,
       [endDate]
     );
     const arChange = parseFloat(arEnd.rows[0].ar) - parseFloat(arStart.rows[0].ar);
@@ -137,7 +138,8 @@ class FinancialReportingService {
 
     const actualPayroll = await query(
       `SELECT COALESCE(SUM(total_earnings), 0) as total
-       FROM salary_slips WHERE payroll_month >= strftime('%Y-%m', $1) AND payroll_month <= strftime('%Y-%m', $2)
+       FROM salary_slips WHERE DATE_FORMAT(payroll_month, '%Y-%m') >= DATE_FORMAT($1, '%Y-%m')
+         AND DATE_FORMAT(payroll_month, '%Y-%m') <= DATE_FORMAT($2, '%Y-%m')
        AND status IN ('approved', 'paid')`,
       [startDate, endDate]
     );

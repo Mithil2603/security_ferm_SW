@@ -312,10 +312,21 @@ router.put('/:id/mark-paid', async (req, res) => {
   }
 });
 
-// GET /api/payroll/preview
+// POST /api/payroll/preview
 router.post('/preview', async (req, res) => {
   try {
-    const { employee_id, month } = req.body;
+    // Support both single {employee_id, month} and batch {month, entries:[{employee_id, days_worked}]}
+    let { employee_id, month, entries } = req.body;
+
+    if (entries && Array.isArray(entries)) {
+      // Batch preview mode
+      const previews = await Promise.all(
+        entries.map(e => calculatePayroll(e.employee_id, month, e.days_worked))
+      );
+      return res.json({ success: true, data: previews });
+    }
+
+    // Single employee mode
     const data = await calculatePayroll(employee_id, month);
     res.json({ success: true, data });
   } catch (error) {

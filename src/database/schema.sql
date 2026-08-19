@@ -414,3 +414,12 @@ INSERT IGNORE INTO clients (name, address, city, state, phone, contact_person, m
 ('Sunrise Residency', '78, Bopal Road, Ghuma', 'Ahmedabad', 'Gujarat', '9876543212', 'Kavita Mehta', 38000, '2025-03-01'),
 ('Royal Heights', '22, Prahlad Nagar, Anandnagar', 'Ahmedabad', 'Gujarat', '9876543213', 'Ajay Desai', 62000, '2025-01-15'),
 ('Metro Tower', '5, CG Road, Navrangpura', 'Ahmedabad', 'Gujarat', '9876543214', 'Priya Joshi', 75000, '2024-12-01');
+
+CREATE TABLE IF NOT EXISTS employee_documents (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  employee_id INTEGER NOT NULL,
+  file_name VARCHAR(255) NOT NULL,
+  file_path TEXT NOT NULL,
+  uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(employee_id) REFERENCES employees(id) ON DELETE CASCADE
+);

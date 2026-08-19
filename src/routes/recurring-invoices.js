@@ -19,6 +19,7 @@
 
 const logger = require('../utils/logger.js');
 const express = require('express');
+const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/errorLogger');
 const router = express.Router();
 const Joi = require('joi');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
@@ -32,13 +33,14 @@ router.use(requirePermission('manage_invoices'));
 
 const createSchema = Joi.object({
   client_id: Joi.number().integer().positive().required(),
-  monthly_rate: Joi.number().positive().precision(2).required(),
-  tax_type: Joi.string().valid('none', 'cgst_sgst', 'igst').default('cgst_sgst'),
+  monthly_rate: Joi.number().positive().precision(2).optional(),  // auto-fetched from client if not provided
+  tax_type: Joi.string().valid('none', 'cgst_sgst', 'igst', 'GST_18').default('cgst_sgst'),
   discount_amount: Joi.number().min(0).precision(2).default(0),
   is_rcm_applicable: Joi.boolean().default(false),
   frequency: Joi.string().valid('weekly', 'biweekly', 'monthly', 'quarterly', 'yearly').required(),
   start_date: Joi.date().iso().required(),
   end_date: Joi.date().iso().greater(Joi.ref('start_date')).allow(null).default(null),
+  next_run_date: Joi.date().iso().allow(null, '').optional(),  // alias for start_date, ignored internally
   auto_generate: Joi.boolean().default(true),
   reminder_days: Joi.number().integer().min(0).max(30).default(5),
   invoice_description: Joi.string().max(500).allow(null, ''),
@@ -64,6 +66,19 @@ router.post('/', async (req, res) => {
   try {
     const { error, value } = createSchema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
+
+    // Normalize GST_18 → cgst_sgst
+    if (value.tax_type === 'GST_18') value.tax_type = 'cgst_sgst';
+
+    // Auto-fetch monthly_rate from client if not provided
+    if (!value.monthly_rate) {
+      const { query } = require('../database/connection');
+      const clientRow = await query('SELECT monthly_rate FROM clients WHERE id = $1 AND is_active = true', [value.client_id]);
+      if (clientRow.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Client not found or inactive' });
+      }
+      value.monthly_rate = parseFloat(clientRow.rows[0].monthly_rate);
+    }
 
     const result = await recurringInvoiceService.create(value, req.user.id);
 

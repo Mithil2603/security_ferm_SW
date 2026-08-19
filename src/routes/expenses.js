@@ -107,11 +107,13 @@ router.post('/categories', async (req, res) => {
 });
 
 // DELETE /api/expenses/categories/:id
-router.delete('/categories/:id', async (req, res) => {
+router.delete('/categories/:id', requirePermission('manage_expenses'), async (req, res) => {
   try {
-    const result = await query('UPDATE expense_categories SET is_active = 0 WHERE id = $1 RETURNING *', [req.params.id]);
+    const result = await query('UPDATE expense_categories SET is_active = 0 WHERE id = $1', [req.params.id]);
     if (result.rowCount === 0) return res.status(404).json({ success: false, message: 'Category not found' });
-    res.json({ success: true, message: 'Category deleted' });
+    
+    const updated = await query('SELECT * FROM expense_categories WHERE id = $1', [req.params.id]);
+    res.json({ success: true, data: updated.rows[0], message: 'Category deactivated successfully' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'expenses' });
     res.status(500).json({ success: false, message: 'Failed to delete category' });
@@ -326,9 +328,11 @@ router.post('/:id/pay', async (req, res) => {
 
     // 3. Update expense
     const result = await query(
-      `UPDATE expenses SET amount_paid = $1, status = $2 WHERE id = $3 RETURNING *`,
+      `UPDATE expenses SET amount_paid = $1, status = $2 WHERE id = $3`,
       [newPaid, newStatus, expense.id]
     );
+    const updated = await query('SELECT * FROM expenses WHERE id = $1', [expense.id]);
+    const finalExpense = updated.rows[0];
 
     // Get vendor name for statement
     const vendorRes = await query('SELECT name FROM vendors WHERE id = $1', [expense.vendor_id]);
@@ -354,7 +358,7 @@ router.post('/:id/pay', async (req, res) => {
       generated_by: req.user.userId
     });
 
-    res.json({ success: true, data: result.rows[0], message: 'Payment recorded successfully' });
+    res.json({ success: true, data: finalExpense, message: 'Payment recorded successfully' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'expenses' });
     logger.error('Pay expense error:', error);

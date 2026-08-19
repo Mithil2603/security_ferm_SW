@@ -18,7 +18,10 @@ const VOUCHER_PREFIXES = {
   journal: 'JV',
   contra: 'CT',
   debit_note: 'DN',
-  credit_note: 'CN'
+  credit_note: 'CN',
+  // Common aliases
+  payment: 'BP',      // alias for bank_payment
+  receipt: 'BR',      // alias for bank_receipt
 };
 
 const VOUCHER_TYPE_LABELS = {
@@ -36,7 +39,8 @@ const VOUCHER_TYPE_LABELS = {
 const voucherSchema = Joi.object({
   voucher_type: Joi.string().valid(
     'cash_payment', 'cash_receipt', 'bank_payment', 'bank_receipt',
-    'journal', 'contra', 'debit_note', 'credit_note'
+    'journal', 'contra', 'debit_note', 'credit_note',
+    'payment', 'receipt'  // common aliases
   ).required(),
   voucher_date: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).required(),
   amount: Joi.number().positive().precision(2).required(),
@@ -48,6 +52,7 @@ const voucherSchema = Joi.object({
   reference_type: Joi.string().valid('invoice', 'expense', 'payroll', 'none').allow(null, '').optional(),
   reference_id: Joi.number().integer().positive().allow(null).optional(),
   narration: Joi.string().allow('', null).optional(),
+  description: Joi.string().allow('', null).optional(),  // alias for narration
   cheque_number: Joi.string().max(50).allow('', null).optional(),
   cheque_date: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).allow('', null).optional(),
   transaction_ref: Joi.string().max(100).allow('', null).optional(),
@@ -74,15 +79,21 @@ async function getNextVoucherNumber(voucherType, voucherDate) {
   await query(`
     INSERT INTO voucher_counters (voucher_type, financial_year, last_number)
     VALUES ($1, $2, 0)
-    ON CONFLICT(voucher_type, financial_year) DO NOTHING
+    ON CONFLICT DO NOTHING
   `, [voucherType, fy]);
 
-  // Increment and return
-  const result = await query(`
+  // Increment
+  await query(`
     UPDATE voucher_counters
     SET last_number = last_number + 1
     WHERE voucher_type = $1 AND financial_year = $2
-    RETURNING last_number
+  `, [voucherType, fy]);
+
+  // Return
+  const result = await query(`
+    SELECT last_number
+    FROM voucher_counters
+    WHERE voucher_type = $1 AND financial_year = $2
   `, [voucherType, fy]);
 
   const num = result.rows[0].last_number;
@@ -332,12 +343,16 @@ router.post('/', async (req, res) => {
     }
 
     const {
-      voucher_type, voucher_date, amount,
+      voucher_date, amount,
       debit_account_id, credit_account_id,
       party_type, party_id, party_name,
       reference_type, reference_id,
       narration, cheque_number, cheque_date, transaction_ref, category
     } = value;
+
+    // Normalize alias types to canonical types
+    const TYPE_ALIASES = { payment: 'bank_payment', receipt: 'bank_receipt' };
+    const voucher_type = TYPE_ALIASES[value.voucher_type] || value.voucher_type;
 
     // Validate accounts exist
     if (debit_account_id) {
@@ -397,7 +412,7 @@ router.post('/', async (req, res) => {
   } catch (error) {
     logError(error, req, { feature: 'vouchers' });
     logger.error('Create voucher error:', error);
-    res.status(500).json({ success: false, message: 'Failed to create voucher' });
+    res.status(500).json({ success: false, message: 'Failed to create voucher: ' + error.message });
   }
 });
 

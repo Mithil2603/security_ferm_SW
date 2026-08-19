@@ -96,6 +96,7 @@ router.post('/', validate(schemas.markAttendance), async (req, res) => {
       'SELECT * FROM attendance WHERE employee_id = $1 AND attendance_date = $2',
       [employee_id, attendance_date]
     );
+    res.status(201).json({ success: true, data: fetched.rows[0] });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'attendance' });
     logger.error('Mark attendance error:', error);

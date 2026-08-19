@@ -7,6 +7,9 @@ const logger = require('./logger.js');
  */
 const { query } = require('../database/connection');
 
+const ERROR_SEVERITY = { LOW: 'LOW', MEDIUM: 'MEDIUM', HIGH: 'HIGH', CRITICAL: 'CRITICAL' };
+const ERROR_CATEGORY = { BACKUP: 'BACKUP', SYSTEM: 'SYSTEM', PAYROLL: 'PAYROLL', AUTH: 'AUTH', DEFAULT: 'DEFAULT' };
+
 async function logError(error, req, context = {}) {
   try {
     const user_id = req?.user?.userId || null;
@@ -47,4 +50,4 @@ async function logError(error, req, context = {}) {
   }
 }
 
-module.exports = { logError };
+module.exports = { logError, ERROR_SEVERITY, ERROR_CATEGORY };

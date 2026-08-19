@@ -126,10 +126,10 @@ function adaptSqlForMySQL(sql) {
   // 12. date(col) → DATE(col) [just wrapping in DATE() is the same]
   q = q.replace(/\bdate\s*\(\s*(\$\d+)\s*\)/gi, 'DATE($1)');
 
-  // 13. ON CONFLICT DO NOTHING → MySQL doesn't support this; use INSERT IGNORE
+  // 13. ON CONFLICT DO NOTHING -> MySQL doesn't support this; use INSERT IGNORE
   if (/ON CONFLICT\s+DO NOTHING/i.test(q)) {
     q = q.replace(/\s+ON CONFLICT\s+DO NOTHING/gi, '');
-    q = q.replace(/^INSERT INTO/i, 'INSERT IGNORE INTO');
+    q = q.replace(/INSERT\s+INTO/i, 'INSERT IGNORE INTO');
   }
 
   // 14. ON CONFLICT(col) DO UPDATE SET ... → ON DUPLICATE KEY UPDATE ...
@@ -148,7 +148,8 @@ function adaptSqlForMySQL(sql) {
   // 17. CAST(julianday('now') - julianday(v.due_date) AS INTEGER) -> DATEDIFF(CURDATE(), v.due_date)
   q = q.replace(/CAST\(\s*julianday\('now'\)\s*-\s*julianday\(([^)]+)\)\s*AS\s*INTEGER\s*\)/gi, 'DATEDIFF(CURDATE(), $1)');
 
-
+    // 15. IS TRUE / IS FALSE -> = 1 / = 0
+    q = q.replace(/IS TRUE/gi, '= 1').replace(/IS FALSE/gi, '= 0');
 
   // 18. Remove SQLite-only pragma
   q = q.replace(/PRAGMA\s+\w+\s*=\s*\w+;?/gi, '');
@@ -202,11 +203,19 @@ const query = async (text, params = []) => {
 
     // 5. Execute
     let executeRows, fields;
-    if (/^(START TRANSACTION|COMMIT|ROLLBACK)/i.test(mysqlText)) {
-      // Transaction commands fail with pool.execute (prepared statements) in MySQL
-      [executeRows, fields] = await pool.query(mysqlText);
-    } else {
-      [executeRows, fields] = await pool.execute(mysqlText, mappedParams);
+    try {
+      if (/^(START TRANSACTION|COMMIT|ROLLBACK)/i.test(mysqlText)) {
+        [executeRows, fields] = await pool.query(mysqlText);
+      } else {
+        const numQ = (mysqlText.match(/\?/g) || []).length;
+        if (numQ !== mappedParams.length) {
+          console.log('SQL PARAMS MISMATCH:', { mysqlText, numQ, mappedParams });
+        }
+        [executeRows, fields] = await pool.execute(mysqlText, mappedParams);
+      }
+    } catch (err) {
+      console.log('Query failed in pool.execute:', { mysqlText, mappedParams, originalError: err.message });
+      throw err;
     }
     const rows = executeRows;
 
@@ -223,12 +232,15 @@ const query = async (text, params = []) => {
       if (hasReturning && header.insertId) {
         // Simulate RETURNING by fetching the inserted row
         const tableMatch = mysqlText.match(/INSERT\s+(?:IGNORE\s+)?INTO\s+(`?\w+`?)/i);
+        console.log('DEBUG RETURNING:', { mysqlText, hasReturning, insertId: header.insertId, tableMatch: tableMatch ? tableMatch[1] : null });
         if (tableMatch && tableMatch[1]) {
           const tableName = tableMatch[1].replace(/`/g, '');
           try {
             const [fetchRows] = await pool.execute(`SELECT * FROM \`${tableName}\` WHERE id = ?`, [header.insertId]);
+            console.log('DEBUG FETCHED ROWS:', fetchRows);
             result.rows = fetchRows.length > 0 ? fetchRows : [{ id: header.insertId }];
-          } catch (_) {
+          } catch (e) {
+            console.log('DEBUG FETCH ERROR:', e.message);
             result.rows = [{ id: header.insertId }];
           }
         } else {

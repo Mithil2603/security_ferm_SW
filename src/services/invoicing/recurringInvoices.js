@@ -50,9 +50,12 @@ class RecurringInvoiceService {
     );
 
     // Log the creation
-    await this._log(result.lastInsertRowid, null, 'CREATED', `Recurring invoice created with ${frequency} frequency`);
+    const newId = result.insertId;
+    if (newId) {
+      await this._log(newId, null, 'CREATED', `Recurring invoice created with ${frequency} frequency`);
+    }
 
-    return this.findById(result.lastInsertRowid);
+    return this.findById(newId);
   }
 
   /**

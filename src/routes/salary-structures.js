@@ -19,6 +19,7 @@
 
 const logger = require('../utils/logger.js');
 const express = require('express');
+const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/errorLogger');
 const router = express.Router();
 const Joi = require('joi');
 const { authMiddleware, requirePermission } = require('../middleware/auth');

@@ -39,7 +39,7 @@ class SalaryStructureService {
        description, template_type, ctc]
     );
 
-    const structureId = result.lastInsertRowid;
+    const structureId = result.insertId;
 
     // Assign components if provided
     if (components.length > 0) {

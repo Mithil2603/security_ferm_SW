@@ -12,7 +12,7 @@ router.use(requirePermission('manage_bank_accounts'));
 // Validation schemas
 const bankAccountSchema = Joi.object({
   account_name: Joi.string().min(2).max(255).required(),
-  account_type: Joi.string().valid('bank', 'cash').required(),
+  account_type: Joi.string().valid('bank', 'cash', 'current', 'savings', 'overdraft', 'fixed_deposit', 'cc').required(),
   account_number: Joi.string().allow('', null).max(50).optional(),
   bank_name: Joi.string().allow('', null).max(255).optional(),
   ifsc_code: Joi.string().allow('', null).max(20).optional(),
@@ -90,7 +90,11 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ success: false, message: error.details[0].message });
     }
 
-    const { account_name, account_type, account_number, bank_name, ifsc_code, branch, opening_balance, opening_balance_date } = value;
+    const { account_name, account_number, bank_name, ifsc_code, branch, opening_balance, opening_balance_date } = value;
+    let account_type = value.account_type;
+    if (!['bank', 'cash'].includes(account_type)) {
+      account_type = 'bank'; // map detailed types to 'bank' for DB constraint
+    }
 
     const result = await query(`
       INSERT INTO bank_accounts (account_name, account_type, account_number, bank_name, ifsc_code, branch, opening_balance, opening_balance_date, created_by)
@@ -117,21 +121,25 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ success: false, message: error.details[0].message });
     }
 
-    const { account_name, account_type, account_number, bank_name, ifsc_code, branch, opening_balance, opening_balance_date } = value;
+    const { account_name, account_number, bank_name, ifsc_code, branch, opening_balance, opening_balance_date } = value;
+    let account_type = value.account_type;
+    if (!['bank', 'cash'].includes(account_type)) {
+      account_type = 'bank'; // map detailed types to 'bank' for DB constraint
+    }
 
     const result = await query(`
       UPDATE bank_accounts
       SET account_name = $1, account_type = $2, account_number = $3, bank_name = $4,
           ifsc_code = $5, branch = $6, opening_balance = $7, opening_balance_date = $8
       WHERE id = $9
-      RETURNING *
     `, [account_name, account_type, account_number || null, bank_name || null, ifsc_code || null, branch || null, opening_balance, opening_balance_date || null, id]);
 
-    if (result.rows.length === 0) {
+    if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Account not found' });
     }
 
-    res.json({ success: true, data: result.rows[0], message: 'Account updated successfully' });
+    const updated = await query('SELECT * FROM bank_accounts WHERE id=$1', [id]);
+    res.json({ success: true, data: updated.rows[0], message: 'Account updated successfully' });
   } catch (error) {
     logError(error, req, { feature: 'bank-accounts' });
     res.status(500).json({ success: false, message: 'Failed to update account' });
@@ -152,20 +160,21 @@ router.delete('/:id', async (req, res) => {
     `, [id]);
 
     const result = await query(`
-      UPDATE bank_accounts SET is_active = 0 WHERE id = $1 RETURNING *
+      UPDATE bank_accounts SET is_active = 0 WHERE id = $1
     `, [id]);
 
-    if (result.rows.length === 0) {
+    if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Account not found' });
     }
 
+    const deleted = await query('SELECT * FROM bank_accounts WHERE id=$1', [id]);
     const hasVouchers = voucherCheck.rows[0].count > 0;
     res.json({
       success: true,
       message: hasVouchers
         ? 'Account deactivated (has existing vouchers, cannot be permanently deleted)'
         : 'Account deactivated successfully',
-      data: result.rows[0]
+      data: deleted.rows[0]
     });
   } catch (error) {
     logError(error, req, { feature: 'bank-accounts' });

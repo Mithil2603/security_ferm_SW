@@ -251,6 +251,7 @@ router.post('/', validate(schemas.createEmployee), async (req, res) => {
         emergency_contact_name, emergency_contact_phone, notes]
     );
 
+    console.log('EMPLOYEES POST RESULT ROWS:', result.rows);
     await logAudit(req, 'employees', result.rows[0].id, 'create', `Created employee: ${full_name} (${employee_id})`);
 
     res.status(201).json({ success: true, data: result.rows[0], message: 'Employee created successfully' });

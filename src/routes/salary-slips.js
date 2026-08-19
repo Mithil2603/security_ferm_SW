@@ -18,6 +18,7 @@
 
 const logger = require('../utils/logger.js');
 const express = require('express');
+const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/errorLogger');
 const router = express.Router();
 const Joi = require('joi');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
@@ -30,12 +31,21 @@ router.use(requirePermission('manage_payroll'));
 
 router.post('/generate', async (req, res) => {
   try {
+    let rawMonth = req.body.payroll_month || req.body.month;
+    if (rawMonth && rawMonth.length > 7) {
+      rawMonth = rawMonth.substring(0, 7); // convert YYYY-MM-DD to YYYY-MM
+    }
+
     const schema = Joi.object({
       employee_id: Joi.number().integer().positive().required(),
       payroll_month: Joi.string().pattern(/^\d{4}-\d{2}$/).required(),
       days_worked: Joi.number().integer().min(0).max(31),
     });
-    const { error, value } = schema.validate(req.body);
+    
+    const { error, value } = schema.validate({
+      ...req.body,
+      payroll_month: rawMonth
+    });
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
     const result = await salarySlipService.generate(

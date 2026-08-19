@@ -13,12 +13,14 @@ router.post('/', authMiddleware, async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Missing required budget fields' });
     }
 
-    const result = await query(`
+    const insertResult = await query(`
       INSERT INTO budgets (entity_type, entity_id, budget_category, amount, period_start, period_end)
-      VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
+      VALUES ($1, $2, $3, $4, $5, $6)
     `, [entity_type, entity_id || null, budget_category || null, amount, period_start, period_end]);
 
-    res.status(201).json({ success: true, data: result.rows[0], message: 'Budget created successfully' });
+    const newBudget = await query('SELECT * FROM budgets WHERE id = $1', [insertResult.insertId]);
+
+    res.status(201).json({ success: true, data: newBudget.rows[0], message: 'Budget created successfully' });
   } catch (err) {
     logger.error('Error creating budget:', err);
     next(err);
@@ -94,8 +96,8 @@ router.get('/vs-actual', authMiddleware, async (req, res, next) => {
 // 3. Delete a Budget
 router.delete('/:id', authMiddleware, async (req, res, next) => {
   try {
-    const result = await query('DELETE FROM budgets WHERE id = $1 RETURNING *', [req.params.id]);
-    if (result.rows.length === 0) {
+    const result = await query('DELETE FROM budgets WHERE id = $1', [req.params.id]);
+    if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Budget not found' });
     }
     res.json({ success: true, message: 'Budget deleted successfully' });

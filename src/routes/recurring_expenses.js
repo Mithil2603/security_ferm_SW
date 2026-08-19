@@ -29,7 +29,9 @@ router.get('/', async (req, res) => {
 // POST /api/recurring-expenses
 router.post('/', async (req, res) => {
   try {
-    const { title, category, amount, vendor_id, payment_method, frequency, next_run_date } = req.body;
+    // Accept 'description' as alias for 'title'
+    const title = req.body.title || req.body.description;
+    const { category, amount, vendor_id, payment_method, frequency, next_run_date } = req.body;
     
     if (!title || !category || !amount || !frequency || !next_run_date) {
       return res.status(400).json({ success: false, message: 'Missing required fields' });

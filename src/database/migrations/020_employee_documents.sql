@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS employee_documents (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  employee_id INTEGER NOT NULL,
+  file_name VARCHAR(255) NOT NULL,
+  file_path TEXT NOT NULL,
+  uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(employee_id) REFERENCES employees(id) ON DELETE CASCADE
+);

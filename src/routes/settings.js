@@ -263,16 +263,19 @@ router.put('/system/:key', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Value is required' });
     }
 
-    const result = await query(
+    await query(
       `INSERT INTO system_settings (setting_key, setting_value)
        VALUES ($1, $2)
-       ON CONFLICT (setting_key) 
-       DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = CURRENT_TIMESTAMP
-       RETURNING setting_value`,
+       ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP`,
       [req.params.key, value]
     );
 
-    res.json({ success: true, data: result.rows[0].setting_value, message: 'Setting updated successfully' });
+    const fetched = await query(
+      'SELECT setting_value FROM system_settings WHERE setting_key = $1',
+      [req.params.key]
+    );
+
+    res.json({ success: true, data: fetched.rows[0]?.setting_value, message: 'Setting updated successfully' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
     logger.error('Update system setting error:', error);
@@ -292,8 +295,7 @@ router.post('/system/agency_logo', upload.single('logo'), async (req, res) => {
     await query(
       `INSERT INTO system_settings (setting_key, setting_value)
        VALUES ($1, $2)
-       ON CONFLICT (setting_key) 
-       DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = CURRENT_TIMESTAMP`,
+       ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP`,
       ['agency_logo_url', logoUrl]
     );
 
@@ -358,11 +360,13 @@ router.put('/expense-categories/:id', async (req, res) => {
   try {
     const { name, is_active } = req.body;
     const result = await query(
-      `UPDATE expense_categories SET name = COALESCE($1, name), is_active = COALESCE($2, is_active) WHERE id = $3 RETURNING *`,
+      `UPDATE expense_categories SET name = COALESCE($1, name), is_active = COALESCE($2, is_active) WHERE id = $3`,
       [name, is_active, req.params.id]
     );
     if (result.rowCount === 0) return res.status(404).json({ success: false, message: 'Category not found' });
-    res.json({ success: true, data: result.rows[0], message: 'Category updated' });
+    
+    const updated = await query('SELECT * FROM expense_categories WHERE id = $1', [req.params.id]);
+    res.json({ success: true, data: updated.rows[0], message: 'Category updated' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
     if (error.code === 'ER_DUP_ENTRY' || (error.message && error.message.includes('UNIQUE constraint failed'))) {

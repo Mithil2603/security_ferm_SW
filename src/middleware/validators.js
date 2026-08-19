@@ -164,7 +164,7 @@ const createInvoiceSchema = Joi.object({
   billing_period_end: Joi.date().iso().min(Joi.ref('billing_period_start')).required()
     .messages({ 'date.min': 'Billing period end must be on or after start date' })
     .label('Billing period end'),
-  tax_type: Joi.string().valid('none', 'cgst_sgst', 'igst').optional().allow('', null).label('Tax type'),
+  tax_type: Joi.string().valid('none', 'cgst_sgst', 'igst', 'GST_18').optional().allow('', null).label('Tax type'),
   is_rcm_applicable: Joi.boolean().optional().label('Is RCM applicable'),
   tax_rate: Joi.number().min(0).max(100).optional().label('Tax rate (%)'),
   discount_amount: Joi.number().min(0).optional().allow(null, '').label('Discount amount'),
@@ -188,7 +188,9 @@ const generatePayrollSchema = Joi.object({
 
 // POST /api/invoices/:id/payment
 const recordPaymentSchema = Joi.object({
-  amount_paid: positiveDecimal.required().label('Amount paid'),
+  // Accept both 'amount_paid' and 'amount' (alias)
+  amount_paid: positiveDecimal.optional().label('Amount paid'),
+  amount: positiveDecimal.optional().label('Amount paid (alias)'),
   tds_deducted: Joi.number().min(0).optional().allow(null, '').default(0).label('TDS Deducted'),
   payment_date: Joi.date().iso().optional().allow('', null).label('Payment date'),
   payment_method: Joi.string()
@@ -196,7 +198,9 @@ const recordPaymentSchema = Joi.object({
     .required()
     .messages({ 'any.only': 'Payment method must be one of: cash, bank_transfer, cheque, upi, online, card' })
     .label('Payment method'),
+  // Accept both 'transaction_reference' and 'reference_number' (alias)
   transaction_reference: Joi.string().max(200).optional().allow('', null).label('Transaction reference'),
+  reference_number: Joi.string().max(200).optional().allow('', null).label('Reference number (alias)'),
   notes: Joi.string().max(1000).optional().allow('', null).label('Notes'),
 });
 

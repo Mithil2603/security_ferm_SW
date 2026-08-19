@@ -8,6 +8,7 @@
 
 const logger = require('../utils/logger.js');
 const express = require('express');
+const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/errorLogger');
 const router = express.Router();
 const Joi = require('joi');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
@@ -122,12 +123,25 @@ router.post('/hsn-sac', requirePermission('manage_settings'), async (req, res) =
 
 router.post('/calculate', async (req, res) => {
   try {
+    // Accept 'base_amount' as alias for 'taxable_value'
+    const taxable_value = req.body.taxable_value ?? req.body.base_amount;
+    
+    // Normalize GST_18 → cgst_sgst (at 18%)
+    let raw_tax_type = req.body.tax_type || 'cgst_sgst';
+    let gst_rate = req.body.gst_rate;
+    if (raw_tax_type === 'GST_18') {
+      raw_tax_type = 'cgst_sgst';
+      gst_rate = gst_rate || 18;
+    }
+
     const schema = Joi.object({
       taxable_value: Joi.number().min(0).required(),
       gst_rate: Joi.number().min(0).default(18),
       tax_type: Joi.string().valid('cgst_sgst', 'igst').default('cgst_sgst'),
+      is_rcm: Joi.boolean().optional(),  // accepted but unused
     });
-    const { error, value } = schema.validate(req.body);
+    const normalizedBody = { taxable_value, gst_rate, tax_type: raw_tax_type, is_rcm: req.body.is_rcm };
+    const { error, value } = schema.validate(normalizedBody);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
     const result = gstService.calculateGST(value.taxable_value, value.gst_rate, value.tax_type);

@@ -12,7 +12,7 @@ const router = express.Router();
 const Joi = require('joi');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const reportService = require('../services/reports/financialReportingService');
-const { logError } = require('../utils/errorLogger');
+const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/errorLogger');
 
 router.use(authMiddleware);
 router.use(requirePermission('manage_payroll'));
@@ -54,6 +54,36 @@ router.post('/cash-flow', async (req, res) => {
 
 router.post('/kpis/calculate', async (req, res) => {
   try {
+    const { query } = require('../database/connection');
+
+    // If date range provided, auto-compute KPI inputs from DB
+    if (req.body.start_date || req.body.end_date) {
+      const startDate = req.body.start_date || `${new Date().getFullYear()}-01-01`;
+      const endDate   = req.body.end_date   || new Date().toISOString().split('T')[0];
+
+      const [revenueRow, expensesRow, empRow, arRow, payablesRow, cashRow] = await Promise.all([
+        query(`SELECT COALESCE(SUM(final_amount),0) as total FROM invoices WHERE invoice_date BETWEEN $1 AND $2 AND status IN ('sent','paid','partially_paid')`, [startDate, endDate]),
+        query(`SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE expense_date BETWEEN $1 AND $2 AND status = 'approved'`, [startDate, endDate]),
+        query(`SELECT COUNT(*) as cnt FROM employees WHERE is_active = 1`),
+        query(`SELECT COALESCE(SUM(payment_due),0) as total FROM invoices WHERE status IN ('sent','partially_paid','overdue')`),
+        query(`SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE status = 'pending'`),
+        query(`SELECT COALESCE(SUM(opening_balance),0) as total FROM bank_accounts WHERE is_active = 1`),
+      ]);
+
+      const kpiInputs = {
+        revenue:       parseFloat(revenueRow.rows[0].total),
+        totalExpenses: parseFloat(expensesRow.rows[0].total),
+        employeeCount: parseInt(empRow.rows[0].cnt),
+        receivables:   parseFloat(arRow.rows[0].total),
+        payables:      parseFloat(payablesRow.rows[0].total),
+        cashBalance:   parseFloat(cashRow.rows[0].total),
+        periodDays:    30,
+      };
+      const result = reportService.calculateKPIs(kpiInputs);
+      return res.json({ success: true, data: result });
+    }
+
+    // Otherwise, accept raw KPI numbers
     const schema = Joi.object({
       revenue: Joi.number().min(0).required(),
       cogs: Joi.number().min(0).default(0),
@@ -73,8 +103,8 @@ router.post('/kpis/calculate', async (req, res) => {
     logError({
       error: err,
       req,
-      severity: ERROR_SEVERITY.HIGH,
-      category: ERROR_CATEGORY.REPORTING,
+      severity: ERROR_SEVERITY?.HIGH,
+      category: ERROR_CATEGORY?.REPORTING,
       feature: 'financial-reports',
       extra: { message: 'KPI calc error:' }
     });

@@ -148,7 +148,7 @@ router.get('/:id', async (req, res) => {
        WHERE i.id = $1`,
       [req.params.id]
     );
-    if (result.rows.length === 0) {
+    if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
 
@@ -168,7 +168,10 @@ router.get('/:id', async (req, res) => {
 // POST /api/invoices
 router.post('/', validate(schemas.createInvoice), async (req, res) => {
   try {
-    const { client_id, billing_period_start, billing_period_end, tax_type, is_rcm_applicable, discount_amount, notes, invoice_date } = req.body;
+    const { client_id, billing_period_start, billing_period_end, invoice_date, is_rcm_applicable, discount_amount, notes } = req.body;
+    // Normalize tax_type: GST_18 is treated as cgst_sgst (18% split)
+    const raw_tax_type = req.body.tax_type;
+    const tax_type = (raw_tax_type === 'GST_18') ? 'cgst_sgst' : (raw_tax_type || 'none');
     
     if (!client_id || !billing_period_start || !billing_period_end) {
       return res.status(400).json({ success: false, message: 'Client ID, billing period start and end are required' });
@@ -260,7 +263,10 @@ router.post('/', validate(schemas.createInvoice), async (req, res) => {
 // POST /api/invoices/:id/payment
 router.post('/:id/payment', validate(schemas.recordPayment), async (req, res) => {
   try {
-    const { amount_paid, tds_deducted = 0, payment_date, payment_method, transaction_reference, notes } = req.body;
+    // Support 'amount' as alias for 'amount_paid', 'reference_number' as alias for 'transaction_reference'
+    const amount_paid = req.body.amount_paid || req.body.amount;
+    const transaction_reference = req.body.transaction_reference || req.body.reference_number;
+    const { tds_deducted = 0, payment_date, payment_method, notes } = req.body;
     if (!amount_paid || !payment_method) {
       return res.status(400).json({ success: false, message: 'Amount and payment method are required' });
     }
@@ -352,7 +358,9 @@ router.post('/:id/payment', validate(schemas.recordPayment), async (req, res) =>
 // POST /api/invoices/calculate
 router.post('/calculate', async (req, res) => {
   try {
-    const { client_id, billing_period_start, billing_period_end, tax_type = 'none', discount_amount = 0, is_rcm_applicable = false } = req.body;
+    const { client_id, billing_period_start, billing_period_end, discount_amount = 0, is_rcm_applicable = false } = req.body;
+    const raw_tax_type = req.body.tax_type || 'none';
+    const tax_type = (raw_tax_type === 'GST_18') ? 'cgst_sgst' : raw_tax_type;
     const clientResult = await query('SELECT monthly_rate FROM clients WHERE id = $1', [client_id]);
     if (clientResult.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Client not found' });
@@ -372,8 +380,8 @@ router.delete('/:id', async (req, res) => {
     await query('DELETE FROM payments WHERE invoice_id = $1', [req.params.id]);
     
     // We do a hard delete for invoices, but ensure it exists first
-    const result = await query('DELETE FROM invoices WHERE id = $1 RETURNING id', [req.params.id]);
-    if (result.rows.length === 0) {
+    const result = await query('DELETE FROM invoices WHERE id = $1', [req.params.id]);
+    if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
     

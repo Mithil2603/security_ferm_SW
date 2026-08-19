@@ -537,34 +537,26 @@ router.get('/monthly-trend', async (req, res) => {
     // Monthly revenue actuals within the date range
     const trend = await query(
       `SELECT
-         strftime('%Y-%m', invoice_date) AS ym,
-         CAST(strftime('%Y', invoice_date) AS INTEGER) AS yr,
-         CAST(strftime('%m', invoice_date) AS INTEGER) AS month_num,
-         CASE strftime('%m', invoice_date)
-           WHEN '01' THEN 'Jan' WHEN '02' THEN 'Feb' WHEN '03' THEN 'Mar'
-           WHEN '04' THEN 'Apr' WHEN '05' THEN 'May' WHEN '06' THEN 'Jun'
-           WHEN '07' THEN 'Jul' WHEN '08' THEN 'Aug' WHEN '09' THEN 'Sep'
-           WHEN '10' THEN 'Oct' WHEN '11' THEN 'Nov' WHEN '12' THEN 'Dec'
-         END AS month_name,
+         DATE_FORMAT(invoice_date, '%Y-%m') AS ym,
          COALESCE(SUM(payment_received), 0) AS collected,
          COALESCE(SUM(final_amount), 0) AS billed
        FROM invoices
        WHERE status != 'cancelled'
-         AND invoice_date >= date($1)
-         AND invoice_date <= date($2)
+         AND invoice_date >= $1
+         AND invoice_date <= $2
        GROUP BY ym
        ORDER BY ym`,
       [fromDate, toDate]
     );
 
-    // Monthly payroll costs within range
+    // Monthly payroll costs within range (MySQL-compatible)
     const costs = await query(
       `SELECT
-         strftime('%Y-%m', payroll_month) AS ym,
+         DATE_FORMAT(payroll_month, '%Y-%m') AS ym,
          COALESCE(SUM(net_salary), 0) AS payroll_cost
        FROM payroll
-       WHERE date(payroll_month, 'start of month') <= date($2)
-         AND date(payroll_month, 'start of month', '+1 month', '-1 day') >= date($1)
+       WHERE DATE_FORMAT(payroll_month, '%Y-%m') >= DATE_FORMAT($1, '%Y-%m')
+         AND DATE_FORMAT(payroll_month, '%Y-%m') <= DATE_FORMAT($2, '%Y-%m')
        GROUP BY ym`,
       [fromDate, toDate]
     );
@@ -573,12 +565,12 @@ router.get('/monthly-trend', async (req, res) => {
 
     const expCosts = await query(
       `SELECT
-         strftime('%Y-%m', expense_date) AS ym,
+         DATE_FORMAT(expense_date, '%Y-%m') AS ym,
          COALESCE(SUM(amount), 0) AS exp_cost
        FROM expenses
        WHERE status IN ('approved', 'paid')
-         AND expense_date >= date($1)
-         AND expense_date <= date($2)
+         AND expense_date >= $1
+         AND expense_date <= $2
        GROUP BY ym`,
       [fromDate, toDate]
     );

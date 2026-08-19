@@ -8,6 +8,7 @@
 
 const logger = require('../utils/logger.js');
 const express = require('express');
+const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/errorLogger');
 const router = express.Router();
 const Joi = require('joi');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
@@ -25,7 +26,9 @@ router.post('/pf/calculate', async (req, res) => {
     const schema = Joi.object({
       basic_salary: Joi.number().min(0).required(),
       cap_at_statutory: Joi.boolean().default(false),
-    });
+      employee_id: Joi.any().optional(),
+      month: Joi.any().optional()
+    }).unknown(true);
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
@@ -35,8 +38,8 @@ router.post('/pf/calculate', async (req, res) => {
     logError({
       error: err,
       req,
-      severity: ERROR_SEVERITY.HIGH,
-      category: ERROR_CATEGORY.PAYROLL,
+      severity: ERROR_SEVERITY?.HIGH,
+      category: ERROR_CATEGORY?.PAYROLL,
       feature: 'pf-gratuity',
       extra: { message: 'PF calculate error:' }
     });
@@ -55,10 +58,10 @@ router.get('/pf/accounts', async (req, res) => {
     logError({
       error: err,
       req,
-      severity: ERROR_SEVERITY.HIGH,
-      category: ERROR_CATEGORY.PAYROLL,
+      severity: ERROR_SEVERITY?.HIGH,
+      category: ERROR_CATEGORY?.PAYROLL,
       feature: 'pf-gratuity',
-      extra: { message: 'List PF accounts error:' }
+      extra: { message: 'PF accounts list error:' }
     });
     res.status(500).json({ success: false, message: err.message });
   }
