@@ -90,6 +90,12 @@ function adaptSqlForMySQL(sql) {
   q = q.replace(/CAST\s*\(\s*(YEAR\([^)]+\))\s*AS\s+INTEGER\s*\)/gi, '$1');
   q = q.replace(/CAST\s*\(\s*(MONTH\([^)]+\))\s*AS\s+INTEGER\s*\)/gi, '$1');
 
+  // 17b. Simple date('now') subtraction -> DATEDIFF (Must run before rule 7)
+  q = q.replace(/\(\s*([^-\s]+)\s*-\s*date\('now'(?:,\s*'localtime')?\)\s*\)/gi, 'DATEDIFF($1, CURDATE())');
+  q = q.replace(/\(\s*date\('now'(?:,\s*'localtime')?\)\s*-\s*([^)\s]+)\s*\)/gi, 'DATEDIFF(CURDATE(), $1)');
+  q = q.replace(/date\('now'(?:,\s*'localtime')?\)\s*-\s*([a-zA-Z0-9_.]+)/gi, 'DATEDIFF(CURDATE(), $1)');
+  q = q.replace(/([a-zA-Z0-9_.]+)\s*-\s*date\('now'(?:,\s*'localtime')?\)/gi, 'DATEDIFF($1, CURDATE())');
+
   // 7. date('now') or date('now', 'localtime') → CURDATE()
   q = q.replace(/date\s*\(\s*'now'\s*,?\s*'?localtime'?\s*\)/gi, 'CURDATE()');
   q = q.replace(/date\s*\(\s*'now'\s*\)/gi, 'CURDATE()');
@@ -103,6 +109,13 @@ function adaptSqlForMySQL(sql) {
   // 10. date(col, '+N days') → DATE_ADD(col, INTERVAL N DAY)
   q = q.replace(/date\s*\(\s*([^,)]+)\s*,\s*'\+(\d+)\s*days?'\s*\)/gi, 'DATE_ADD($1, INTERVAL $2 DAY)');
   q = q.replace(/date\s*\(\s*([^,)]+)\s*,\s*'-(\d+)\s*days?'\s*\)/gi, 'DATE_SUB($1, INTERVAL $2 DAY)');
+
+  // 10b. date('now', 'localtime', '+N days') → DATE_ADD(CURDATE(), INTERVAL N DAY)
+  q = q.replace(/date\s*\(\s*'now'\s*(?:,\s*'localtime')?\s*,\s*'\+(\d+)\s*days?'\s*\)/gi, 'DATE_ADD(CURDATE(), INTERVAL $1 DAY)');
+  q = q.replace(/date\s*\(\s*'now'\s*(?:,\s*'localtime')?\s*,\s*'-(\d+)\s*days?'\s*\)/gi, 'DATE_SUB(CURDATE(), INTERVAL $1 DAY)');
+
+  // 10c. date('now', 'localtime', 'start of month') → DATE_FORMAT(CURDATE(), '%Y-%m-01')
+  q = q.replace(/date\s*\(\s*'now'\s*(?:,\s*'localtime')?\s*,\s*'start of month'\s*\)/gi, "DATE_FORMAT(CURDATE(), '%Y-%m-01')");
 
   // 11. date(col, '+1 month') → DATE_ADD(col, INTERVAL 1 MONTH)
   q = q.replace(/date\s*\(\s*([^,)]+)\s*,\s*'\+1 month'\s*\)/gi, 'DATE_ADD($1, INTERVAL 1 MONTH)');
@@ -132,11 +145,7 @@ function adaptSqlForMySQL(sql) {
   // 17. CAST(julianday('now') - julianday(v.due_date) AS INTEGER) -> DATEDIFF(CURDATE(), v.due_date)
   q = q.replace(/CAST\(\s*julianday\('now'\)\s*-\s*julianday\(([^)]+)\)\s*AS\s*INTEGER\s*\)/gi, 'DATEDIFF(CURDATE(), $1)');
 
-  // 17b. Simple date('now') subtraction -> DATEDIFF
-  q = q.replace(/\(\s*([^-\s]+)\s*-\s*date\('now'(?:,\s*'localtime')?\)\s*\)/gi, 'DATEDIFF($1, CURDATE())');
-  q = q.replace(/\(\s*date\('now'(?:,\s*'localtime')?\)\s*-\s*([^)\s]+)\s*\)/gi, 'DATEDIFF(CURDATE(), $1)');
-  q = q.replace(/date\('now'(?:,\s*'localtime')?\)\s*-\s*([a-zA-Z0-9_.]+)/gi, 'DATEDIFF(CURDATE(), $1)');
-  q = q.replace(/([a-zA-Z0-9_.]+)\s*-\s*date\('now'(?:,\s*'localtime')?\)/gi, 'DATEDIFF($1, CURDATE())');
+
 
   // 18. Remove SQLite-only pragma
   q = q.replace(/PRAGMA\s+\w+\s*=\s*\w+;?/gi, '');
