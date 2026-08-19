@@ -117,6 +117,9 @@ function adaptSqlForMySQL(sql) {
   // 10c. date('now', 'localtime', 'start of month') → DATE_FORMAT(CURDATE(), '%Y-%m-01')
   q = q.replace(/date\s*\(\s*'now'\s*(?:,\s*'localtime')?\s*,\s*'start of month'\s*\)/gi, "DATE_FORMAT(CURDATE(), '%Y-%m-01')");
 
+  // 10d. date('now', 'localtime', 'start of month', '-N days')
+  q = q.replace(/date\s*\(\s*'now'\s*(?:,\s*'localtime')?\s*,\s*'start of month'\s*,\s*'-(\d+)\s*days?'\s*\)/gi, "DATE_SUB(DATE_FORMAT(CURDATE(), '%Y-%m-01'), INTERVAL $1 DAY)");
+
   // 11. date(col, '+1 month') → DATE_ADD(col, INTERVAL 1 MONTH)
   q = q.replace(/date\s*\(\s*([^,)]+)\s*,\s*'\+1 month'\s*\)/gi, 'DATE_ADD($1, INTERVAL 1 MONTH)');
 
