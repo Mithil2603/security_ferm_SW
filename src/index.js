@@ -57,7 +57,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-master-passcode'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-master-passcode', 'x-refresh-token'],
   maxAge: 86400
 }));
 app.use(cookieParser());
