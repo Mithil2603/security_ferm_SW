@@ -11,6 +11,7 @@
     "test": "jest --forceExit --detectOpenHandles",
     "test:coverage": "jest --coverage --forceExit --detectOpenHandles",
     "test:watch": "jest --watch",
+    "seed": "node seed.js",
     "postinstall": "npm run build:frontend"
   },
   "build": {

@@ -187,7 +187,7 @@ router.post('/', validate(schemas.createInvoice), async (req, res) => {
     }
 
     // Get client monthly rate
-    const clientResult = await query('SELECT * FROM clients WHERE id = $1 AND is_active = true', [client_id]);
+    const clientResult = await query('SELECT * FROM clients WHERE id = $1 AND is_active = 1', [client_id]);
     if (clientResult.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Client not found or inactive' });
     }

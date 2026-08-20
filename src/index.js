@@ -11,7 +11,7 @@ const cookieParser = require('cookie-parser');
 const fs = require('fs');
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3000;
 
 // Security middleware with Content Security Policy
 app.use(

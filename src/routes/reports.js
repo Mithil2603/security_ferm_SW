@@ -32,7 +32,7 @@ router.get('/client-revenue', async (req, res) => {
         ROUND(CASE WHEN SUM(i.final_amount) > 0 THEN SUM(i.payment_received) * 100.0 / SUM(i.final_amount) ELSE 0 END, 2) as collection_rate
        FROM clients c
        LEFT JOIN invoices i ON c.id = i.client_id ${from_date || to_date || client_id ? `AND ${conditions.filter(c => c !== "i.status != 'cancelled'").join(' AND ')}` : ''}
-       WHERE c.is_active = true
+       WHERE c.is_active = 1
        GROUP BY c.id, c.name, c.city
        ORDER BY total_billed DESC`,
       params
@@ -324,7 +324,7 @@ router.get('/advanced-metrics', async (req, res) => {
            AND invoice_date <= date($2)
          GROUP BY client_id
        ) inv ON c.id = inv.client_id
-       LEFT JOIN employees e ON e.assigned_client_id = c.id AND e.is_active = true
+       LEFT JOIN employees e ON e.assigned_client_id = c.id AND e.is_active = 1
        LEFT JOIN (
          SELECT emp.assigned_client_id,
                 COALESCE(SUM(p.net_salary), 0) AS guard_cost
@@ -334,7 +334,7 @@ router.get('/advanced-metrics', async (req, res) => {
            AND (date(p.payroll_month, 'start of month', '+1 month', '-1 day')) >= date($1)
          GROUP BY emp.assigned_client_id
        ) pay ON c.id = pay.assigned_client_id
-       WHERE c.is_active = true
+       WHERE c.is_active = 1
        GROUP BY c.id, c.name, c.monthly_rate, inv.total_billed, inv.total_collected, pay.guard_cost
        ORDER BY total_collected DESC`,
       [fromDate, toDate]
@@ -406,7 +406,7 @@ router.get('/alerts', async (req, res) => {
               (contract_end_date - date('now', 'localtime')) AS days_left,
               monthly_rate
        FROM clients
-       WHERE is_active = true
+       WHERE is_active = 1
          AND contract_end_date IS NOT NULL
          AND contract_end_date >= date('now', 'localtime')
          AND contract_end_date <= date('now', 'localtime', '+60 days')
@@ -754,7 +754,7 @@ router.get('/business-analytics', async (req, res) => {
     const revenuePerEmp = await query(
       `SELECT
          COALESCE(SUM(i.payment_received), 0) AS total_revenue,
-         (SELECT COUNT(*) FROM employees WHERE is_active = true) AS active_employees,
+         (SELECT COUNT(*) FROM employees WHERE is_active = 1) AS active_employees,
          (SELECT COALESCE(AVG(net_salary), 0) FROM payroll 
           WHERE payroll_month >= date($1, 'start of month') AND payroll_month <= date($2)) AS avg_salary
        FROM invoices i
@@ -969,8 +969,8 @@ router.get('/cost-per-guard', async (req, res) => {
              AND invoice_date <= date($2)
          ), 0) AS total_billed
        FROM clients c
-       LEFT JOIN employees e ON e.assigned_client_id = c.id AND e.is_active = true
-       WHERE c.is_active = true
+       LEFT JOIN employees e ON e.assigned_client_id = c.id AND e.is_active = 1
+       WHERE c.is_active = 1
        GROUP BY c.id, c.name, c.monthly_rate
        HAVING COUNT(e.id) > 0
        ORDER BY total_billed DESC`,

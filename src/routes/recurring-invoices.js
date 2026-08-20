@@ -73,7 +73,7 @@ router.post('/', async (req, res) => {
     // Auto-fetch monthly_rate from client if not provided
     if (!value.monthly_rate) {
       const { query } = require('../database/connection');
-      const clientRow = await query('SELECT monthly_rate FROM clients WHERE id = $1 AND is_active = true', [value.client_id]);
+      const clientRow = await query('SELECT monthly_rate FROM clients WHERE id = $1 AND is_active = 1', [value.client_id]);
       if (clientRow.rows.length === 0) {
         return res.status(404).json({ success: false, message: 'Client not found or inactive' });
       }

@@ -68,7 +68,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     }
 
     // Find user
-    const result = await query('SELECT * FROM users WHERE email = $1 AND is_active = true', [email.toLowerCase()]);
+    const result = await query('SELECT * FROM users WHERE email = $1 AND is_active = 1', [email.toLowerCase()]);
     
     if (result.rows.length === 0) {
       logger.warn(`⚠️ Failed login attempt: Unknown user or inactive (${email}) from IP ${req.ip}`);
@@ -226,7 +226,7 @@ router.post('/refresh', async (req, res) => {
 
     const userId = result.rows[0].user_id;
     const userResult = await query(
-      'SELECT * FROM users WHERE id = $1 AND is_active = true',
+      'SELECT * FROM users WHERE id = $1 AND is_active = 1',
       [userId]
     );
     
@@ -304,7 +304,7 @@ router.put('/update-profile', authMiddleware, async (req, res) => {
     res.json({ success: true, message: 'Profile updated successfully', data: updated.rows[0] });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'auth' });
-    if (error.code === '23505' || (error.message && error.message.includes('UNIQUE'))) {
+    if (error.code === 'ER_DUP_ENTRY' || error.errno === 1062 || error.sqlState === '23000' || error.code === '23505' || error.code === 'SQLITE_CONSTRAINT_UNIQUE' || (error.message && (error.message.includes('Duplicate') || error.message.includes('UNIQUE')))) {
       return res.status(400).json({ success: false, message: 'Email already in use' });
     }
     logger.error('Update profile error:', error);
@@ -372,7 +372,7 @@ router.post('/users', authMiddleware, requireRole('admin'), async (req, res) => 
     res.status(201).json({ success: true, data: result.rows[0], message: 'User created successfully' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'auth' });
-    if (error.code === '23505' || error.code === 'SQLITE_CONSTRAINT_UNIQUE' || (error.message && error.message.includes('UNIQUE'))) {
+    if (error.code === 'ER_DUP_ENTRY' || error.errno === 1062 || error.sqlState === '23000' || error.code === '23505' || error.code === 'SQLITE_CONSTRAINT_UNIQUE' || (error.message && (error.message.includes('Duplicate') || error.message.includes('UNIQUE')))) {
       return res.status(400).json({ success: false, message: 'Email already exists' });
     }
     res.status(500).json({ success: false, message: 'Failed to create user' });
@@ -386,7 +386,7 @@ router.post('/forgot-password', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Email is required' });
     }
 
-    const result = await query('SELECT * FROM users WHERE email = $1 AND is_active = true', [email.toLowerCase()]);
+    const result = await query('SELECT * FROM users WHERE email = $1 AND is_active = 1', [email.toLowerCase()]);
     if (result.rows.length === 0) {
       // Don't reveal that the user doesn't exist for security reasons
       return res.json({ success: true, message: 'If an account exists, a password reset email has been sent.' });

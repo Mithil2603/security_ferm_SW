@@ -56,7 +56,7 @@ router.get('/', async (req, res) => {
         (SELECT COUNT(*) FROM invoices i WHERE i.client_id = c.id) as total_invoices,
         (SELECT COALESCE(SUM(i.final_amount), 0) FROM invoices i WHERE i.client_id = c.id AND i.status != 'cancelled') as total_billed,
         (SELECT COALESCE(SUM(i.payment_received), 0) FROM invoices i WHERE i.client_id = c.id) as total_paid,
-        (SELECT COUNT(*) FROM employees e WHERE e.assigned_client_id = c.id AND e.is_active = true) as employee_count
+        (SELECT COUNT(*) FROM employees e WHERE e.assigned_client_id = c.id AND e.is_active = 1) as employee_count
        FROM clients c 
        ${whereClause}
        ORDER BY c.is_active DESC, c.name ASC
@@ -86,7 +86,7 @@ router.get('/:id', async (req, res) => {
       `SELECT c.*, 
         (SELECT COALESCE(SUM(i.final_amount), 0) FROM invoices i WHERE i.client_id = c.id AND i.status != 'cancelled') as total_billed,
         (SELECT COALESCE(SUM(i.payment_received), 0) FROM invoices i WHERE i.client_id = c.id) as total_paid,
-        (SELECT COUNT(*) FROM employees e WHERE e.assigned_client_id = c.id AND e.is_active = true) as employee_count
+        (SELECT COUNT(*) FROM employees e WHERE e.assigned_client_id = c.id AND e.is_active = 1) as employee_count
        FROM clients c WHERE c.id = $1`,
       [req.params.id]
     );
@@ -182,7 +182,7 @@ router.post('/', validate(schemas.createClient), async (req, res) => {
 
     // Check for duplicate client name
     const existingClient = await query(
-      'SELECT id FROM clients WHERE name LIKE $1 AND is_active = true LIMIT 1',
+      'SELECT id FROM clients WHERE name LIKE $1 AND is_active = 1 LIMIT 1',
       [name]
     );
     if (existingClient.rows.length > 0) {
@@ -240,7 +240,7 @@ router.put('/:id', validate(schemas.updateClient), async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const result = await query(
-      'UPDATE clients SET is_active = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+      'UPDATE clients SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
       [req.params.id]
     );
     if (result.rowCount === 0) {

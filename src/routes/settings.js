@@ -29,7 +29,7 @@ router.get('/salary-structures', async (req, res) => {
       `SELECT ss.*,
               COUNT(e.id) AS active_guards
        FROM salary_structures ss
-       LEFT JOIN employees e ON e.salary_structure_id = ss.id AND e.is_active = true
+       LEFT JOIN employees e ON e.salary_structure_id = ss.id AND e.is_active = 1
        GROUP BY ss.id
        ORDER BY ss.is_active DESC, ss.base_salary ASC`
     );
@@ -116,7 +116,7 @@ router.delete('/salary-structures/:id', async (req, res) => {
   try {
     // Check if any active employees are on this structure
     const check = await query(
-      'SELECT COUNT(*) AS cnt FROM employees WHERE salary_structure_id = $1 AND is_active = true',
+      'SELECT COUNT(*) AS cnt FROM employees WHERE salary_structure_id = $1 AND is_active = 1',
       [req.params.id]
     );
     if (parseInt(check.rows[0].cnt) > 0) {
@@ -126,7 +126,7 @@ router.delete('/salary-structures/:id', async (req, res) => {
       });
     }
 
-    await query('UPDATE salary_structures SET is_active = false WHERE id = $1', [req.params.id]);
+    await query('UPDATE salary_structures SET is_active = 0 WHERE id = $1', [req.params.id]);
     res.json({ success: true, message: 'Salary structure deactivated' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });

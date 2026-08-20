@@ -308,7 +308,7 @@ router.put('/:id', validate(schemas.updateEmployee), async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const result = await query(
-      'UPDATE employees SET is_active = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+      'UPDATE employees SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
       [req.params.id]
     );
     if (result.rowCount === 0) {
@@ -334,7 +334,7 @@ router.delete('/:id/hard', async (req, res) => {
     res.json({ success: true, message: 'Employee permanently deleted' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
-    if (error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY' || (error.message && error.message.includes('FOREIGN KEY'))) {
+    if (error.code === 'ER_ROW_IS_REFERENCED' || error.code === 'ER_ROW_IS_REFERENCED_2' || error.errno === 1451 || error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY' || (error.message && error.message.includes('FOREIGN KEY'))) {
       return res.status(400).json({ success: false, message: 'Cannot delete employee: linked payroll or attendance records exist. Please delete them first.' });
     }
     res.status(500).json({ success: false, message: 'Failed to permanently delete employee' });
@@ -344,7 +344,7 @@ router.delete('/:id/hard', async (req, res) => {
 // GET /api/employees/salary-structures
 router.get('/meta/salary-structures', async (req, res) => {
   try {
-    const result = await query('SELECT * FROM salary_structures WHERE is_active = true ORDER BY base_salary ASC');
+    const result = await query('SELECT * FROM salary_structures WHERE is_active = 1 ORDER BY base_salary ASC');
     res.json({ success: true, data: result.rows });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });

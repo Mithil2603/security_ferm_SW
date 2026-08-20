@@ -86,7 +86,7 @@ router.post('/', async (req, res) => {
     const { employee_id, transaction_date, type, category, amount, description } = value;
 
     // Verify employee exists
-    const empCheck = await query('SELECT id FROM employees WHERE id = $1 AND is_active = true', [employee_id]);
+    const empCheck = await query('SELECT id FROM employees WHERE id = $1 AND is_active = 1', [employee_id]);
     if (empCheck.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Employee not found or inactive' });
     }

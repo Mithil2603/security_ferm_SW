@@ -327,4 +327,4 @@ const db = {
 // ─────────────────────────────────────────────────────────────────────────────
 // Exports — same surface as before
 // ─────────────────────────────────────────────────────────────────────────────
-module.exports = { pool: { query: async (t, p) => query(t, p) }, query, db, initDB, adaptSqlForMySQL };
+module.exports = { pool: { query: async (t, p) => query(t, p), end: async () => { if (pool) await pool.end(); } }, query, db, initDB, adaptSqlForMySQL };

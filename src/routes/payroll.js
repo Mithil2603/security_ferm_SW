@@ -19,7 +19,7 @@ async function calculatePayroll(employee_id, payroll_month, manual_days_worked) 
       ss.other_allowances, ss.pf_percentage, ss.esi_applicable
      FROM employees e
      LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
-     WHERE e.id = $1 AND e.is_active = true`,
+     WHERE e.id = $1 AND e.is_active = 1`,
     [employee_id]
   );
 
