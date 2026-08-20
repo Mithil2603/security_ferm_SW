@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "build:frontend": "cd frontend && npm run build",
-    "build": "npm run build:frontend && electron-builder --config.directories.output=\"%TEMP%/electron-build-output\" && powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path 'electron-dist'; Copy-Item -Path ($env:TEMP + '/electron-build-output/*') -Destination 'electron-dist/' -Recurse -Force\"",
+    "build": "node scripts/build.js",
     "test": "jest --forceExit --detectOpenHandles",
     "test:coverage": "jest --coverage --forceExit --detectOpenHandles",
     "test:watch": "jest --watch",
@@ -25,10 +25,7 @@
       "preload.js",
       "src/**/*",
       "frontend-dist/**/*",
-      "package.json",
-      "node_modules/**/*",
-      "!tests/**/*",
-      "!scratch/**/*"
+      "package.json"
     ],
     "asarUnpack": [
       "node_modules/mysql2/**/*"
@@ -71,7 +68,6 @@
     "helmet": "^8.2.0",
     "joi": "^18.2.1",
     "jsonwebtoken": "^9.0.3",
-    "md-to-pdf": "^5.2.5",
     "multer": "^2.1.1",
     "mysql2": "^3.23.3",
     "node-cron": "^4.2.1",
