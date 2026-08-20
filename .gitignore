@@ -49,6 +49,13 @@ test_conn.js
 verify_password.js
 verify.js
 seed_employees.js
+debug*.txt
+failures.txt
+fix*.js
+log*.txt
+patch_*.js
+test_results.json
+test_run.txt
 
 # User uploads (runtime generated)
 uploads/

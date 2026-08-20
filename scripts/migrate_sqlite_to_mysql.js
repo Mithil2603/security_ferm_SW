@@ -17,7 +17,14 @@ const path = require('path');
 const fs = require('fs');
 
 // ── SQLite source ────────────────────────────────────────────────────────────
-const Database = require('better-sqlite3');
+let Database;
+try {
+  Database = require('better-sqlite3');
+} catch (e) {
+  console.error('❌ Missing optional dependency "better-sqlite3".');
+  console.error('   To run this one-time SQLite-to-MySQL data migration, run: npm install better-sqlite3 --no-save');
+  process.exit(1);
+}
 const dbPath = process.env.SQLITE_SOURCE_PATH
   || path.join(process.env.APPDATA || process.env.HOME, 'secuirty-agency-software', 'database.sqlite');
 

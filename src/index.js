@@ -1,6 +1,9 @@
 require('dotenv').config();
 const { runStartupSecurityCheck } = require('./utils/startupSecurityCheck');
-runStartupSecurityCheck();
+const startupOk = runStartupSecurityCheck();
+if (!startupOk) {
+  process.exit(1);
+}
 const express = require('express');
 const logger = require('./utils/logger');
 const cors = require('cors');

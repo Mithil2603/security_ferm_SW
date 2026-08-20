@@ -35,12 +35,19 @@ function runStartupSecurityCheck() {
   // ── JWT_SECRET ────────────────────────────────────────────────────────────
   let jwtSecret = process.env.JWT_SECRET;
   if (!jwtSecret || jwtSecret.trim() === '') {
-    // Generate a secure 64-character random key for development/electron desktop mode
-    const fallbackSecret = crypto.randomBytes(32).toString('hex');
-    process.env.JWT_SECRET = fallbackSecret;
-    warnings.push('JWT_SECRET was not set in .env — generated a secure runtime secret for this session');
+    if (isProduction) {
+      errors.push('JWT_SECRET is not set — required in production to issue and verify persistent tokens');
+    } else {
+      const fallbackSecret = crypto.randomBytes(32).toString('hex');
+      process.env.JWT_SECRET = fallbackSecret;
+      warnings.push('JWT_SECRET was not set in .env — generated a secure runtime secret for this session');
+    }
   } else if (isPlaceholder(jwtSecret)) {
-    warnings.push('JWT_SECRET looks like a placeholder — consider generating a strong random secret (32+ characters)');
+    if (isProduction) {
+      errors.push('JWT_SECRET is using an insecure placeholder in production');
+    } else {
+      warnings.push('JWT_SECRET looks like a placeholder — consider generating a strong random secret (32+ characters)');
+    }
   } else if (jwtSecret.length < 32) {
     warnings.push(`JWT_SECRET is shorter than recommended (${jwtSecret.length} chars) — minimum 32 characters suggested`);
   }
@@ -82,10 +89,11 @@ function runStartupSecurityCheck() {
     warnings.push(`BCRYPT_ROUNDS=${rounds} is low — use 10 or higher`);
   }
 
-  // ── Output ────────────────────────────────────────────────────────────────
+  // ── Output & Decision ─────────────────────────────────────────────────────
   if (errors.length > 0) {
-    logger.error('\n🔴 CONFIGURATION ERRORS:');
+    logger.error('\n🔴 CONFIGURATION ERRORS — Server cannot start:');
     errors.forEach((e) => logger.error(`   ✗ ${e}`));
+    return false;
   }
 
   if (warnings.length > 0) {
@@ -93,9 +101,8 @@ function runStartupSecurityCheck() {
     warnings.forEach((w) => logger.warn(`   ⚠  ${w}`));
   }
 
-  if (errors.length === 0 && warnings.length === 0) {
-    logger.info('✅ Startup checks passed — environment and secrets configured');
-  }
+  logger.info('✅ Startup checks passed — environment and secrets configured');
+  return true;
 }
 
 module.exports = { runStartupSecurityCheck };

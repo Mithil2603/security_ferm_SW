@@ -1,8 +1,23 @@
-const { app } = require('electron');
-const Database = require('better-sqlite3');
+/**
+ * test_db.js
+ * Quick utility to verify MySQL connection and admin users
+ */
+require('dotenv').config();
+const { query, initDB, pool } = require('./src/database/connection');
 
-app.whenReady().then(() => {
-  const db = new Database('database.sqlite');
-  console.log('RESULT:', JSON.stringify(db.prepare('SELECT COUNT(*) as count FROM users WHERE role = ?').all('admin')));
-  app.quit();
-});
+async function testConnection() {
+  try {
+    await initDB();
+    const result = await query('SELECT COUNT(*) as count FROM users WHERE role = ?', ['admin']);
+    console.log('✅ MySQL Database Connection Successful!');
+    console.log('Admin user count:', result.rows[0].count);
+  } catch (err) {
+    console.error('❌ Database connection failed:', err.message);
+    process.exit(1);
+  } finally {
+    if (pool && pool.end) await pool.end();
+    process.exit(0);
+  }
+}
+
+testConnection();
