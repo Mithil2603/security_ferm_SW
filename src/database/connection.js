@@ -209,12 +209,12 @@ const query = async (text, params = []) => {
       } else {
         const numQ = (mysqlText.match(/\?/g) || []).length;
         if (numQ !== mappedParams.length) {
-          console.log('SQL PARAMS MISMATCH:', { mysqlText, numQ, mappedParams });
+          logger.warn('SQL params mismatch:', { expected: numQ, got: mappedParams.length, query: mysqlText.slice(0, 100) });
         }
         [executeRows, fields] = await pool.execute(mysqlText, mappedParams);
       }
     } catch (err) {
-      console.log('Query failed in pool.execute:', { mysqlText, mappedParams, originalError: err.message });
+      logger.error('Query execution failed:', { query: mysqlText.slice(0, 100), error: err.message });
       throw err;
     }
     const rows = executeRows;
@@ -232,15 +232,20 @@ const query = async (text, params = []) => {
       if (hasReturning && header.insertId) {
         // Simulate RETURNING by fetching the inserted row
         const tableMatch = mysqlText.match(/INSERT\s+(?:IGNORE\s+)?INTO\s+(`?\w+`?)/i);
-        console.log('DEBUG RETURNING:', { mysqlText, hasReturning, insertId: header.insertId, tableMatch: tableMatch ? tableMatch[1] : null });
         if (tableMatch && tableMatch[1]) {
           const tableName = tableMatch[1].replace(/`/g, '');
+          const returningMatch = text.match(/RETURNING\s+(.+)$/i);
+          const returnCols = returningMatch
+            ? returningMatch[1].split(',').map(c => `\`${c.trim()}\``).join(', ')
+            : 'id';
           try {
-            const [fetchRows] = await pool.execute(`SELECT * FROM \`${tableName}\` WHERE id = ?`, [header.insertId]);
-            console.log('DEBUG FETCHED ROWS:', fetchRows);
+            const [fetchRows] = await pool.execute(
+              `SELECT ${returnCols} FROM \`${tableName}\` WHERE id = ?`,
+              [header.insertId]
+            );
             result.rows = fetchRows.length > 0 ? fetchRows : [{ id: header.insertId }];
           } catch (e) {
-            console.log('DEBUG FETCH ERROR:', e.message);
+            logger.warn('RETURNING simulation fetch failed:', { table: tableName, insertId: header.insertId, error: e.message });
             result.rows = [{ id: header.insertId }];
           }
         } else {

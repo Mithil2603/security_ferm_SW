@@ -16,25 +16,34 @@ function computeMachineHwid() {
   const crypto = require('crypto');
   const { execSync } = require('child_process');
 
-  const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || 'C:\\Users\\Default', 'AppData', 'Roaming');
+  const appData = process.env.APPDATA || 
+    path.join(process.env.USERPROFILE || 'C:\\Users\\Default', 'AppData', 'Roaming');
   const userDataDir = path.join(appData, 'secuirty-agency-software');
   const hwidPath = path.join(userDataDir, 'hwid.txt');
 
+  // Always ensure directory exists BEFORE trying to read/write hwid.txt
+  try {
+    if (!fs.existsSync(userDataDir)) {
+      fs.mkdirSync(userDataDir, { recursive: true });
+    }
+  } catch (e) {
+    logger.warn('Could not create userData directory for HWID:', e.message);
+  }
+
+  // Return cached HWID if it already exists
   if (fs.existsSync(hwidPath)) {
     try {
       const cached = fs.readFileSync(hwidPath, 'utf8').trim();
-      if (cached && cached.length > 5) return cached;
+      if (cached && cached.startsWith('HWID-') && cached.length > 10) return cached;
     } catch {}
   }
 
   let uuid;
-  // Method 1: WMIC
   try {
     const raw = execSync('wmic csproduct get uuid', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
     uuid = raw.split('\n').map(l => l.trim()).filter(l => l && l !== 'UUID')[0];
   } catch {}
 
-  // Method 2: PowerShell CIM
   if (!uuid || uuid.length < 8) {
     try {
       const raw = execSync('powershell -NoProfile -Command "(Get-CimInstance Win32_ComputerSystemProduct).UUID"', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
@@ -42,7 +51,6 @@ function computeMachineHwid() {
     } catch {}
   }
 
-  // Method 3: PowerShell MachineGuid from Registry
   if (!uuid || uuid.length < 8) {
     try {
       const raw = execSync('powershell -NoProfile -Command "(Get-ItemProperty -Path \'HKLM:\\SOFTWARE\\Microsoft\\Cryptography\').MachineGuid"', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
@@ -50,20 +58,23 @@ function computeMachineHwid() {
     } catch {}
   }
 
-  let hwid;
-  if (uuid && uuid.length > 8) {
-    const hash = crypto.createHash('sha256').update(uuid).digest('hex');
-    hwid = `HWID-${hash.substring(0, 4).toUpperCase()}-${hash.substring(4, 8).toUpperCase()}-${hash.substring(8, 12).toUpperCase()}`;
-  } else {
-    hwid = `HWID-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
+  // KEY CHANGE: if UUID detection failed entirely, throw — don't generate a random fallback
+  // A random HWID that isn't persisted will be different every call and break license binding
+  if (!uuid || uuid.length < 8) {
+    logger.error('HWID: All UUID detection methods failed. Cannot generate stable hardware ID.');
+    throw new Error('Unable to determine machine hardware ID. Ensure this is running on Windows with WMI access.');
   }
 
+  const hash = crypto.createHash('sha256').update(uuid).digest('hex');
+  const hwid = `HWID-${hash.substring(0, 4).toUpperCase()}-${hash.substring(4, 8).toUpperCase()}-${hash.substring(8, 12).toUpperCase()}`;
+
+  // Persist so future calls are instant
   try {
-    if (!fs.existsSync(userDataDir)) {
-      fs.mkdirSync(userDataDir, { recursive: true });
-    }
     fs.writeFileSync(hwidPath, hwid, { encoding: 'utf8' });
-  } catch {}
+  } catch (e) {
+    // Log but don't crash — HWID was computed correctly, just not cached
+    logger.warn('Could not persist HWID to disk:', e.message);
+  }
 
   return hwid;
 }
@@ -88,7 +99,12 @@ router.get('/hardware-id', (req, res) => {
     const hwid = computeMachineHwid();
     return res.json({ success: true, hardwareId: hwid });
   } catch (err) {
-    return res.json({ success: false, hardwareId: 'HWID-A1B2-C3D4' });
+    // Don't return a fake HWID — tell the frontend detection failed
+    return res.status(500).json({ 
+      success: false, 
+      hardwareId: null,
+      message: err.message 
+    });
   }
 });
 

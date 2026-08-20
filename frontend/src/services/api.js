@@ -1,12 +1,14 @@
 import axios from 'axios';
 import { errorInterceptor } from './errorInterceptor';
 
-const savedServerIP = localStorage.getItem('serverIP');
-const defaultAPI = import.meta.env.VITE_API_URL || 'http://127.0.0.1:3000/api';
-const baseURL = savedServerIP ? `http://${savedServerIP}:3000/api` : defaultAPI;
+const getBaseURL = () => {
+  const savedServerIP = localStorage.getItem('serverIP');
+  const defaultAPI = import.meta.env.VITE_API_URL || 'http://127.0.0.1:3000/api';
+  return savedServerIP ? `http://${savedServerIP}:3000/api` : defaultAPI;
+};
 
 const api = axios.create({
-  baseURL,
+  baseURL: getBaseURL(),
   headers: {
     'Content-Type': 'application/json',
   },
@@ -14,6 +16,8 @@ const api = axios.create({
 });
 
 api.interceptors.request.use((config) => {
+  config.baseURL = getBaseURL();
+
   const token = localStorage.getItem('token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -65,7 +69,7 @@ api.interceptors.response.use(
       try {
         const storedRefreshToken = localStorage.getItem('refreshToken');
         const { data } = await axios.post(
-          `${baseURL}/auth/refresh`,
+          `${getBaseURL()}/auth/refresh`,
           { refreshToken: storedRefreshToken },
           {
             withCredentials: true,

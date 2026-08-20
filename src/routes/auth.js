@@ -539,7 +539,7 @@ router.post('/setup-init', async (req, res) => {
     // Hash password and create admin
     const hash = bcrypt.hashSync(password, parseInt(process.env.BCRYPT_ROUNDS) || 12);
 
-    await query(`
+    const insertResult = await query(`
       INSERT INTO users (email, password_hash, full_name, role, is_active, created_at)
       VALUES ($1, $2, $3, $4, 1, CURRENT_TIMESTAMP)
     `, [
@@ -549,12 +549,14 @@ router.post('/setup-init', async (req, res) => {
       'admin'
     ]);
 
+    const newAdminId = insertResult.insertId;
+
     logger.info(`✅ Admin account created during setup: ${email}`);
 
     // Seed test data if user opted in
     if (seed_test_data) {
       try {
-        await seedTestData();
+        await seedTestData(newAdminId);
         logger.info('✅ Test data seeded during setup');
       } catch (seedErr) {
         logger.warn('⚠️ Test data seeding failed (non-critical):', seedErr.message);
@@ -578,7 +580,7 @@ router.post('/setup-init', async (req, res) => {
 });
 
 // Helper: Seed test data (clients)
-async function seedTestData() {
+async function seedTestData(adminId = 1) {
   const clientsData = [
     { name: 'Royal Residency', rate: 45000 },
     { name: 'Green Heights', rate: 50000 },
@@ -609,7 +611,7 @@ async function seedTestData() {
       await query(`
         INSERT INTO clients (name, address, city, state, postal_code, email, phone, contact_person,
           contract_start_date, monthly_rate, billing_cycle, is_active, created_by)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, 1)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, $12)
       `, [
         client.name,
         '123, Ahmedabad',
@@ -621,7 +623,8 @@ async function seedTestData() {
         'Test Contact',
         today,
         client.rate,
-        1
+        1,
+        adminId
       ]);
     } catch (err) {
       // Skip if insert fails (e.g., duplicate)
