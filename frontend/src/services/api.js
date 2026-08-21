@@ -1,11 +1,8 @@
 import axios from 'axios';
 import { errorInterceptor } from './errorInterceptor';
+import { getApiBaseUrl } from '../utils/apiUrl';
 
-const getBaseURL = () => {
-  const savedServerIP = localStorage.getItem('serverIP');
-  const defaultAPI = import.meta.env.VITE_API_URL || 'http://127.0.0.1:3000/api';
-  return savedServerIP ? `http://${savedServerIP}:3000/api` : defaultAPI;
-};
+const getBaseURL = getApiBaseUrl;
 
 const api = axios.create({
   baseURL: getBaseURL(),

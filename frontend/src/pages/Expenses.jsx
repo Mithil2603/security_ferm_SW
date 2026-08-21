@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Receipt, Plus, CheckCircle, XCircle, Trash2, X } from 'lucide-react';
 import api from '../services/api';
+import { getServerBaseUrl } from '../utils/apiUrl';
 import { format } from 'date-fns';
 import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
@@ -258,7 +259,7 @@ export default function Expenses() {
                         <span>By {expense.created_by_name}</span>
                         {expense.receipt_url && (
                           <a 
-                            href={`${(localStorage.getItem('serverIP') ? `http://${localStorage.getItem('serverIP')}:3000` : (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/\/api$/, '') : 'http://localhost:3000'))}${expense.receipt_url}`} 
+                            href={`${getServerBaseUrl()}${expense.receipt_url}`} 
                             target="_blank" 
                             rel="noreferrer" 
                             className="text-teal-600 hover:underline flex items-center gap-1 ml-2"

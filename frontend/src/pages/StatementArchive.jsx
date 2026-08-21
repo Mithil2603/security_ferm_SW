@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Archive, FileText, Building2, IndianRupee, Users, Receipt, Search, Download, Eye, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import api from '../services/api';
+import { getApiBaseUrl } from '../utils/apiUrl';
 import * as XLSX from 'xlsx';
 import StatementViewerModal from '../components/StatementViewerModal';
 
@@ -110,8 +111,7 @@ export default function StatementArchive() {
   const handleExportAll = async () => {
     try {
       const token = localStorage.getItem('token');
-      const savedServerIP = localStorage.getItem('serverIP');
-      const baseUrl = savedServerIP ? `http://${savedServerIP}:3000/api` : (import.meta.env.VITE_API_URL || 'http://localhost:3000/api');
+      const baseUrl = getApiBaseUrl();
       const params = new URLSearchParams();
       if (activeDomain !== 'all') params.append('domain', activeDomain);
       if (dateRange.from_date) params.append('from_date', dateRange.from_date);

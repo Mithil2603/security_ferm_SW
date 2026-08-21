@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { UserSquare2, Plus, Search, Edit2, Trash2, CheckCircle2, XCircle, ShieldCheck, X, Upload, FileText, Download } from 'lucide-react';
 import api from '../services/api';
+import { getServerBaseUrl } from '../utils/apiUrl';
 import { format } from 'date-fns';
 import * as XLSX from 'xlsx';
 import Pagination from '../components/Pagination';
@@ -516,7 +517,7 @@ export default function Employees() {
                             </div>
                           </div>
                           <a 
-                            href={`${(localStorage.getItem('serverIP') ? `http://${localStorage.getItem('serverIP')}:3000` : (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/\/api$/, '') : 'http://localhost:3000'))}/uploads/docs/${doc.file_path}`} 
+                            href={`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`} 
                             target="_blank" 
                             rel="noopener noreferrer"
                             className="p-2 text-teal-600 hover:bg-teal-50 rounded-lg transition-colors"

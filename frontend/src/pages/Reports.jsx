@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import DrillDownModal from '../components/DrillDownModal';
 import { PieChart as PieChartIcon, TrendingUp, TrendingDown, Download, IndianRupee, Printer, Calendar, FileSpreadsheet, AlertTriangle, CheckCircle, Clock, Users, Eye, EyeOff, Activity, Zap, Target, Shield, Info, RotateCw, Banknote, Receipt, Wallet, Percent, Briefcase } from 'lucide-react';
 import api from '../services/api';
+import { getApiBaseUrl } from '../utils/apiUrl';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid, LabelList, LineChart, Line, ReferenceLine, ComposedChart, Area } from 'recharts';
 import * as XLSX from 'xlsx';
 const COLORS = ['#4a90e2', '#f5a623', '#50e3c2', '#ef4444', '#8b5cf6', '#ec4899'];
@@ -356,9 +357,8 @@ export default function Reports() {
 
   const downloadRawData = (type) => {
     const token = localStorage.getItem('token');
-    const savedServerIP = localStorage.getItem('serverIP');
-    const baseUrl = savedServerIP ? `http://${savedServerIP}:3000` : (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/\/api$/, '') : 'http://localhost:3000');
-    const url = `${baseUrl}/api/reports/export-excel?type=${type}&from_date=${dateRange.from_date}&to_date=${dateRange.to_date}&token=${token}`;
+    const baseUrl = getApiBaseUrl();
+    const url = `${baseUrl}/reports/export-excel?type=${type}&from_date=${dateRange.from_date}&to_date=${dateRange.to_date}&token=${token}`;
     window.open(url, '_blank');
   };
 

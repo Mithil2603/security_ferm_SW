@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ShieldAlert, Key, Loader2, CheckCircle, AlertTriangle, Building2, Calendar, Users, Copy, Monitor } from 'lucide-react';
+import { getApiBaseUrl } from '../utils/apiUrl';
 
 export default function LicenseActivation({ onActivated }) {
   const [licenseKey, setLicenseKey] = useState('');
@@ -9,12 +10,6 @@ export default function LicenseActivation({ onActivated }) {
   const [licenseInfo, setLicenseInfo] = useState(null);
   const [hardwareId, setHardwareId] = useState('Loading...');
   const [hwidCopied, setHwidCopied] = useState(false);
-
-  const savedServerIP = localStorage.getItem('serverIP');
-  const getApiBaseUrl = () => {
-    if (savedServerIP) return `http://${savedServerIP}:3000/api`;
-    return import.meta.env.VITE_API_URL || 'http://127.0.0.1:3000/api';
-  };
 
   useEffect(() => {
     const fetchHwid = async () => {

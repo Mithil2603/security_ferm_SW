@@ -4,6 +4,8 @@ import {
   Database, Loader, PackageOpen
 } from 'lucide-react';
 
+import { getApiBaseUrl } from '../utils/apiUrl';
+
 export default function Setup({ onSetupComplete }) {
   // State Management
   const [step, setStep] = useState(1); // 1: Welcome, 2: Create Admin
@@ -72,10 +74,7 @@ export default function Setup({ onSetupComplete }) {
     setSetupProgress('Creating admin account...');
 
     try {
-      const savedServerIP = localStorage.getItem('serverIP');
-      const baseURL = savedServerIP 
-        ? `http://${savedServerIP}:3000/api` 
-        : 'http://127.0.0.1:3000/api';
+      const baseURL = getApiBaseUrl();
 
       const response = await fetch(`${baseURL}/auth/setup-init`, {
         method: 'POST',

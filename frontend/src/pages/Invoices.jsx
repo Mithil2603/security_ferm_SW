@@ -6,6 +6,7 @@ import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
 import EventInvoiceModal from '../components/EventInvoiceModal';
 import EditInvoiceModal from '../components/EditInvoiceModal';
+import { getApiBaseUrl } from '../utils/apiUrl';
 
 export default function Invoices() {
   const [invoices, setInvoices] = useState([]);
@@ -181,8 +182,7 @@ export default function Invoices() {
   const handleDownloadPDF = (inv) => {
     try {
       const token = localStorage.getItem('token');
-      const savedServerIP = localStorage.getItem('serverIP');
-      const baseUrl = savedServerIP ? `http://${savedServerIP}:3000/api` : (import.meta.env.VITE_API_URL || 'http://localhost:3000/api');
+      const baseUrl = getApiBaseUrl();
       const url = `${baseUrl}/invoices/${inv.id}/pdf?token=${token}`;
       // window.open triggers Electron's setWindowOpenHandler -> downloadURL
       window.open(url, '_blank');

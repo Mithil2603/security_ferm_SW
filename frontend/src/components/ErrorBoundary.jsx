@@ -1,6 +1,7 @@
 import React from 'react';
 import axios from 'axios';
 import { AlertCircle, RotateCcw } from 'lucide-react';
+import { getApiBaseUrl } from '../utils/apiUrl';
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -13,9 +14,7 @@ class ErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, errorInfo) {
-    const savedServerIP = localStorage.getItem('serverIP');
-    const defaultAPI = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
-    const baseURL = savedServerIP ? `http://${savedServerIP}:3000/api` : defaultAPI;
+    const baseURL = getApiBaseUrl();
 
     try {
       axios.post(`${baseURL}/errors`, {

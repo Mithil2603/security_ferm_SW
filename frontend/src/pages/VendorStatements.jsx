@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Building2, FileText, IndianRupee, Printer, TrendingDown, Clock, Search, AlertCircle, ArrowUpRight } from 'lucide-react';
 import api from '../services/api';
+import { getServerBaseUrl } from '../utils/apiUrl';
 import { format } from 'date-fns';
 
 export default function VendorStatements() {
@@ -182,7 +183,7 @@ export default function VendorStatements() {
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-12">
             <div className="w-48 h-24 flex items-center justify-start overflow-hidden">
               {agencySettings?.agency_logo_url ? (
-                <img src={`${(localStorage.getItem('serverIP') ? `http://${localStorage.getItem('serverIP')}:3000` : (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/\/api$/, '') : 'http://localhost:3000'))}${agencySettings.agency_logo_url}`} alt="Agency Logo" className="w-full h-full object-contain object-left" />
+                <img src={`${getServerBaseUrl()}${agencySettings.agency_logo_url}`} alt="Agency Logo" className="w-full h-full object-contain object-left" />
               ) : (
                 <div className="w-full h-full border border-dashed border-slate-300 flex items-center justify-center text-slate-400 font-bold tracking-widest text-sm bg-slate-50">
                   YOUR LOGO HERE

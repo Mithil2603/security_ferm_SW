@@ -35,18 +35,11 @@ import FinancialReports from './pages/FinancialReports';
 import Workflows from './pages/Workflows';
 import DeveloperConsole from './pages/DeveloperConsole';
 import AuditLogs from './pages/AuditLogs';
-import HelpDocumentation from './pages/HelpDocumentation';
-import SketchbookOfUsPreview from './pages/SketchbookOfUsPreview';
+import { getApiBaseUrl } from './utils/apiUrl';
 
 function App() {
   const [licenseStatus, setLicenseStatus] = useState('checking'); // 'checking' | 'unlicensed' | 'licensed'
   const [setupStatus, setSetupStatus] = useState('checking'); // 'checking' | 'needs-setup' | 'complete'
-
-  const savedServerIP = localStorage.getItem('serverIP');
-  const getApiBaseUrl = () => {
-    if (savedServerIP) return `http://${savedServerIP}:3000/api`;
-    return import.meta.env.VITE_API_URL || 'http://127.0.0.1:3000/api';
-  };
 
   useEffect(() => {
     checkLicense();
