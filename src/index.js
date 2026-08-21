@@ -186,46 +186,48 @@ app.use((req, res) => {
   res.sendFile(path.join(__dirname, '..', 'frontend-dist', 'index.html'));
 });
 
-// Initialize scheduled cron jobs
-startScheduledJobs();
-startBackupJob();
-initCronJobs();
-
-// ── Async startup: init MySQL pool, then start HTTP server ──────────
-const { initDB } = require('./database/connection');
-const os = require('os');
-
-function getLanIP() {
-  const interfaces = os.networkInterfaces();
-  for (const iface of Object.values(interfaces)) {
-    for (const alias of iface) {
-      if (alias.family === 'IPv4' && !alias.internal) {
-        return alias.address;
-      }
-    }
-  }
-  return 'unknown';
-}
-
 let server;
 
-initDB()
-  .then(() => {
-    server = app.listen(PORT, '0.0.0.0', () => {
-      const lanIP = getLanIP();
-      process.env.SERVER_LAN_IP = lanIP;
-      logger.info(`\n🚀 Security Firm Server running on port ${PORT}`);
-      logger.info(`🖥️  Local:   http://localhost:${PORT}`);
-      logger.info(`🌐 Network: http://${lanIP}:${PORT}  ← Share this with LAN users`);
-      logger.info(`📊 Environment: ${process.env.NODE_ENV}`);
-      logger.info(`🗄️  Database: MySQL @ ${process.env.DB_HOST}:${process.env.DB_PORT || 3306}/${process.env.DB_NAME}\n`);
+// Initialize scheduled cron jobs and HTTP server only when not in test environment
+if (process.env.NODE_ENV !== 'test') {
+  startScheduledJobs();
+  startBackupJob();
+  initCronJobs();
+
+  // ── Async startup: init MySQL pool, then start HTTP server ──────────
+  const { initDB } = require('./database/connection');
+  const os = require('os');
+
+  function getLanIP() {
+    const interfaces = os.networkInterfaces();
+    for (const iface of Object.values(interfaces)) {
+      for (const alias of iface) {
+        if (alias.family === 'IPv4' && !alias.internal) {
+          return alias.address;
+        }
+      }
+    }
+    return 'unknown';
+  }
+
+  initDB()
+    .then(() => {
+      server = app.listen(PORT, '0.0.0.0', () => {
+        const lanIP = getLanIP();
+        process.env.SERVER_LAN_IP = lanIP;
+        logger.info(`\n🚀 Security Firm Server running on port ${PORT}`);
+        logger.info(`🖥️  Local:   http://localhost:${PORT}`);
+        logger.info(`🌐 Network: http://${lanIP}:${PORT}  ← Share this with LAN users`);
+        logger.info(`📊 Environment: ${process.env.NODE_ENV}`);
+        logger.info(`🗄️  Database: MySQL @ ${process.env.DB_HOST}:${process.env.DB_PORT || 3306}/${process.env.DB_NAME}\n`);
+      });
+    })
+    .catch(err => {
+      logger.error('❌ Failed to start server — database connection error:', err.message);
+      logger.error('   Check your MySQL credentials in .env or the app settings.');
+      process.exit(1);
     });
-  })
-  .catch(err => {
-    logger.error('❌ Failed to start server — database connection error:', err.message);
-    logger.error('   Check your MySQL credentials in .env or the app settings.');
-    process.exit(1);
-  });
+}
 
 // ── Graceful Shutdown ────────────────────────────────────────────────────────
 const gracefulShutdown = async (signal) => {
