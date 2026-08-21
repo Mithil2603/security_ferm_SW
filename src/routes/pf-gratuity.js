@@ -313,6 +313,9 @@ router.get('/gratuity/estimate/:empId', async (req, res) => {
     const result = await gratuityCalculator.getEmployeeEstimate(parseInt(req.params.empId));
     res.json({ success: true, data: result });
   } catch (err) {
+    if (err.message === 'Employee not found') {
+      return res.status(404).json({ success: false, message: 'Employee not found' });
+    }
     logError({
       error: err,
       req,

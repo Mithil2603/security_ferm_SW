@@ -356,10 +356,10 @@ describe('Invoices', () => {
   test('POST /api/invoices — creates invoice for client 1', async () => {
     const res = await expectStatus('post', '/api/invoices', 201, {
       client_id: 1,
-      billing_period_start: '2026-07-01',
-      billing_period_end: '2026-07-31',
+      billing_period_start: '2027-01-01',
+      billing_period_end: '2027-01-31',
       tax_type: 'GST_18',
-      invoice_date: '2026-08-01',
+      invoice_date: '2027-02-01',
     });
     expect(res.body.success).toBe(true);
     IDs.invoice = res.body.data?.id;

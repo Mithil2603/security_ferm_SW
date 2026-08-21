@@ -36,7 +36,7 @@ function validate(schema) {
         field: d.path.join('.'),
         message: d.message.replace(/['"]/g, ''),
       }));
-      return res.status(422).json({
+      return res.status(400).json({
         success: false,
         message: 'Validation failed',
         errors: details,
