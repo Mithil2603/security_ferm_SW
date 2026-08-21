@@ -12,7 +12,7 @@
     "test:coverage": "jest --coverage --forceExit --detectOpenHandles",
     "test:watch": "jest --watch",
     "seed": "node seed.js",
-    "postinstall": "npm run build:frontend"
+    "postinstall": "cd frontend && npm install && npm run build"
   },
   "build": {
     "appId": "com.security.agency",
