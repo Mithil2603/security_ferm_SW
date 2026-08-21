@@ -1,6 +1,7 @@
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
+const { initDB } = require('../../src/database/connection');
 
 // We need to avoid running the actual server on port 5000 during jest
 // Since index.js listens if it is the main module or always listens,
@@ -21,7 +22,8 @@ const app = require('../../src/index.js');
 describe('API Happy Paths', () => {
   let token;
 
-  beforeAll(() => {
+  beforeAll(async () => {
+    await initDB();
     const jwtSecret = process.env.JWT_SECRET || 'default-secret';
     // Admin token to bypass permission checks
     token = jwt.sign(
