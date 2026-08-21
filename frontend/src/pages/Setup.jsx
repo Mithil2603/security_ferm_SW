@@ -49,8 +49,8 @@ export default function Setup({ onSetupComplete }) {
 
     if (!formData.password) {
       errors.password = 'Password is required';
-    } else if (formData.password.length < 6) {
-      errors.password = 'Password must be at least 6 characters';
+    } else if (formData.password.length < 8) {
+      errors.password = 'Password must be at least 8 characters';
     }
 
     if (formData.password !== formData.confirm_password) {
@@ -73,6 +73,9 @@ export default function Setup({ onSetupComplete }) {
     setLoading(true);
     setSetupProgress('Creating admin account...');
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
     try {
       const baseURL = getApiBaseUrl();
 
@@ -84,13 +87,20 @@ export default function Setup({ onSetupComplete }) {
           password: formData.password,
           full_name: formData.fullName.trim(),
           seed_test_data: seedTestData
-        })
+        }),
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
 
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error('Server returned an unexpected response');
+      }
 
       if (!response.ok) {
-        throw new Error(data.message || 'Failed to create admin account');
+        throw new Error(data?.message || 'Failed to create admin account');
       }
 
       // Setup complete
@@ -100,14 +110,23 @@ export default function Setup({ onSetupComplete }) {
         : 'Setup complete! Redirecting...'
       );
       
-      // Reload the app after 2 seconds to re-trigger the setup check in App.jsx
+      // Notify parent App component or fallback to reload
       setTimeout(() => {
-        window.location.reload();
+        if (onSetupComplete) {
+          onSetupComplete();
+        } else {
+          window.location.reload();
+        }
       }, 2000);
 
     } catch (err) {
-      const msg = err?.message || 'Failed to create admin account';
-      setError(msg);
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') {
+        setError('Request timed out. The server may be busy — please try again.');
+      } else {
+        const msg = err?.message || 'Failed to create admin account';
+        setError(msg);
+      }
       setSetupProgress('');
     } finally {
       setLoading(false);
@@ -313,7 +332,7 @@ export default function Setup({ onSetupComplete }) {
                 {formErrors.password && (
                   <p className="text-xs text-red-600 mt-1">{formErrors.password}</p>
                 )}
-                <p className="text-xs text-slate-500 mt-1">At least 6 characters</p>
+                <p className="text-xs text-slate-500 mt-1">Choose a strong password (at least 8 characters)</p>
               </div>
 
               {/* Confirm Password Field */}

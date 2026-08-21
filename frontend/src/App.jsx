@@ -76,13 +76,14 @@ function App() {
       
       if (data.success && data.setupComplete) {
         setSetupStatus('complete');
-      } else {
+      } else if (data.success && !data.setupComplete) {
         setSetupStatus('needs-setup');
+      } else {
+        setSetupStatus('error');
       }
     } catch (err) {
-      // If setup-status check fails, assume setup is complete (safe fallback for existing installs)
-      console.warn('Setup status check failed, assuming complete:', err.message);
-      setSetupStatus('complete');
+      console.warn('Setup status check failed:', err.message);
+      setSetupStatus('error');
     }
   };
 
@@ -122,9 +123,35 @@ function App() {
     );
   }
 
+  // Show retryable error state if setup check failed
+  if (setupStatus === 'error') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center p-4">
+        <div className="text-center text-white max-w-md bg-slate-800/80 p-8 rounded-2xl border border-slate-700 shadow-xl">
+          <div className="w-12 h-12 rounded-full bg-red-500/20 text-red-400 flex items-center justify-center mx-auto mb-4 font-bold text-xl">
+            !
+          </div>
+          <h3 className="text-xl font-bold mb-2">Connection Error</h3>
+          <p className="text-slate-400 text-sm mb-6">
+            Could not reach the server or verify database setup. Please ensure the backend is running.
+          </p>
+          <button
+            onClick={() => {
+              setSetupStatus('checking');
+              checkSetupStatus();
+            }}
+            className="px-6 py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-medium rounded-lg transition-colors shadow-md"
+          >
+            Retry Connection
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // Show Setup Wizard if first-time install (no admin exists)
   if (setupStatus === 'needs-setup') {
-    return <Setup />;
+    return <Setup onSetupComplete={() => setSetupStatus('complete')} />;
   }
 
   // Licensed & setup complete — show the full app

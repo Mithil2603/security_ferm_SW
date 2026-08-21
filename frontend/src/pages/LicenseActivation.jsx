@@ -21,27 +21,49 @@ export default function LicenseActivation({ onActivated }) {
             return;
           }
         } catch (e) {
-          console.error(e);
+          console.error('Electron HWID error:', e);
         }
       }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+
       try {
         const baseUrl = getApiBaseUrl();
-        const res = await fetch(`${baseUrl}/license/hardware-id`);
-        const data = await res.json();
+        const res = await fetch(`${baseUrl}/license/hardware-id`, { signal: controller.signal });
+        clearTimeout(timeout);
+
+        let data;
+        try {
+          data = await res.json();
+        } catch {
+          data = {};
+        }
+
         if (data.hardwareId) {
           setHardwareId(data.hardwareId);
           return;
+        } else {
+          setHardwareId('Detection failed');
+          setError('Could not detect hardware ID. Ensure this is running on Windows with WMI/system access.');
+          return;
         }
       } catch (e) {
-        console.error(e);
+        clearTimeout(timeout);
+        setHardwareId('Detection failed');
+        if (e.name === 'AbortError') {
+          setError('Hardware ID detection timed out. Check if the server is running.');
+        } else {
+          setError('Could not detect hardware ID. Ensure the application server is running.');
+        }
       }
-      setHardwareId('HWID-A1B2-C3D4');
     };
 
     fetchHwid();
   }, []);
 
   const copyHwid = () => {
+    if (hardwareId === 'Loading...' || hardwareId === 'Detection failed') return;
     navigator.clipboard.writeText(hardwareId);
     setHwidCopied(true);
     setTimeout(() => setHwidCopied(false), 2000);
@@ -57,15 +79,29 @@ export default function LicenseActivation({ onActivated }) {
     }
 
     setIsSubmitting(true);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
     try {
       const baseUrl = getApiBaseUrl();
       const response = await fetch(`${baseUrl}/license/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ licenseKey: licenseKey.trim() }),
+        body: JSON.stringify({ 
+          licenseKey: licenseKey.trim(),
+          hardwareId: hardwareId !== 'Loading...' && hardwareId !== 'Detection failed' ? hardwareId : undefined
+        }),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
 
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch {
+        setError('Server returned an unexpected response. Check server logs.');
+        return;
+      }
 
       if (!response.ok || !data.success) {
         setError(data.message || 'Invalid license key');
@@ -80,7 +116,12 @@ export default function LicenseActivation({ onActivated }) {
       }, 2500);
 
     } catch (err) {
-      setError('Cannot connect to server. Please ensure the application is running correctly.');
+      clearTimeout(timeout);
+      if (err.name === 'AbortError') {
+        setError('Activation request timed out. Please check that the server is running.');
+      } else {
+        setError('Cannot connect to server. Please ensure the application is running correctly.');
+      }
     } finally {
       setIsSubmitting(false);
     }

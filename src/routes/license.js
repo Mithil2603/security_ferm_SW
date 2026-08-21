@@ -163,7 +163,7 @@ router.get('/status', async (req, res) => {
  */
 router.post('/activate', async (req, res) => {
   try {
-    const { licenseKey } = req.body;
+    const { licenseKey, hardwareId } = req.body;
 
     if (!licenseKey || typeof licenseKey !== 'string') {
       return res.status(400).json({
@@ -173,7 +173,7 @@ router.post('/activate', async (req, res) => {
     }
 
     const cleanKey = licenseKey.replace(/\s+/g, '');
-    const machineHwid = getMachineHwid();
+    const machineHwid = (hardwareId && typeof hardwareId === 'string' && hardwareId.trim()) ? hardwareId.trim() : getMachineHwid();
     const verification = await verifyLicense(cleanKey, machineHwid);
 
     if (!verification.valid) {
