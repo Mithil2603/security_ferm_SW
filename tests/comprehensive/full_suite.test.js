@@ -1194,16 +1194,8 @@ describe('Authorization Boundaries', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('SQL Adapter — Translation Rules', () => {
-  let adapt;
-  beforeAll(() => {
-    const src = require('fs').readFileSync(
-      require('path').join(__dirname, '../../src/database/connection.js'), 'utf8'
-    );
-    const match = src.match(/function adaptSqlForMySQL[\s\S]+?^}/m);
-    // eslint-disable-next-line no-eval
-    eval(match[0]);
-    adapt = adaptSqlForMySQL;
-  });
+  const { adaptSqlForMySQL } = require('../../src/database/connection');
+  const adapt = adaptSqlForMySQL;
 
   const cases = [
     ['ON CONFLICT DO NOTHING → INSERT IGNORE', "INSERT INTO t VALUES(1) ON CONFLICT DO NOTHING", 'INSERT IGNORE INTO'],
