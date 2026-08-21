@@ -22,8 +22,9 @@ if (fs.existsSync(tempBuildDir)) {
 fs.mkdirSync(tempBuildDir, { recursive: true });
 
 // 3. Run electron-builder
-console.log('\n⚡ Step 2/3: Packaging Windows executable with electron-builder...');
-execSync(`npx electron-builder --config.directories.output="${tempBuildDir}"`, {
+const extraArgs = process.argv.slice(2).join(' ');
+console.log(`\n⚡ Step 2/3: Packaging executable with electron-builder (${extraArgs || 'default'})...`);
+execSync(`npx electron-builder --config.directories.output="${tempBuildDir}" ${extraArgs}`, {
   stdio: 'inherit',
   cwd: path.resolve(__dirname, '..')
 });
@@ -50,6 +51,6 @@ console.log('\n🎉 Build completed successfully!');
 console.log('───────────────────────────────────────────────────────');
 console.log('Installer and executable available at:');
 console.log(destDistDir);
-const exeFiles = fs.readdirSync(destDistDir).filter(f => f.endsWith('.exe'));
-exeFiles.forEach(exe => console.log(`  ✓ ${exe}`));
+const artifactFiles = fs.readdirSync(destDistDir).filter(f => !f.startsWith('.'));
+artifactFiles.forEach(art => console.log(`  ✓ ${art}`));
 console.log('───────────────────────────────────────────────────────\n');
