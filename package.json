@@ -8,8 +8,8 @@
     "start": "electron .",
     "build:frontend": "cd frontend && npm run build",
     "build": "node scripts/build.js",
-    "test": "jest --forceExit --detectOpenHandles",
-    "test:coverage": "jest --coverage --forceExit --detectOpenHandles",
+    "test": "jest --forceExit --detectOpenHandles --runInBand",
+    "test:coverage": "jest --coverage --forceExit --detectOpenHandles --runInBand",
     "test:watch": "jest --watch",
     "seed": "node seed.js"
   },
