@@ -48,7 +48,7 @@ jobs:
           JWT_SECRET: ci-test-secret-at-least-32-characters-long-key-1234
 
       - name: Run unit and integration tests
-        run: npm test
+        run: npm test 2>&1 | tee test-output.txt
         env:
           NODE_ENV: test
           DB_HOST: 127.0.0.1
@@ -57,6 +57,13 @@ jobs:
           DB_NAME: security_firm_db
           DB_PORT: 3306
           JWT_SECRET: ci-test-secret-at-least-32-characters-long-key-1234
+
+      - name: Upload test log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jest-test-log
+          path: test-output.txt
 
   build:
     needs: test
