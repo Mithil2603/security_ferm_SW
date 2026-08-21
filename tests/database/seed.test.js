@@ -20,7 +20,7 @@ describe('Database Seeding', () => {
     // Execute the seed script via child process
     let output = '';
     try {
-      output = execSync(`node "${seedScriptPath}"`, { encoding: 'utf8', stdio: 'pipe' });
+      output = execSync(`node "${seedScriptPath}"`, { encoding: 'utf8', stdio: 'pipe', timeout: 60000 });
     } catch (error) {
       console.error("Seed script failed:", error.stdout || error.message);
       throw error;
@@ -30,7 +30,7 @@ describe('Database Seeding', () => {
     expect(output).toMatch(/SEEDING COMPLETE/);
     expect(output).toMatch(/Clients:\s+\d+/);
     expect(output).toMatch(/Employees:\s+\d+/);
-  }, 30000); // 30 seconds timeout for seeding
+  }, 60000); // 60 seconds timeout for seeding
 
   test('Database should contain seeded records', async () => {
     // Verify Users

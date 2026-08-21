@@ -79,17 +79,15 @@ const states = ['Gujarat'];
 
 const designations = ['Watchman', 'Senior Guard', 'Head Guard', 'Supervisor', 'Night Guard', 'Gate Guard'];
 
-const expenseCategories = ['salary', 'equipment', 'vehicle', 'office', 'training', 'miscellaneous', 'utilities', 'supplies', 'maintenance', 'transport'];
+const expenseCategories = ['utilities', 'equipment', 'supplies', 'maintenance', 'transport', 'communication', 'salary_advance', 'miscellaneous'];
 const expenseDescriptions = {
-  salary: ['Salary advance to guard', 'Bonus payment', 'Overtime payment', 'Festival bonus'],
+  salary_advance: ['Salary advance to guard', 'Festival advance', 'Emergency advance'],
   equipment: ['Torch batteries', 'Walkie talkie set', 'Rain coats', 'Uniform purchase', 'Shoes purchase', 'Batons'],
-  vehicle: ['Patrol bike fuel', 'Vehicle maintenance', 'Tyre replacement', 'Insurance renewal'],
-  office: ['Stationery purchase', 'Printer cartridge', 'Office rent', 'Water cooler maintenance'],
-  training: ['Guard training program', 'First aid training', 'Fire safety drill', 'Self-defense training'],
+  maintenance: ['Patrol bike maintenance', 'Office AC repair', 'Plumbing repair', 'CCTV maintenance', 'Generator servicing'],
+  communication: ['Internet bill', 'Phone bill', 'SIM card recharges'],
+  supplies: ['Stationery purchase', 'Printer cartridge', 'Register books', 'ID card printing', 'Visitor pass booklets', 'Cleaning supplies'],
   miscellaneous: ['Tea & snacks for guards', 'Mobile recharge', 'Misc supplies', 'Emergency expenses'],
-  utilities: ['Electricity bill - office', 'Internet bill', 'Phone bill', 'Water bill'],
-  supplies: ['Cleaning supplies', 'Register books', 'ID card printing', 'Visitor pass booklets'],
-  maintenance: ['Office AC repair', 'Plumbing repair', 'CCTV maintenance', 'Generator servicing'],
+  utilities: ['Electricity bill - office', 'Water bill', 'Office maintenance'],
   transport: ['Guard transport allowance', 'Cab charges', 'Bus pass for guards', 'Fuel reimbursement']
 };
 
@@ -257,16 +255,22 @@ const months = [
 ];
 
 async function insertAttendanceTransaction() {
-  await query('START TRANSACTION');
-  try {
-    
+  let batch = [];
+  async function flushBatch() {
+    if (batch.length === 0) return;
+    const placeholders = batch.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
+    const values = batch.flat();
+    await query(`INSERT IGNORE INTO attendance (employee_id, client_id, attendance_date, check_in_time, check_out_time, hours_worked, status) VALUES ${placeholders}`, values);
+    totalAttendance += batch.length;
+    batch = [];
+  }
+
   for (const { year, month } of months) {
     const days = daysInMonth(year, month);
     const today = new Date();
     
     for (const emp of employees) {
       const joinDate = new Date(emp.date_of_joining);
-      const monthStart = new Date(year, month - 1, 1);
       
       // Skip if employee hasn't joined yet
       if (joinDate > new Date(year, month - 1, days)) continue;
@@ -304,19 +308,14 @@ async function insertAttendanceTransaction() {
           checkIn = null; checkOut = null; hours = 0;
         }
         
-        try {
-          await query(insertAttendance, [emp.id, emp.assigned_client_id, dateStr, checkIn, checkOut, hours, status]);
-          totalAttendance++;
-        } catch (e) { /* skip duplicates */ }
+        batch.push([emp.id, emp.assigned_client_id, dateStr, checkIn, checkOut, hours, status]);
+        if (batch.length >= 200) {
+          await flushBatch();
+        }
       }
     }
+    await flushBatch();
     console.log(`   📅 ${year}-${String(month).padStart(2, '0')}: attendance generated`);
-  }
-
-    await query('COMMIT');
-  } catch (err) {
-    await query('ROLLBACK');
-    throw err;
   }
 }
 await insertAttendanceTransaction();
@@ -346,9 +345,6 @@ const payrollMonths = [
 ];
 
 async function insertPayrollTransaction() {
-  await query('START TRANSACTION');
-  try {
-    
   for (const { year, month } of payrollMonths) {
     const dim = daysInMonth(year, month);
     const payrollMonth = `${year}-${String(month).padStart(2, '0')}-01`;
@@ -411,12 +407,6 @@ async function insertPayrollTransaction() {
     }
     console.log(`   💵 ${year}-${String(month).padStart(2, '0')}: payroll generated`);
   }
-
-    await query('COMMIT');
-  } catch (err) {
-    await query('ROLLBACK');
-    throw err;
-  }
 }
 await insertPayrollTransaction();
 console.log(`   ✅ ${totalPayroll} payroll records created`);
@@ -450,9 +440,6 @@ const invoiceMonths = [
 ];
 
 async function insertInvoicesTransaction() {
-  await query('START TRANSACTION');
-  try {
-    
   for (const { year, month } of invoiceMonths) {
     const dim = daysInMonth(year, month);
     const shortYear = year.toString().slice(-2);
@@ -532,12 +519,6 @@ async function insertInvoicesTransaction() {
     }
     console.log(`   📄 ${year}-${String(month).padStart(2, '0')}: ${allClients.length} invoices generated`);
   }
-
-    await query('COMMIT');
-  } catch (err) {
-    await query('ROLLBACK');
-    throw err;
-  }
 }
 await insertInvoicesTransaction();
 
@@ -549,56 +530,37 @@ console.log(`   ✅ ${totalPayments} payment records created`);
 
 // ─── 8. EXPENSES (Jan – Jul 2026) ───────────────────────────────────
 console.log('💸 Creating expense records...');
-const insertExpense = `
-  INSERT INTO expenses (expense_date, category, description, amount, payment_method, vendor_name, 
-    receipt_number, status, notes, created_by)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-`;
-
 let totalExpenses = 0;
-async function insertExpensesTransaction() {
-  await query('START TRANSACTION');
-  try {
-    
+async function insertExpenses() {
+  const batch = [];
   for (const { year, month } of months) {
     const dim = daysInMonth(year, month);
-    // 15-30 expenses per month
-    const numExpenses = randomInt(15, 30);
+    const numExpenses = randomInt(15, 25);
     
     for (let i = 0; i < numExpenses; i++) {
       const day = randomInt(1, Math.min(dim, 28));
       const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       const category = randomPick(expenseCategories);
-      const description = randomPick(expenseDescriptions[category] || ['General expense']);
-      const amount = category === 'salary' ? randomInt(5000, 25000) :
-                     category === 'vehicle' ? randomInt(1000, 15000) :
-                     category === 'equipment' ? randomInt(500, 10000) :
-                     category === 'office' ? randomInt(2000, 20000) :
-                     randomInt(200, 5000);
+      const description = randomPick(expenseDescriptions[category] || ['General office expense']);
+      const amount = randomInt(300, 15000);
       const method = randomPick(['cash', 'bank_transfer', 'upi', 'card']);
-      const vendor = randomPick(['Local Supplier', 'Amazon', 'Flipkart', 'D-Mart', 'Big Bazaar', 
-        'Reliance Digital', 'Security Equipment Co.', 'Gujarat Uniforms', 'Petrol Pump', 
-        'Office Depot', 'Stationery World', 'Training Academy', null]);
+      const vendor = randomPick(['Local Supplier', 'Amazon', 'Gujarat Uniforms', 'Petrol Pump', 'Stationery World', null]);
       const receipt = Math.random() > 0.3 ? `RCP-${randomInt(10000, 99999)}` : null;
-      
-      // Older expenses are approved/paid, recent ones pending
       const status = month <= 5 ? randomPick(['approved', 'paid', 'paid']) : 
                      month === 6 ? randomPick(['approved', 'pending', 'paid']) : 'pending';
       
-      try {
-        await query(insertExpense, [dateStr, category, description, amount, method, vendor, receipt, status, null]);
-        totalExpenses++;
-      } catch (e) { /* skip */ }
+      batch.push([dateStr, category, description, amount, method, vendor, receipt, status, null]);
     }
   }
 
-    await query('COMMIT');
-  } catch (err) {
-    await query('ROLLBACK');
-    throw err;
+  if (batch.length > 0) {
+    const placeholders = batch.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, 1)').join(', ');
+    const values = batch.flat();
+    await query(`INSERT INTO expenses (expense_date, category, description, amount, payment_method, vendor_name, receipt_number, status, notes, created_by) VALUES ${placeholders}`, values);
+    totalExpenses += batch.length;
   }
 }
-await insertExpensesTransaction();
+await insertExpenses();
 console.log(`   ✅ ${totalExpenses} expense records created`);
 
 // ─── SUMMARY ─────────────────────────────────────────────────────────
