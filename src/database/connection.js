@@ -342,16 +342,16 @@ const db = {
 // pool is exported as a getter so consumers always get the live instance
 // (pool is null at module load time; initDB() sets it asynchronously)
 // ─────────────────────────────────────────────────────────────────────────────
-const exports = {
+const moduleExports = {
   query,
   db,
   initDB,
   adaptSqlForMySQL,
 };
 
-Object.defineProperty(exports, 'pool', {
+Object.defineProperty(moduleExports, 'pool', {
   get() { return pool; },
   enumerable: true,
 });
 
-module.exports = exports;
+module.exports = moduleExports;
