@@ -35,6 +35,8 @@ import FinancialReports from './pages/FinancialReports';
 import Workflows from './pages/Workflows';
 import DeveloperConsole from './pages/DeveloperConsole';
 import AuditLogs from './pages/AuditLogs';
+import HelpDocumentation from './pages/HelpDocumentation';
+import SketchbookOfUsPreview from './pages/SketchbookOfUsPreview';
 import { getApiBaseUrl } from './utils/apiUrl';
 
 function App() {
