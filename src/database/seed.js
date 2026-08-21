@@ -107,11 +107,15 @@ await query('TRUNCATE TABLE invoice_counters');
 await query('TRUNCATE TABLE users');
 await query('SET FOREIGN_KEY_CHECKS = 1');
 
-console.log('👤 Creating default admin user...');
+console.log('👤 Creating default admin users...');
 const adminPassword = await bcrypt.hash('admin123', 10);
 await query(
   `INSERT INTO users (id, full_name, email, password_hash, role, is_active) VALUES (?, ?, ?, ?, ?, ?)`,
   [1, 'Admin', 'admin@example.com', adminPassword, 'admin', 1]
+);
+await query(
+  `INSERT INTO users (full_name, email, password_hash, role, is_active) VALUES (?, ?, ?, ?, 1)`,
+  ['Admin User', 'admin@test.com', adminPassword, 'admin']
 );
 
 // ─── 2. ENSURE SALARY STRUCTURES EXIST ───────────────────────────────

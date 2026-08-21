@@ -37,7 +37,7 @@ jobs:
         run: npm ci
 
       - name: Seed database schema
-        run: node seed.js
+        run: node src/database/seed.js
         env:
           NODE_ENV: test
           DB_HOST: 127.0.0.1

@@ -34,9 +34,11 @@ module.exports = {
 
   // Ignore patterns
   testPathIgnorePatterns: [
-    '/node_modules/',
-    '/dist/',
-    '/frontend-dist/',
+    '<rootDir>/node_modules/',
+    '<rootDir>/frontend/',
+    '<rootDir>/dist/',
+    '<rootDir>/frontend-dist/',
+    '<rootDir>/electron-dist/',
   ],
 
   // Timeouts for integration tests
