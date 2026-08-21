@@ -94,6 +94,15 @@ async function seed() {
       );
     }
 
+    // 6. Seed Default System Settings
+    console.log('⚙️ Seeding system settings...');
+    await query(
+      `INSERT INTO system_settings (setting_key, setting_value)
+       VALUES ('payroll_adjustment_categories', ?)
+       ON DUPLICATE KEY UPDATE setting_key = setting_key`,
+      [JSON.stringify(["Advance", "Uniform Deduction", "Bonus", "Penalty", "Food Allowance", "Loan Deduction", "Other"])]
+    );
+
     console.log('\n✅ Database seeding completed successfully!');
     console.log('───────────────────────────────────────────────────────');
     console.log('Admin Login:    admin@example.com (or admin@test.com)');

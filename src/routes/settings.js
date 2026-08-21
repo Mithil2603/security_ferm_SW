@@ -245,7 +245,7 @@ router.get('/system/:key', async (req, res) => {
       [req.params.key]
     );
     if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Setting not found' });
+      return res.json({ success: true, data: null });
     }
     res.json({ success: true, data: result.rows[0].setting_value });
   } catch (error) {

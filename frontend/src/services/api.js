@@ -105,8 +105,8 @@ api.interceptors.response.use(
       window.dispatchEvent(new Event('auth-error'));
     }
 
-    // Log all API errors using the central error interceptor
-    if (!error.config?.url?.includes('/errors')) {
+    // Log API errors using the central error interceptor (ignore expected 404s on optional resource lookups)
+    if (!error.config?.url?.includes('/errors') && error.response?.status !== 404) {
       errorInterceptor.logFrontendError({
         error_type: `API Error ${error.response?.status || 'Network'}`,
         error_message: error.response?.data?.message || error.message || 'API call failed',

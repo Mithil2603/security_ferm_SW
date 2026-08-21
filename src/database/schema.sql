@@ -394,6 +394,12 @@ VALUES (
     'Dear {{client_name}},\n\nPlease find attached the invoice {{invoice_number}} for the period {{billing_period}}.\n\nTotal Amount: ₹{{total_amount}}\nDue Date: {{due_date}}\n\nThank you for your business.\n\nRegards,\nSecurity Agency'
 );
 
+INSERT IGNORE INTO system_settings (setting_key, setting_value)
+VALUES (
+    'payroll_adjustment_categories',
+    '["Advance", "Uniform Deduction", "Bonus", "Penalty", "Food Allowance", "Loan Deduction", "Other"]'
+);
+
 INSERT IGNORE INTO system_settings (setting_key, setting_value) VALUES ('schema_version', '0');
 
 -- ============================================================
