@@ -14,6 +14,7 @@
 const request = require('supertest');
 const app     = require('../../src/index');
 const jwt     = require('jsonwebtoken');
+const { initDB, db } = require('../../src/database/connection');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -30,6 +31,14 @@ function makeToken(overrides = {}) {
 
 const TOKEN = makeToken();
 const auth  = () => ({ Authorization: `Bearer ${TOKEN}` });
+beforeAll(async () => {
+  await initDB();
+});
+
+afterAll(async () => {
+  const pool = typeof db._pool === 'function' ? db._pool() : undefined;
+  if (pool) await pool.end();
+});
 
 /** Assert a route returns a known HTTP status code */
 async function expectStatus(method, path, status, body = null) {
