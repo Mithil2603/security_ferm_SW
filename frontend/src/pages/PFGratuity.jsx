@@ -17,6 +17,10 @@ export default function PFGratuity() {
   const [pfForm, setPfForm] = useState({ employee_id: '', uan_number: '', pf_number: '' });
   const [submitting, setSubmitting] = useState(false);
 
+  // Batch Month Modal State
+  const [batchModal, setBatchModal] = useState({ open: false, type: 'pf', month: new Date().toISOString().slice(0, 7) });
+  const [batchProcessing, setBatchProcessing] = useState(false);
+
   const fetchPfAccounts = async () => {
     try {
       setLoading(true);
@@ -56,14 +60,8 @@ export default function PFGratuity() {
     finally { setSubmitting(false); }
   };
 
-  const handleBatchPf = async () => {
-    const month = prompt('Enter payroll month (YYYY-MM):', new Date().toISOString().slice(0, 7));
-    if (!month) return;
-    try {
-      const res = await api.post('/pf-gratuity/pf/batch-process', { payroll_month: month });
-      alert(`Processed: ${res.data.processed} | Skipped: ${res.data.skipped} | Errors: ${res.data.errors}`);
-      fetchPfAccounts();
-    } catch (err) { alert(err.message || 'Failed'); }
+  const handleBatchPf = () => {
+    setBatchModal({ open: true, type: 'pf', month: new Date().toISOString().slice(0, 7) });
   };
 
   const openViewPf = async (empId) => {
@@ -80,14 +78,30 @@ export default function PFGratuity() {
 
   // ─── Gratuity Actions ─────────────────────────────────────────────────────
 
-  const handleBatchAccrue = async () => {
-    const month = prompt('Enter accrual month (YYYY-MM):', new Date().toISOString().slice(0, 7));
-    if (!month) return;
+  const handleBatchAccrue = () => {
+    setBatchModal({ open: true, type: 'gratuity', month: new Date().toISOString().slice(0, 7) });
+  };
+
+  const handleBatchSubmit = async (e) => {
+    e.preventDefault();
+    if (!batchModal.month) return;
+    setBatchProcessing(true);
     try {
-      const res = await api.post('/pf-gratuity/gratuity/batch-accrue', { accrual_month: month });
-      alert(`Processed: ${res.data.processed} | Skipped: ${res.data.skipped} | Errors: ${res.data.errors}`);
-      fetchLiability();
-    } catch (err) { alert(err.message || 'Failed'); }
+      if (batchModal.type === 'pf') {
+        const res = await api.post('/pf-gratuity/pf/batch-process', { payroll_month: batchModal.month });
+        alert(`Processed: ${res.data.processed} | Skipped: ${res.data.skipped} | Errors: ${res.data.errors}`);
+        fetchPfAccounts();
+      } else {
+        const res = await api.post('/pf-gratuity/gratuity/batch-accrue', { accrual_month: batchModal.month });
+        alert(`Processed: ${res.data.processed} | Skipped: ${res.data.skipped} | Errors: ${res.data.errors}`);
+        fetchLiability();
+      }
+      setBatchModal({ ...batchModal, open: false });
+    } catch (err) {
+      alert(err.message || 'Processing failed');
+    } finally {
+      setBatchProcessing(false);
+    }
   };
 
   return (
@@ -311,6 +325,41 @@ export default function PFGratuity() {
             <div className="p-4 border-t border-slate-200">
               <button onClick={() => setIsViewPfOpen(false)} className="w-full bg-slate-100 hover:bg-gray-600 text-slate-900 py-2 rounded-lg">Close</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Processing Modal */}
+      {batchModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-slide-up">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-teal-50">
+              <h3 className="text-lg font-bold text-teal-800">
+                {batchModal.type === 'pf' ? 'Batch Process PF' : 'Batch Accrue Gratuity'}
+              </h3>
+              <button type="button" onClick={() => setBatchModal({ ...batchModal, open: false })} className="text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+            <form onSubmit={handleBatchSubmit} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  {batchModal.type === 'pf' ? 'Select Payroll Month (YYYY-MM)' : 'Select Accrual Month (YYYY-MM)'}
+                </label>
+                <input
+                  required
+                  type="month"
+                  value={batchModal.month}
+                  onChange={e => setBatchModal({ ...batchModal, month: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                  autoFocus
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-slate-100">
+                <button type="button" onClick={() => setBatchModal({ ...batchModal, open: false })} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
+                <button type="submit" disabled={batchProcessing} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50">
+                  {batchProcessing ? 'Processing...' : 'Run Batch Process'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

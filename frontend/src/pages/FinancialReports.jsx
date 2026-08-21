@@ -14,6 +14,10 @@ export default function FinancialReports() {
 
   const fmt = (v) => `₹${Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 0 })}`;
 
+  const [snapshotModal, setSnapshotModal] = useState({ open: false, month: new Date().toISOString().slice(0, 7) });
+  const [cashFlowModal, setCashFlowModal] = useState({ open: false, start: `${new Date().getFullYear()}-04-01`, end: new Date().toISOString().split('T')[0] });
+  const [generatingSnapshot, setGeneratingSnapshot] = useState(false);
+
   const fetchSnapshots = async () => {
     try { setLoading(true); const r = await api.get('/financial-reports/snapshots?financial_year=2025-26'); setSnapshots(r.data || []); }
     catch {} finally { setLoading(false); }
@@ -30,25 +34,35 @@ export default function FinancialReports() {
     else setLoading(false);
   }, [tab]);
 
-  const generateSnapshot = async () => {
-    const month = prompt('Enter month (YYYY-MM):', new Date().toISOString().slice(0, 7));
-    if (!month) return;
-    try {
-      await api.post('/financial-reports/snapshots/generate', { month });
-      alert('Snapshot generated!');
-      fetchSnapshots();
-    } catch (err) { alert(err.message || 'Failed'); }
+  const generateSnapshot = () => {
+    setSnapshotModal({ open: true, month: new Date().toISOString().slice(0, 7) });
   };
 
-  const generateCashFlow = async () => {
-    const start = prompt('Start date (YYYY-MM-DD):', `${new Date().getFullYear()}-04-01`);
-    if (!start) return;
-    const end = prompt('End date (YYYY-MM-DD):', new Date().toISOString().split('T')[0]);
-    if (!end) return;
+  const handleSnapshotSubmit = async (e) => {
+    e.preventDefault();
+    if (!snapshotModal.month) return;
+    setGeneratingSnapshot(true);
+    try {
+      await api.post('/financial-reports/snapshots/generate', { month: snapshotModal.month });
+      alert('Snapshot generated!');
+      setSnapshotModal({ ...snapshotModal, open: false });
+      fetchSnapshots();
+    } catch (err) { alert(err.message || 'Failed'); }
+    finally { setGeneratingSnapshot(false); }
+  };
+
+  const generateCashFlow = () => {
+    setCashFlowModal({ open: true, start: `${new Date().getFullYear()}-04-01`, end: new Date().toISOString().split('T')[0] });
+  };
+
+  const handleCashFlowSubmit = async (e) => {
+    e.preventDefault();
+    if (!cashFlowModal.start || !cashFlowModal.end) return;
     try {
       setLoading(true);
-      const r = await api.post('/financial-reports/cash-flow', { start_date: start, end_date: end });
+      const r = await api.post('/financial-reports/cash-flow', { start_date: cashFlowModal.start, end_date: cashFlowModal.end });
       setCashFlow(r.data);
+      setCashFlowModal({ ...cashFlowModal, open: false });
     } catch (err) { alert(err.message || 'Failed'); }
     finally { setLoading(false); }
   };
@@ -330,6 +344,79 @@ export default function FinancialReports() {
               <div className="flex gap-3">
                 <button type="button" onClick={() => setCreateBudget(false)} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors font-medium">Cancel</button>
                 <button type="submit" className="flex-1 bg-teal-600 hover:bg-teal-700 text-white py-2 rounded-lg font-medium transition-colors">Create</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Snapshot Modal */}
+      {snapshotModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-slide-up">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-teal-50">
+              <h3 className="text-lg font-bold text-teal-800">Generate Monthly Snapshot</h3>
+              <button type="button" onClick={() => setSnapshotModal({ ...snapshotModal, open: false })} className="text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+            <form onSubmit={handleSnapshotSubmit} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Select Month (YYYY-MM)</label>
+                <input
+                  required
+                  type="month"
+                  value={snapshotModal.month}
+                  onChange={e => setSnapshotModal({ ...snapshotModal, month: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                  autoFocus
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-slate-100">
+                <button type="button" onClick={() => setSnapshotModal({ ...snapshotModal, open: false })} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
+                <button type="submit" disabled={generatingSnapshot} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50">
+                  {generatingSnapshot ? 'Generating...' : 'Generate Snapshot'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Cash Flow Date Range Modal */}
+      {cashFlowModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-slide-up">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-teal-50">
+              <h3 className="text-lg font-bold text-teal-800">Generate Cash Flow Statement</h3>
+              <button type="button" onClick={() => setCashFlowModal({ ...cashFlowModal, open: false })} className="text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+            <form onSubmit={handleCashFlowSubmit} className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Start Date *</label>
+                  <input
+                    required
+                    type="date"
+                    value={cashFlowModal.start}
+                    onChange={e => setCashFlowModal({ ...cashFlowModal, start: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">End Date *</label>
+                  <input
+                    required
+                    type="date"
+                    value={cashFlowModal.end}
+                    onChange={e => setCashFlowModal({ ...cashFlowModal, end: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-slate-100">
+                <button type="button" onClick={() => setCashFlowModal({ ...cashFlowModal, open: false })} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
+                <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700">
+                  Generate Cash Flow
+                </button>
               </div>
             </form>
           </div>

@@ -17,6 +17,10 @@ export default function GSTCompliance() {
     registration_type: 'regular', default_tax_rate: 18, financial_year: '2025-26',
   });
 
+  // Return Period Modal State
+  const [returnModal, setReturnModal] = useState({ open: false, type: 'GSTR1', period: new Date().toISOString().slice(0, 7) });
+  const [generatingReturn, setGeneratingReturn] = useState(false);
+
   const fetchFilings = async () => { try { setLoading(true); const r = await api.get('/gst/filings?limit=24'); setFilings(r.data || []); } catch {} finally { setLoading(false); } };
   const fetchHSN = async () => { try { setLoading(true); const r = await api.get('/gst/hsn-sac'); setHsnCodes(r.data || []); } catch {} finally { setLoading(false); } };
   const fetchConfig = async () => { try { const r = await api.get('/gst/config'); setConfig(r.data); if (r.data) setConfigForm(r.data); } catch {} };
@@ -30,15 +34,25 @@ export default function GSTCompliance() {
   const fmt = (v) => `₹${Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 
   // ─── Generate Returns ──────────────────────────────────────────────────────
-  const generateReturn = async (type) => {
-    const period = prompt('Enter return period (YYYY-MM):', new Date().toISOString().slice(0, 7));
-    if (!period) return;
+  const generateReturn = (type) => {
+    setReturnModal({ open: true, type, period: new Date().toISOString().slice(0, 7) });
+  };
+
+  const handleReturnSubmit = async (e) => {
+    e.preventDefault();
+    if (!returnModal.period) return;
+    setGeneratingReturn(true);
     try {
-      const endpoint = type === 'GSTR1' ? '/gst/gstr1/generate' : '/gst/gstr3b/generate';
-      const res = await api.post(endpoint, { return_period: period });
-      alert(`${type} generated! ${res.data.summary?.total_invoices || 0} invoices processed.`);
+      const endpoint = returnModal.type === 'GSTR1' ? '/gst/gstr1/generate' : '/gst/gstr3b/generate';
+      const res = await api.post(endpoint, { return_period: returnModal.period });
+      alert(`${returnModal.type} generated! ${res.data.summary?.total_invoices || 0} invoices processed.`);
+      setReturnModal({ ...returnModal, open: false });
       fetchFilings();
-    } catch (err) { alert(err.message || 'Generation failed'); }
+    } catch (err) {
+      alert(err.message || 'Generation failed');
+    } finally {
+      setGeneratingReturn(false);
+    }
   };
 
   const saveConfig = async (e) => {
@@ -277,6 +291,37 @@ export default function GSTCompliance() {
               </button>
               <button onClick={() => setViewFiling(null)} className="px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors font-medium">Close</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Return Period Modal */}
+      {returnModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-slide-up">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-teal-50">
+              <h3 className="text-lg font-bold text-teal-800">Generate {returnModal.type}</h3>
+              <button type="button" onClick={() => setReturnModal({ ...returnModal, open: false })} className="text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+            <form onSubmit={handleReturnSubmit} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Select Return Period (YYYY-MM)</label>
+                <input
+                  required
+                  type="month"
+                  value={returnModal.period}
+                  onChange={e => setReturnModal({ ...returnModal, period: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                  autoFocus
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-slate-100">
+                <button type="button" onClick={() => setReturnModal({ ...returnModal, open: false })} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
+                <button type="submit" disabled={generatingReturn} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50">
+                  {generatingReturn ? 'Generating...' : `Generate ${returnModal.type}`}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

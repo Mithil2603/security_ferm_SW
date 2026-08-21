@@ -43,6 +43,10 @@ export default function Expenses() {
   // Payment Modal State
   const [payModalExpense, setPayModalExpense] = useState(null);
   const [payFormData, setPayFormData] = useState({ amount: '', payment_method: 'bank_transfer', payment_date: format(new Date(), 'yyyy-MM-dd'), reference_number: '', notes: '' });
+
+  // Reject Modal State
+  const [rejectModal, setRejectModal] = useState({ open: false, id: null, reason: '' });
+  const [rejecting, setRejecting] = useState(false);
   const [paying, setPaying] = useState(false);
 
   const fetchCategories = async () => {
@@ -135,14 +139,23 @@ export default function Expenses() {
     }
   };
 
-  const handleReject = async (id) => {
-    const reason = prompt('Rejection reason (optional):');
-    if (reason === null) return; // User cancelled prompt
+  const handleReject = (id) => {
+    setRejectModal({ open: true, id, reason: '' });
+  };
+
+  const handleRejectSubmit = async (e) => {
+    e.preventDefault();
+    if (!rejectModal.id) return;
+    setRejecting(true);
     try {
-      await api.put(`/expenses/${id}/reject`, { approval_notes: reason || '' });
+      await api.put(`/expenses/${rejectModal.id}/reject`, { approval_notes: rejectModal.reason || '' });
+      setRejectModal({ open: false, id: null, reason: '' });
       fetchExpenses();
     } catch (err) {
       console.error('Failed to reject expense', err);
+      alert(err.message || 'Failed to reject expense');
+    } finally {
+      setRejecting(false);
     }
   };
 
@@ -427,6 +440,37 @@ export default function Expenses() {
                 <button type="button" onClick={() => setPayModalExpense(null)} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
                 <button type="submit" disabled={paying} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50">
                   {paying ? 'Saving...' : 'Record Payment'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Rejection Modal */}
+      {rejectModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-slide-up">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-rose-50">
+              <h3 className="text-lg font-bold text-rose-800">Reject Expense</h3>
+              <button type="button" onClick={() => setRejectModal({ open: false, id: null, reason: '' })} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleRejectSubmit} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Rejection Reason (Optional)</label>
+                <textarea
+                  rows="3"
+                  value={rejectModal.reason}
+                  onChange={e => setRejectModal({ ...rejectModal, reason: e.target.value })}
+                  className={inputCls}
+                  placeholder="Enter reason for rejecting this expense..."
+                  autoFocus
+                ></textarea>
+              </div>
+              <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-slate-100">
+                <button type="button" onClick={() => setRejectModal({ open: false, id: null, reason: '' })} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
+                <button type="submit" disabled={rejecting} className="px-4 py-2 text-sm font-medium text-white bg-rose-600 rounded-lg hover:bg-rose-700 disabled:opacity-50">
+                  {rejecting ? 'Rejecting...' : 'Confirm Rejection'}
                 </button>
               </div>
             </form>
