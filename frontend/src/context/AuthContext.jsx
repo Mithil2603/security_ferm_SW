@@ -39,7 +39,8 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     try {
-      if (!email || !password) {
+      const cleanEmail = email ? email.trim().toLowerCase() : '';
+      if (!cleanEmail || !password) {
         throw {
           status: 400,
           response: {
@@ -51,7 +52,7 @@ export const AuthProvider = ({ children }) => {
         };
       }
 
-      const response = await api.post('/auth/login', { email, password });
+      const response = await api.post('/auth/login', { email: cleanEmail, password });
       
       // Handle success
       if (response.success || response.data) {

@@ -251,7 +251,7 @@ export default function Login() {
       code: backendCode || 'UNKNOWN_ERROR',
       type: 'UNKNOWN_ERROR',
       message: typeof err === 'string' ? err : (err?.message || responseData.message || 'An unknown error occurred'),
-      details: typeof err === 'string' ? err : JSON.stringify(err),
+      details: `HTTP ${statusCode || 0}. Code: ${backendCode || 'N/A'}`,
       statusCode: statusCode || 0,
       action: 'Try refreshing the page or restarting the application',
       retryable: true,
@@ -492,13 +492,13 @@ export default function Login() {
                 </button>
                 <button
                   onClick={() => {
-                    if (serverIP) {
-                      localStorage.setItem('serverIP', serverIP);
+                    if (serverIP && serverIP.trim()) {
+                      localStorage.setItem('serverIP', serverIP.trim());
                     } else {
                       localStorage.removeItem('serverIP');
                     }
                     setShowNetworkSetup(false);
-                    window.location.reload(); // Reload to re-initialize axios instance
+                    // No reload needed — api.js reads serverIP dynamically on every request
                   }}
                   className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700"
                 >

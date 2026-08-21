@@ -99,11 +99,12 @@ router.post('/login', loginLimiter, async (req, res) => {
 
     const parsedPermissions = user.permissions ? JSON.parse(user.permissions) : [];
     
-    // Create JWT token
+    // Create JWT token (default 8h)
+    const jwtExpiry = process.env.JWT_EXPIRY || process.env.JWT_EXPIRES_IN || process.env.JWT_ACCESS_EXPIRY || '8h';
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role, name: user.full_name, permissions: parsedPermissions },
       process.env.JWT_SECRET,
-      { expiresIn: '15m' }
+      { expiresIn: jwtExpiry }
     );
 
     // Create refresh token
@@ -121,7 +122,7 @@ router.post('/login', loginLimiter, async (req, res) => {
       httpOnly: true,
       secure: false,
       sameSite: 'strict',
-      maxAge: 15 * 60 * 1000
+      maxAge: 8 * 60 * 60 * 1000 // 8 hours
     });
     
     res.cookie('refreshToken', refreshToken, {
@@ -241,20 +242,40 @@ router.post('/refresh', async (req, res) => {
     const user = userResult.rows[0];
     const parsedPermissions = user.permissions ? JSON.parse(user.permissions) : [];
     
+    const jwtExpiry = process.env.JWT_EXPIRY || process.env.JWT_EXPIRES_IN || process.env.JWT_ACCESS_EXPIRY || '8h';
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role, name: user.full_name, permissions: parsedPermissions },
       process.env.JWT_SECRET,
-      { expiresIn: '15m' }
+      { expiresIn: jwtExpiry }
+    );
+
+    // Invalidate old refresh token (Token Rotation)
+    await query('DELETE FROM refresh_tokens WHERE token = $1', [refreshToken]);
+
+    // Issue new refresh token
+    const newRefreshToken = crypto.randomBytes(40).toString('hex');
+    const newExpiry = new Date();
+    newExpiry.setDate(newExpiry.getDate() + 7);
+    await query(
+      'INSERT INTO refresh_tokens (user_id, token, expires_at, ip_address) VALUES ($1, $2, $3, $4)',
+      [userId, newRefreshToken, newExpiry, req.ip]
     );
 
     res.cookie('token', token, {
       httpOnly: true,
       secure: false,
       sameSite: 'strict',
-      maxAge: 15 * 60 * 1000
+      maxAge: 8 * 60 * 60 * 1000 // 8 hours
     });
 
-    res.json({ success: true, token });
+    res.cookie('refreshToken', newRefreshToken, {
+      httpOnly: true,
+      secure: false,
+      sameSite: 'strict',
+      maxAge: 7 * 24 * 60 * 60 * 1000
+    });
+
+    res.json({ success: true, token, refreshToken: newRefreshToken });
   } catch (err) {
     logError(err, req, { feature: 'auth' });
     logger.error('Refresh error:', err);
