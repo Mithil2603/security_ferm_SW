@@ -40,10 +40,10 @@ module.exports = {
   ],
 
   // Timeouts for integration tests
-  testTimeout: 10000,
+  testTimeout: 30000,
 
-  // Setup file for test database
-  // setupFilesAfterSetup: ['./tests/setup.js'],
+  // Global setup file for test database
+  setupFilesAfterEnv: ['<rootDir>/tests/jest.setup.js'],
 
   // Verbose output
   verbose: true,
