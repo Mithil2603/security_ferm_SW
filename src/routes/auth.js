@@ -422,7 +422,7 @@ router.post('/forgot-password', async (req, res) => {
       .slice(0, 19)
       .replace('T', ' ');
 
-    const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password/${resetToken}`;
+    const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/#/reset-password/${resetToken}`;
     
     const emailHtml = `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
@@ -465,6 +465,31 @@ router.post('/forgot-password', async (req, res) => {
   }
 });
 
+// GET /api/auth/validate-reset-token/:token
+router.get('/validate-reset-token/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Token is required' });
+    }
+
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+    const result = await query(
+      'SELECT id FROM users WHERE reset_token = $1 AND reset_token_expires > CURRENT_TIMESTAMP',
+      [hashedToken]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({ success: false, message: 'Reset link is invalid or has expired' });
+    }
+
+    res.json({ success: true, message: 'Token is valid' });
+  } catch (error) {
+    logger.error('Validate reset token error:', error);
+    res.status(500).json({ success: false, message: 'Failed to validate reset token' });
+  }
+});
+
 // POST /api/auth/reset-password
 router.post('/reset-password', async (req, res) => {
   try {
@@ -472,28 +497,42 @@ router.post('/reset-password', async (req, res) => {
     if (!token || !new_password) {
       return res.status(400).json({ success: false, message: 'Token and new password are required' });
     }
-    if (new_password.length < 6) {
-      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
+    if (new_password.length < 8) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' });
     }
 
     const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
     
-    const result = await query(
-      'SELECT id FROM users WHERE reset_token = $1 AND reset_token_expires > CURRENT_TIMESTAMP',
+    const userResult = await query(
+      'SELECT id, password_hash FROM users WHERE reset_token = $1 AND reset_token_expires > CURRENT_TIMESTAMP',
       [hashedToken]
     );
 
-    if (result.rows.length === 0) {
+    if (userResult.rows.length === 0) {
       return res.status(400).json({ success: false, message: 'Token is invalid or has expired' });
     }
 
-    const userId = result.rows[0].id;
+    const user = userResult.rows[0];
+    const isSamePassword = await bcrypt.compare(new_password, user.password_hash);
+    if (isSamePassword) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'New password must be different from your current password.' 
+      });
+    }
+
     const newHash = await bcrypt.hash(new_password, parseInt(process.env.BCRYPT_ROUNDS) || 12);
     
+    // Update password and clear reset token
     await query(
       'UPDATE users SET password_hash = $1, reset_token = NULL, reset_token_expires = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [newHash, userId]
+      [newHash, user.id]
     );
+
+    // Invalidate all existing sessions/refresh tokens for this user
+    await query('DELETE FROM refresh_tokens WHERE user_id = $1', [user.id]);
+
+    logger.info(`✅ Password successfully reset for user ID: ${user.id}`);
 
     res.json({ success: true, message: 'Password has been reset successfully. You can now login.' });
   } catch (error) {
