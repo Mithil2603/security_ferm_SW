@@ -16,85 +16,98 @@ router.get('/', async (req, res) => {
     const monthStart = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
     const today = new Date().toISOString().split('T')[0];
 
-    // Revenue this month
-    const revenueResult = await query(
-      `SELECT 
-        COALESCE(SUM(final_amount), 0) as total_billed,
-        COALESCE(SUM(payment_received), 0) as total_collected,
-        COALESCE(SUM(payment_due), 0) as total_outstanding,
-        COUNT(*) as invoice_count,
-        SUM(CASE WHEN status = 'overdue' THEN 1 ELSE 0 END) as overdue_count
-       FROM invoices WHERE invoice_date >= $1 AND status != 'cancelled'`,
-      [monthStart]
-    );
+    // Execute all queries in parallel for high performance
+    const [
+      revenueResult,
+      empResult,
+      clientResult,
+      expenseResult,
+      payrollResult,
+      trendResult,
+      recentInvoices,
+      topClients,
+      expByCategory
+    ] = await Promise.all([
+      // 1. Revenue this month
+      query(
+        `SELECT 
+          COALESCE(SUM(final_amount), 0) as total_billed,
+          COALESCE(SUM(payment_received), 0) as total_collected,
+          COALESCE(SUM(payment_due), 0) as total_outstanding,
+          COUNT(*) as invoice_count,
+          COALESCE(SUM(CASE WHEN status = 'overdue' THEN 1 ELSE 0 END), 0) as overdue_count
+         FROM invoices WHERE invoice_date >= $1 AND status != 'cancelled'`,
+        [monthStart]
+      ),
 
-    // Employee stats
-    const empResult = await query(
-      `SELECT 
-        COUNT(*) as total_employees,
-        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active_employees
-       FROM employees`
-    );
+      // 2. Employee stats
+      query(
+        `SELECT 
+          COUNT(*) as total_employees,
+          COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) as active_employees
+         FROM employees`
+      ),
 
-    // Client stats
-    const clientResult = await query(
-      `SELECT 
-        COUNT(*) as total_clients,
-        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active_clients
-       FROM clients`
-    );
+      // 3. Client stats
+      query(
+        `SELECT 
+          COUNT(*) as total_clients,
+          COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) as active_clients
+         FROM clients`
+      ),
 
-    // Expense this month
-    const expenseResult = await query(
-      `SELECT COALESCE(SUM(amount), 0) as total_expenses
-       FROM expenses WHERE expense_date >= $1 AND status IN ('approved', 'paid')`,
-      [monthStart]
-    );
+      // 4. Expense this month
+      query(
+        `SELECT COALESCE(SUM(amount), 0) as total_expenses
+         FROM expenses WHERE expense_date >= $1 AND status IN ('approved', 'paid')`,
+        [monthStart]
+      ),
 
-    // Pending payroll
-    const payrollResult = await query(
-      `SELECT COUNT(*) as pending_count, COALESCE(SUM(net_salary), 0) as pending_amount
-       FROM payroll WHERE payment_status = 'pending'`
-    );
+      // 5. Pending payroll
+      query(
+        `SELECT COUNT(*) as pending_count, COALESCE(SUM(net_salary), 0) as pending_amount
+         FROM payroll WHERE payment_status = 'pending'`
+      ),
 
-    // Last 6 months revenue trend
-    const trendResult = await query(
-      `SELECT 
-        DATE_FORMAT(invoice_date, '%b') as month,
-        CAST(DATE_FORMAT(invoice_date, '%m') AS UNSIGNED) as month_num,
-        CAST(DATE_FORMAT(invoice_date, '%Y') AS UNSIGNED) as year,
-        COALESCE(SUM(payment_received), 0) as collected,
-        COALESCE(SUM(final_amount), 0) as billed
-       FROM invoices
-       WHERE invoice_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH) AND status != 'cancelled'
-       GROUP BY year, month_num, month
-       ORDER BY year ASC, month_num ASC`
-    );
+      // 6. Last 6 months revenue trend
+      query(
+        `SELECT 
+          DATE_FORMAT(invoice_date, '%b') as month,
+          CAST(DATE_FORMAT(invoice_date, '%m') AS UNSIGNED) as month_num,
+          CAST(DATE_FORMAT(invoice_date, '%Y') AS UNSIGNED) as year,
+          COALESCE(SUM(payment_received), 0) as collected,
+          COALESCE(SUM(final_amount), 0) as billed
+         FROM invoices
+         WHERE invoice_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH) AND status != 'cancelled'
+         GROUP BY year, month_num, month
+         ORDER BY year ASC, month_num ASC`
+      ),
 
-    // Recent invoices
-    const recentInvoices = await query(
-      `SELECT i.invoice_number, i.status, i.final_amount, i.invoice_date, c.name as client_name
-       FROM invoices i JOIN clients c ON i.client_id = c.id
-       ORDER BY i.created_at DESC LIMIT 5`
-    );
+      // 7. Recent invoices
+      query(
+        `SELECT i.invoice_number, i.status, i.final_amount, i.invoice_date, c.name as client_name
+         FROM invoices i JOIN clients c ON i.client_id = c.id
+         ORDER BY i.created_at DESC LIMIT 5`
+      ),
 
-    // Top clients by revenue
-    const topClients = await query(
-      `SELECT c.name, c.city,
-        COALESCE(SUM(i.payment_received), 0) as revenue
-       FROM clients c
-       LEFT JOIN invoices i ON c.id = i.client_id AND i.status != 'cancelled'
-       GROUP BY c.id, c.name, c.city
-       ORDER BY revenue DESC LIMIT 5`
-    );
+      // 8. Top clients by revenue
+      query(
+        `SELECT c.name, c.city,
+          COALESCE(SUM(i.payment_received), 0) as revenue
+         FROM clients c
+         LEFT JOIN invoices i ON c.id = i.client_id AND i.status != 'cancelled'
+         GROUP BY c.id, c.name, c.city
+         ORDER BY revenue DESC LIMIT 5`
+      ),
 
-    // Expense by category this month
-    const expByCategory = await query(
-      `SELECT category, COALESCE(SUM(amount), 0) as total
-       FROM expenses WHERE expense_date >= $1 AND status IN ('approved', 'paid')
-       GROUP BY category ORDER BY total DESC`,
-      [monthStart]
-    );
+      // 9. Expense by category this month
+      query(
+        `SELECT category, COALESCE(SUM(amount), 0) as total
+         FROM expenses WHERE expense_date >= $1 AND status IN ('approved', 'paid')
+         GROUP BY category ORDER BY total DESC`,
+        [monthStart]
+      )
+    ]);
 
     const revenue = revenueResult.rows[0];
     const employees = empResult.rows[0];
