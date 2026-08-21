@@ -126,8 +126,15 @@ function adaptSqlForMySQL(sql) {
   // 11. date(col, '+1 month') → DATE_ADD(col, INTERVAL 1 MONTH)
   q = q.replace(/date\s*\(\s*([^,)]+)\s*,\s*'\+1 month'\s*\)/gi, 'DATE_ADD($1, INTERVAL 1 MONTH)');
 
-  // 12. date(col) → DATE(col) [just wrapping in DATE() is the same]
+  // 12a. date($N, 'start of month') → DATE_FORMAT(DATE($N), '%Y-%m-01')
+  //      Must run BEFORE the plain date($N) rule below
+  q = q.replace(/\bdate\s*\(\s*(\$\d+)\s*,\s*'start of month'\s*\)/gi, "DATE_FORMAT(DATE($1), '%Y-%m-01')");
+
+  // 12b. date($N) → DATE($N)  [SQLite param-as-date cast — valid MySQL function too]
   q = q.replace(/\bdate\s*\(\s*(\$\d+)\s*\)/gi, 'DATE($1)');
+
+
+
 
   // 13. ON CONFLICT DO NOTHING -> MySQL doesn't support this; use INSERT IGNORE
   if (/ON CONFLICT\s+DO NOTHING/i.test(q)) {
