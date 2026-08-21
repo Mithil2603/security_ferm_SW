@@ -36,8 +36,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  const pool = typeof db._pool === 'function' ? db._pool() : undefined;
-  if (pool) await pool.end();
+  // Do NOT close the pool here — it's shared across test suites in the same
+  // Jest worker process. jest --forceExit handles process cleanup.
 });
 
 /** Assert a route returns a known HTTP status code */
