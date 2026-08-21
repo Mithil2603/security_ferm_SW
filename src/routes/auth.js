@@ -407,7 +407,8 @@ router.post('/forgot-password', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Email is required' });
     }
 
-    const result = await query('SELECT * FROM users WHERE email = $1 AND is_active = 1', [email.toLowerCase()]);
+    const cleanEmail = email.trim().toLowerCase();
+    const result = await query('SELECT * FROM users WHERE email = $1 AND is_active = 1', [cleanEmail]);
     if (result.rows.length === 0) {
       // Don't reveal that the user doesn't exist for security reasons
       return res.json({ success: true, message: 'If an account exists, a password reset email has been sent.' });
@@ -416,14 +417,12 @@ router.post('/forgot-password', async (req, res) => {
     const user = result.rows[0];
     const resetToken = crypto.randomBytes(32).toString('hex');
     const hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex');
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // Store as ISO string for SQLite compat
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 19)
+      .replace('T', ' ');
 
-    await query(
-      'UPDATE users SET reset_token = $1, reset_token_expires = $2 WHERE id = $3',
-      [hashedToken, expiresAt, user.id]
-    );
-
-    const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password/${resetToken}`;
+    const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password/${resetToken}`;
     
     const emailHtml = `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
@@ -436,6 +435,7 @@ router.post('/forgot-password', async (req, res) => {
       </div>
     `;
 
+    // Send email FIRST — only persist token in DB if email succeeds
     await sendEmail({
       to: user.email,
       subject: 'Password Reset Request',
@@ -443,10 +443,24 @@ router.post('/forgot-password', async (req, res) => {
       text: `You requested a password reset. Please go to: ${resetUrl}`
     });
 
+    // Persist token in DB
+    await query(
+      'UPDATE users SET reset_token = $1, reset_token_expires = $2 WHERE id = $3',
+      [hashedToken, expiresAt, user.id]
+    );
+
     res.json({ success: true, message: 'If an account exists, a password reset email has been sent.' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'auth' });
     logger.error('Forgot password error:', error);
+
+    if (error.message?.includes('SMTP is not fully configured')) {
+      return res.status(503).json({ 
+        success: false, 
+        message: 'Email service is not configured. Contact your administrator to set up SMTP in Settings.' 
+      });
+    }
+
     res.status(500).json({ success: false, message: 'Failed to process password reset request' });
   }
 });

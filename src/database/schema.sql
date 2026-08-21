@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     created_by INT,
     permissions TEXT,
+    reset_token VARCHAR(64),
+    reset_token_expires DATETIME,
     CONSTRAINT chk_users_role CHECK (role IN ('admin', 'manager', 'accountant', 'employee'))
 );
 

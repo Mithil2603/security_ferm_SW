@@ -15,7 +15,7 @@ export default function ForgotPassword() {
     setLoading(true);
 
     try {
-      await api.post('/auth/forgot-password', { email });
+      await api.post('/auth/forgot-password', { email: email.trim().toLowerCase() });
       setSuccess(true);
     } catch (err) {
       setError(err.message || 'Failed to process request. Please try again.');
@@ -52,7 +52,7 @@ export default function ForgotPassword() {
               </div>
               <h3 className="text-lg font-medium text-slate-900 mb-2">Check your email</h3>
               <p className="text-sm text-slate-500 mb-6">
-                We have sent a password reset link to <strong>{email}</strong>. The link will expire in 24 hours.
+                If <strong>{email}</strong> is registered, a password reset link has been sent. The link will expire in 24 hours.
               </p>
               <Link
                 to="/login"
