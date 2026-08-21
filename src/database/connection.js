@@ -28,6 +28,9 @@ const poolConfig = {
 let pool = null;
 
 async function initPool() {
+  // Idempotent — skip if pool already created
+  if (pool) return true;
+
   try {
     pool = mysql.createPool(poolConfig);
 
@@ -268,7 +271,10 @@ const query = async (text, params = []) => {
 // Initialize DB: create schema if needed, run migrations
 // ─────────────────────────────────────────────────────────────────────────────
 async function initDB() {
+  // Idempotent — if pool already up, no need to re-run schema/migrations
+  const alreadyInitialized = !!pool;
   await initPool();
+  if (alreadyInitialized) return;
 
   // Check if tables exist; if not, run schema
   try {
@@ -326,5 +332,19 @@ const db = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Exports — same surface as before
+// pool is exported as a getter so consumers always get the live instance
+// (pool is null at module load time; initDB() sets it asynchronously)
 // ─────────────────────────────────────────────────────────────────────────────
-module.exports = { pool: { query: async (t, p) => query(t, p), end: async () => { if (pool) await pool.end(); } }, query, db, initDB, adaptSqlForMySQL };
+const exports = {
+  query,
+  db,
+  initDB,
+  adaptSqlForMySQL,
+};
+
+Object.defineProperty(exports, 'pool', {
+  get() { return pool; },
+  enumerable: true,
+});
+
+module.exports = exports;
