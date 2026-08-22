@@ -1,12 +1,11 @@
 import { useState, useEffect } from 'react';
-import { FileText, Plus, Search, Download, CreditCard, Clock, X, Mail, Trash2, Zap, Edit } from 'lucide-react';
+import { FileText, Plus, Search, Download, CreditCard, Clock, X, Mail, Trash2, Zap, Edit, AlertCircle, Loader2 } from 'lucide-react';
 import api from '../services/api';
 import { format } from 'date-fns';
 import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
 import EventInvoiceModal from '../components/EventInvoiceModal';
 import EditInvoiceModal from '../components/EditInvoiceModal';
-import { getApiBaseUrl } from '../utils/apiUrl';
 
 export default function Invoices() {
   const [invoices, setInvoices] = useState([]);
@@ -18,9 +17,13 @@ export default function Invoices() {
   const [selectedInvoice, setSelectedInvoice] = useState(null);
   const [clients, setClients] = useState([]);
   const [error, setError] = useState('');
+  const [fetchError, setFetchError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [emailingId, setEmailingId] = useState(null);
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
 
   const [invoiceForm, setInvoiceForm] = useState({
     client_id: '', billing_period_start: '', billing_period_end: '',
@@ -35,17 +38,24 @@ export default function Invoices() {
   const fetchInvoices = async () => {
     try {
       setLoading(true);
-      const response = await api.get(`/invoices?page=${page}&limit=20`);
+      setFetchError('');
+      const params = new URLSearchParams({ page, limit: 20 });
+      if (searchTerm) params.append('search', searchTerm);
+      if (statusFilter) params.append('status', statusFilter);
+      const response = await api.get(`/invoices?${params.toString()}`);
       setInvoices(response.data || []);
       if (response.pagination) setPagination(response.pagination);
     } catch (err) {
       console.error('Failed to fetch invoices', err);
+      setFetchError('Failed to load invoices. Check server connection.');
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { fetchInvoices(); }, [page]);
+  useEffect(() => { fetchInvoices(); }, [page, searchTerm, statusFilter]);
+
+  useEffect(() => { setPage(1); }, [searchTerm, statusFilter]);
 
   const fetchClients = async () => {
     try {
@@ -53,6 +63,7 @@ export default function Invoices() {
       setClients((res.data || []).filter(c => c.is_active));
     } catch (err) {
       console.error('Failed to fetch clients', err);
+      setError('Could not load client list. Please close and reopen the form.');
     }
   };
 
@@ -66,6 +77,10 @@ export default function Invoices() {
   const handleCreateInvoice = async (e) => {
     e.preventDefault();
     setError('');
+    if (invoiceForm.billing_period_end < invoiceForm.billing_period_start) {
+      setError('Billing end date cannot be before start date.');
+      return;
+    }
     setSubmitting(true);
     try {
       await api.post('/invoices', {
@@ -91,26 +106,28 @@ export default function Invoices() {
       const res = await api.get('/clients?limit=200');
       const activeClients = (res.data || []).filter(c => c.is_active);
       
-      let created = 0;
-      let skipped = 0;
-      for (const client of activeClients) {
-        try {
-          await api.post('/invoices', {
+      const results = await Promise.allSettled(
+        activeClients.map(client =>
+          api.post('/invoices', {
             client_id: client.id,
             billing_period_start: startOfMonth,
             billing_period_end: endOfMonth,
-            tax_rate: 18,
+            tax_type: client.default_tax_type || 'cgst_sgst',
             discount_amount: 0,
-          });
-          created++;
-        } catch (err) {
-          if (err.response?.status === 409 || err.message?.includes('already exists') || err.response?.data?.message?.includes('already exists')) {
-            skipped++;
-          }
-          // Skip other clients that fail
-        }
-      }
-      alert(`Successfully generated ${created} new invoices. Skipped ${skipped} clients that were already billed for this month.`);
+          })
+        )
+      );
+
+      let created = 0, skipped = 0, failed = 0;
+      results.forEach(r => {
+        if (r.status === 'fulfilled') created++;
+        else if (r.reason?.response?.status === 409 || r.reason?.response?.data?.message?.includes('already exists')) skipped++;
+        else failed++;
+      });
+
+      let msg = `Generated ${created} new invoices. Skipped ${skipped} already billed.`;
+      if (failed > 0) msg += `\n⚠️ ${failed} failed — check client data (missing monthly rate?).`;
+      alert(msg);
       fetchInvoices();
     } catch (err) {
       alert('Failed to auto-generate invoices');
@@ -157,38 +174,39 @@ export default function Invoices() {
     try {
       setLoading(true);
       await api.delete(`/invoices/${inv.id}`);
-      fetchInvoices();
+      await fetchInvoices();
     } catch (err) {
       alert(err.message || 'Failed to delete invoice');
+    } finally {
       setLoading(false);
     }
   };
 
   const handleEmailInvoice = async (inv) => {
     if (!window.confirm(`Are you sure you want to email invoice ${inv.invoice_number} to ${inv.client_name}?`)) return;
-    
+    setEmailingId(inv.id);
     try {
-      setLoading(true);
       const res = await api.post(`/invoices/${inv.id}/email`);
       alert(res.message || 'Invoice emailed successfully!');
       fetchInvoices();
     } catch (err) {
       alert(err.message || 'Failed to email invoice. Please ensure the client has an email address and SMTP is configured.');
     } finally {
-      setLoading(false);
+      setEmailingId(null);
     }
   };
 
-  const handleDownloadPDF = (inv) => {
+  const handleDownloadPDF = async (inv) => {
     try {
-      const token = localStorage.getItem('token');
-      const baseUrl = getApiBaseUrl();
-      const url = `${baseUrl}/invoices/${inv.id}/pdf?token=${token}`;
-      // window.open triggers Electron's setWindowOpenHandler -> downloadURL
-      window.open(url, '_blank');
+      const response = await api.get(`/invoices/${inv.id}/pdf`, { responseType: 'blob' });
+      const blob = new Blob([response], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `${inv.invoice_number}.pdf`; a.click();
+      URL.revokeObjectURL(url);
     } catch (err) {
       console.error(err);
-      alert('Failed to trigger PDF download');
+      alert('Failed to download PDF');
     }
   };
 
@@ -222,6 +240,35 @@ export default function Invoices() {
         </div>
       </div>
 
+      {/* Search & Filter Bar */}
+      <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col sm:flex-row gap-3 items-center">
+        <div className="relative flex-1 w-full">
+          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text" placeholder="Search by invoice number or client..."
+            value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+          />
+        </div>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+          className="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:ring-2 focus:ring-teal-500 outline-none">
+          <option value="">All Statuses</option>
+          <option value="draft">Draft</option>
+          <option value="sent">Sent</option>
+          <option value="paid">Paid</option>
+          <option value="partially_paid">Partially Paid</option>
+          <option value="overdue">Overdue</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </div>
+
+      {fetchError && (
+        <div className="p-4 bg-red-50 text-red-600 rounded-lg text-sm flex justify-between shadow-sm border border-red-100">
+          <div className="flex items-center gap-2"><AlertCircle className="w-4 h-4" /> {fetchError}</div>
+          <button onClick={fetchInvoices} className="underline hover:text-red-700 font-medium">Retry</button>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">
@@ -253,13 +300,13 @@ export default function Invoices() {
                   <tr key={inv.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-6 py-4">
                       <div className="font-semibold text-slate-900">{inv.invoice_number}</div>
-                      <div className="text-slate-500 text-xs mt-0.5">Date: {format(new Date(inv.invoice_date), 'MMM dd, yyyy')}</div>
+                      <div className="text-slate-500 text-xs mt-0.5">Date: {format(new Date(inv.invoice_date + 'T00:00:00'), 'MMM dd, yyyy')}</div>
                     </td>
                     <td className="px-6 py-4">
                       <div className="font-medium text-slate-800">{inv.client_name}</div>
                     </td>
                     <td className="px-6 py-4 text-slate-600 text-xs">
-                      {format(new Date(inv.billing_period_start), 'MMM dd')} - {format(new Date(inv.billing_period_end), 'MMM dd, yyyy')}
+                      {format(new Date(inv.billing_period_start + 'T00:00:00'), 'MMM dd')} - {format(new Date(inv.billing_period_end + 'T00:00:00'), 'MMM dd, yyyy')}
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="font-bold text-slate-900">₹{parseFloat(inv.final_amount).toLocaleString('en-IN')}</div>
@@ -284,13 +331,16 @@ export default function Invoices() {
                           <Download className="w-4 h-4" />
                         </button>
                         <button onClick={() => handleEmailInvoice(inv)}
-                          className="p-1.5 text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors" title="Email Invoice">
-                          <Mail className="w-4 h-4" />
+                          disabled={emailingId === inv.id}
+                          className="p-1.5 text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors disabled:opacity-50" title="Email Invoice">
+                          {emailingId === inv.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
                         </button>
-                        <button onClick={() => { setSelectedInvoice(inv); setIsEditOpen(true); }}
-                          className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Edit Invoice">
-                          <Edit className="w-4 h-4" />
-                        </button>
+                        {inv.status !== 'paid' && inv.status !== 'cancelled' && (
+                          <button onClick={() => { setSelectedInvoice(inv); setIsEditOpen(true); }}
+                            className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Edit Invoice">
+                            <Edit className="w-4 h-4" />
+                          </button>
+                        )}
                         {inv.status !== 'paid' && inv.status !== 'cancelled' && (
                           <button onClick={() => openPaymentModal(inv)}
                             className="p-1.5 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="Record Payment">

@@ -394,7 +394,7 @@ router.delete('/:id', async (req, res) => {
 });
 
 // GET /api/invoices/:id/pdf
-router.get('/:id/pdf', async (req, res) => {
+router.get('/:id/pdf', authMiddleware, async (req, res) => {
   try {
     const result = await query(
       `SELECT i.*, c.name, c.address, c.city, c.state, c.postal_code, c.email, c.phone, c.gst_number
