@@ -1,0 +1,48 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+early_access: false
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "main"
+  path_filters:
+    - "!node_modules/**"
+    - "!frontend/node_modules/**"
+    - "!dist/**"
+    - "!electron-dist/**"
+    - "!frontend-dist/**"
+    - "!coverage/**"
+    - "!*.lock"
+    - "!package-lock.json"
+    - "!frontend/package-lock.json"
+    - "!*.log"
+    - "!.agent/**"
+    - "!.agents/**"
+    - "!tests/fixtures/**"
+  path_instructions:
+    - path: "src/**"
+      instructions: |
+        - Ensure all SQL queries use parameterized placeholders (?) to prevent SQL injection.
+        - Verify all API routes authenticate requests using `authMiddleware` and apply appropriate role/permission checks where required.
+        - Ensure error handlers do not leak stack traces or raw database connection details to clients in production mode.
+        - Check that date math conforms with MySQL date formats (YYYY-MM-DD).
+    - path: "src/services/payroll/**"
+      instructions: |
+        - Ensure financial and salary calculations use exact decimal arithmetic (e.g. decimal.js) without floating point inaccuracies.
+        - Verify PF statutory rules: 12% contribution with 15,000 statutory cap when applicable.
+        - Verify Gratuity calculation: (15 * last_drawn_salary * years_of_service) / 26 capped at statutory limits.
+    - path: "frontend/src/**"
+      instructions: |
+        - Ensure React components use modern functional components with hooks.
+        - Verify proper error handling and toast notifications for all async API calls.
+        - Check for proper responsive UI styling and dark mode consistency.
+chat:
+  auto_reply: true
