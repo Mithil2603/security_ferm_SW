@@ -34,6 +34,14 @@
       "target": "nsis",
       "icon": "build/icons/win/icon.ico"
     },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "identity": null
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Office"
+    },
     "nsis": {
       "oneClick": true,
       "perMachine": false,
