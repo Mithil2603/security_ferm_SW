@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { UserSquare2, Plus, Search, Edit2, Trash2, CheckCircle2, XCircle, ShieldCheck, X, Upload, FileText, Download } from 'lucide-react';
+import { UserSquare2, Plus, Search, Edit2, Trash2, CheckCircle2, XCircle, ShieldCheck, X, Upload, FileText, Download, AlertCircle } from 'lucide-react';
 import api from '../services/api';
 import { getServerBaseUrl } from '../utils/apiUrl';
 import { format } from 'date-fns';
@@ -11,7 +11,7 @@ import ImportModal from '../components/shared/ImportModal';
 const emptyForm = {
   full_name: '', phone: '', email: '', date_of_birth: '', address: '', city: '',
   aadhar_number: '', pan_number: '', bank_account_number: '', bank_ifsc_code: '',
-  bank_name: '', bank_account_holder_name: '', date_of_joining: format(new Date(), 'yyyy-MM-dd'),
+  bank_name: '', bank_account_holder_name: '', date_of_joining: '',
   designation: 'Watchman', salary_structure_id: '', assigned_client_id: '',
   emergency_contact_name: '', emergency_contact_phone: '', notes: '', is_active: true
 };
@@ -20,13 +20,16 @@ export default function Employees() {
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [showInactive, setShowInactive] = useState(false);
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEmp, setEditingEmp] = useState(null);
   const [formData, setFormData] = useState({ ...emptyForm });
   const [error, setError] = useState('');
+  const [fetchError, setFetchError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [salaryStructures, setSalaryStructures] = useState([]);
   const [clientsList, setClientsList] = useState([]);
@@ -37,11 +40,13 @@ export default function Employees() {
   const fetchEmployees = async () => {
     try {
       setLoading(true);
-      const response = await api.get(`/employees?search=${searchTerm}&page=${page}&limit=20`);
+      setFetchError('');
+      const response = await api.get(`/employees?search=${searchTerm}${!showInactive ? '&is_active=true' : ''}&page=${page}&limit=20`);
       setEmployees(response.data || []);
       if (response.pagination) setPagination(response.pagination);
     } catch (err) {
       console.error('Failed to fetch employees', err);
+      setFetchError('Failed to load employees. Check server connection.');
     } finally {
       setLoading(false);
     }
@@ -57,6 +62,7 @@ export default function Employees() {
       setClientsList(clRes.data || []);
     } catch (err) {
       console.error('Failed to fetch dropdown data', err);
+      setError('Could not load salary structures or client list. Try closing and reopening the form.');
     }
   };
 
@@ -69,9 +75,12 @@ export default function Employees() {
     }
   };
 
-  useEffect(() => { fetchEmployees(); }, [searchTerm, page]);
+  useEffect(() => { 
+    const timer = setTimeout(() => fetchEmployees(), 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm, showInactive, page]);
 
-  useEffect(() => { setPage(1); }, [searchTerm]);
+  useEffect(() => { setPage(1); }, [searchTerm, showInactive]);
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -80,7 +89,7 @@ export default function Employees() {
 
   const openCreateModal = () => {
     setEditingEmp(null);
-    setFormData({ ...emptyForm });
+    setFormData({ ...emptyForm, date_of_joining: format(new Date(), 'yyyy-MM-dd') });
     setError('');
     fetchDropdownData();
     setIsModalOpen(true);
@@ -160,43 +169,57 @@ export default function Employees() {
 
   const handleDeactivate = async (id) => {
     try {
+      setDeleting(true);
       await api.delete(`/employees/${id}`);
       setConfirmDelete(null);
       fetchEmployees();
     } catch (err) {
       console.error('Failed to deactivate employee', err);
+      alert(err.response?.data?.message || 'Failed to deactivate employee');
+    } finally {
+      setDeleting(false);
     }
   };
 
   const handleHardDelete = async (id) => {
     try {
+      setDeleting(true);
       await api.delete(`/employees/${id}/hard`);
       setConfirmDelete(null);
       fetchEmployees();
     } catch (err) {
       alert(err.response?.data?.message || 'Failed to permanently delete employee');
       console.error('Failed to permanently delete employee', err);
+    } finally {
+      setDeleting(false);
     }
   };
 
-  const handleExportCSV = () => {
-    const data = employees.map(e => ({
-      'Emp ID': e.employee_id,
-      'Full Name': e.full_name,
-      'Designation': e.designation,
-      'Phone': e.phone,
-      'Client Site': e.client_name || 'Unassigned',
-      'Salary Structure': e.salary_structure_name || 'None',
-      'Joining Date': format(new Date(e.date_of_joining), 'yyyy-MM-dd'),
-      'Status': e.is_active ? 'Active' : 'Inactive',
-      'Aadhar': e.aadhar_number,
-      'Bank Account': e.bank_account_number,
-      'IFSC': e.bank_ifsc_code
-    }));
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Employees");
-    XLSX.writeFile(wb, `Watchmen_Export_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
+  const handleExportCSV = async () => {
+    try {
+      const response = await api.get(`/employees?search=${searchTerm}${!showInactive ? '&is_active=true' : ''}&limit=10000`);
+      const allEmployees = response.data || [];
+      const data = allEmployees.map(e => ({
+        'Emp ID': e.employee_id,
+        'Full Name': e.full_name,
+        'Designation': e.designation,
+        'Phone': e.phone,
+        'Client Site': e.client_name || 'Unassigned',
+        'Salary Structure': e.salary_structure_name || 'None',
+        'Joining Date': e.date_of_joining ? format(new Date(e.date_of_joining + 'T00:00:00'), 'yyyy-MM-dd') : '',
+        'Status': e.is_active ? 'Active' : 'Inactive',
+        'Aadhar': e.aadhar_number,
+        'Bank Account': e.bank_account_number,
+        'IFSC': e.bank_ifsc_code
+      }));
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Employees");
+      XLSX.writeFile(wb, `Watchmen_Export_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
+    } catch (err) {
+      console.error('Failed to export employees', err);
+      alert('Export failed. Please try again.');
+    }
   };
 
   const inputCls = "w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm";
@@ -227,13 +250,31 @@ export default function Employees() {
         </div>
       </div>
 
-      <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col sm:flex-row gap-4">
-        <div className="relative flex-1">
+      <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col sm:flex-row gap-4 items-center">
+        <div className="relative flex-1 w-full">
           <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input type="text" placeholder="Search by name, ID, or phone..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all" />
         </div>
+        <div className="flex items-center gap-2">
+          <label className="text-sm font-medium text-slate-600 cursor-pointer flex items-center gap-2">
+            <input 
+              type="checkbox" 
+              checked={showInactive} 
+              onChange={(e) => setShowInactive(e.target.checked)} 
+              className="w-4 h-4 text-teal-600 border-slate-300 rounded focus:ring-teal-500"
+            />
+            Show Inactive Employees
+          </label>
+        </div>
       </div>
+
+      {fetchError && (
+        <div className="mb-4 p-4 bg-red-50 text-red-600 rounded-lg text-sm flex justify-between shadow-sm border border-red-100">
+          <div className="flex items-center gap-2"><AlertCircle className="w-4 h-4" /> {fetchError}</div>
+          <button onClick={fetchEmployees} className="underline hover:text-red-700 font-medium">Retry</button>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
@@ -345,10 +386,11 @@ export default function Employees() {
             <div className="flex justify-end gap-3">
               <button onClick={() => setConfirmDelete(null)} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors">Cancel</button>
               <button 
+                disabled={deleting}
                 onClick={() => confirmDelete.type === 'deactivate' ? handleDeactivate(confirmDelete.id) : handleHardDelete(confirmDelete.id)} 
-                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors shadow-sm"
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors shadow-sm disabled:opacity-50"
               >
-                {confirmDelete.type === 'deactivate' ? 'Deactivate' : 'Delete Permanently'}
+                {deleting ? 'Processing...' : confirmDelete.type === 'deactivate' ? 'Deactivate' : 'Delete Permanently'}
               </button>
             </div>
           </div>
@@ -387,7 +429,7 @@ export default function Employees() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Date of Birth</label>
-                  <input type="date" name="date_of_birth" value={formData.date_of_birth} onChange={handleInputChange} className={inputCls} />
+                  <input type="date" name="date_of_birth" value={formData.date_of_birth} onChange={handleInputChange} max={new Date(Date.now() - 18 * 365.25 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]} className={inputCls} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">City</label>
@@ -399,11 +441,11 @@ export default function Employees() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Aadhar Number</label>
-                  <input type="text" name="aadhar_number" value={formData.aadhar_number} onChange={handleInputChange} maxLength="12" className={inputCls} />
+                  <input type="text" name="aadhar_number" value={formData.aadhar_number} onChange={handleInputChange} maxLength="12" pattern="\d{12}" title="Must be 12 digits" className={inputCls} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">PAN Number</label>
-                  <input type="text" name="pan_number" value={formData.pan_number} onChange={handleInputChange} maxLength="10" className={inputCls} />
+                  <input type="text" name="pan_number" value={formData.pan_number} onChange={e => setFormData({...formData, pan_number: e.target.value.toUpperCase()})} maxLength="10" pattern="[A-Z]{5}[0-9]{4}[A-Z]{1}" title="Format: ABCDE1234F" className={inputCls} />
                 </div>
               </div>
 
@@ -428,7 +470,7 @@ export default function Employees() {
                   <select name="salary_structure_id" value={formData.salary_structure_id} onChange={handleInputChange} className={inputCls}>
                     <option value="">-- Select --</option>
                     {salaryStructures.map(ss => (
-                      <option key={ss.id} value={ss.id}>{ss.name} (₹{parseFloat(ss.base_salary).toLocaleString('en-IN')})</option>
+                      <option key={ss.id} value={ss.id}>{ss.name} (₹{parseFloat(ss.base_salary || 0).toLocaleString('en-IN')})</option>
                     ))}
                   </select>
                 </div>
@@ -456,7 +498,7 @@ export default function Employees() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">IFSC Code</label>
-                  <input type="text" name="bank_ifsc_code" value={formData.bank_ifsc_code} onChange={handleInputChange} className={inputCls} />
+                  <input type="text" name="bank_ifsc_code" value={formData.bank_ifsc_code} onChange={e => setFormData({...formData, bank_ifsc_code: e.target.value.toUpperCase()})} pattern="[A-Z]{4}0[A-Z0-9]{6}" title="Format: SBIN0000001" className={inputCls} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Account Holder Name</label>

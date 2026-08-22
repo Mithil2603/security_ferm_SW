@@ -118,6 +118,17 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET /api/employees/salary-structures
+router.get('/meta/salary-structures', async (req, res) => {
+  try {
+    const result = await query('SELECT * FROM salary_structures WHERE is_active = 1 ORDER BY base_salary ASC');
+    res.json({ success: true, data: result.rows });
+  } catch (error) {
+    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
+    res.status(500).json({ success: false, message: 'Failed to fetch salary structures' });
+  }
+});
+
 // GET /api/employees/:id
 router.get('/:id', async (req, res) => {
   try {
@@ -341,16 +352,6 @@ router.delete('/:id/hard', async (req, res) => {
   }
 });
 
-// GET /api/employees/salary-structures
-router.get('/meta/salary-structures', async (req, res) => {
-  try {
-    const result = await query('SELECT * FROM salary_structures WHERE is_active = 1 ORDER BY base_salary ASC');
-    res.json({ success: true, data: result.rows });
-  } catch (error) {
-    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
-    res.status(500).json({ success: false, message: 'Failed to fetch salary structures' });
-  }
-});
 
 // POST /api/employees/:id/upload-doc
 router.post('/:id/upload-doc', upload.single('document'), async (req, res) => {
