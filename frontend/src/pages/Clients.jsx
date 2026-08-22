@@ -30,6 +30,7 @@ export default function Clients() {
   const [formData, setFormData] = useState({ ...emptyForm });
   const [renewData, setRenewData] = useState({ contract_end_date: '', monthly_rate: '' });
   const [error, setError] = useState('');
+  const [fetchError, setFetchError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -37,19 +38,22 @@ export default function Clients() {
   const fetchClients = async () => {
     try {
       setLoading(true);
+      setFetchError('');
       const url = `/clients?search=${searchTerm}${!showInactive ? '&is_active=true' : ''}&page=${page}&limit=20`;
       const response = await api.get(url);
       setClients(response.data || []);
       if (response.pagination) setPagination(response.pagination);
     } catch (err) {
       console.error('Failed to fetch clients', err);
+      setFetchError('Failed to load clients. Check server connection.');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchClients();
+    const timer = setTimeout(() => fetchClients(), 300);
+    return () => clearTimeout(timer);
   }, [searchTerm, showInactive, page]);
 
   // Reset page when search or filters change
@@ -172,14 +176,14 @@ export default function Clients() {
       ['', '', '', '', '', ''],
       ['DATE', 'REFERENCE', 'TYPE', 'DEBIT (₹)', 'CREDIT (₹)', 'BALANCE (₹)'],
       ...statementData.transactions.map(t => [
-        format(new Date(t.date), 'dd MMM yyyy'),
+        format(new Date(t.date + 'T00:00:00'), 'dd MMM yyyy'),
         t.reference,
         t.type,
-        t.debit || '',
-        t.credit || '',
-        t.balance
+        t.debit ? parseFloat(t.debit) : '',
+        t.credit ? parseFloat(t.credit) : '',
+        parseFloat(t.balance || 0)
       ]),
-      ['', '', '', '', 'FINAL BALANCE', statementData.final_balance]
+      ['', '', '', '', 'FINAL BALANCE', parseFloat(statementData.final_balance || 0)]
     ];
     const ws = XLSX.utils.aoa_to_sheet(rows);
     ws['!cols'] = [{wch: 15}, {wch: 20}, {wch: 15}, {wch: 15}, {wch: 15}, {wch: 15}];
@@ -194,6 +198,7 @@ export default function Clients() {
       fetchClients();
     } catch (err) {
       console.error('Failed to deactivate client', err);
+      alert(err.response?.data?.message || 'Failed to deactivate client');
     }
   };
 
@@ -208,23 +213,30 @@ export default function Clients() {
     }
   };
 
-  const handleExportCSV = () => {
-    const data = clients.map(c => ({
-      'Name': c.name,
-      'City': c.city,
-      'Contact Person': c.contact_person,
-      'Phone': c.phone,
-      'Email': c.email,
-      'GST Number': c.gst_number,
-      'Monthly Rate': c.monthly_rate,
-      'Status': c.is_active ? 'Active' : 'Inactive',
-      'Total Billed': c.total_billed,
-      'Total Paid': c.total_paid
-    }));
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Clients");
-    XLSX.writeFile(wb, `Clients_Export_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
+  const handleExportCSV = async () => {
+    try {
+      const response = await api.get(`/clients?search=${searchTerm}${!showInactive ? '&is_active=true' : ''}&limit=10000`);
+      const allClients = response.data || [];
+      const data = allClients.map(c => ({
+        'Name': c.name,
+        'City': c.city,
+        'Contact Person': c.contact_person,
+        'Phone': c.phone,
+        'Email': c.email,
+        'GST Number': c.gst_number,
+        'Monthly Rate': c.monthly_rate,
+        'Status': c.is_active ? 'Active' : 'Inactive',
+        'Total Billed': c.total_billed,
+        'Total Paid': c.total_paid
+      }));
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Clients");
+      XLSX.writeFile(wb, `Clients_Export_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
+    } catch (err) {
+      console.error('Failed to export clients', err);
+      alert('Export failed. Please try again.');
+    }
   };
 
   return (
@@ -288,6 +300,12 @@ export default function Clients() {
       </div>
 
       {/* Table */}
+      {fetchError && (
+        <div className="mb-4 p-4 bg-red-50 text-red-600 rounded-lg text-sm flex justify-between shadow-sm border border-red-100">
+          <div className="flex items-center gap-2"><AlertCircle className="w-4 h-4" /> {fetchError}</div>
+          <button onClick={fetchClients} className="underline hover:text-red-700 font-medium">Retry</button>
+        </div>
+      )}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">
@@ -332,21 +350,23 @@ export default function Clients() {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="font-semibold text-slate-900">₹{parseFloat(client.monthly_rate).toLocaleString('en-IN')}/mo</div>
+                      <div className="font-semibold text-slate-900">₹{parseFloat(client.monthly_rate || 0).toLocaleString('en-IN')}/mo</div>
                       {client.contract_end_date ? (() => {
-                        const daysLeft = Math.ceil((new Date(client.contract_end_date) - new Date()) / (1000 * 60 * 60 * 24));
+                        const daysLeft = Math.ceil((new Date(client.contract_end_date + 'T00:00:00') - new Date()) / (1000 * 60 * 60 * 24));
                         const isExpired = daysLeft < 0;
                         const isExpiringSoon = daysLeft >= 0 && daysLeft <= 60;
                         return (
                           <div className={`text-xs mt-1 font-bold flex items-center gap-1 ${isExpired ? 'text-red-600' : isExpiringSoon ? 'text-amber-600' : 'text-slate-500'}`}>
                             {isExpired || isExpiringSoon ? <AlertCircle className="w-3 h-3" /> : <CalendarDays className="w-3 h-3" />}
-                            {isExpired ? `Expired ${Math.abs(daysLeft)} days ago` : `Expires ${format(new Date(client.contract_end_date), 'dd MMM yyyy')}`}
+                            {isExpired ? `Expired ${Math.abs(daysLeft)} days ago` : `Expires ${format(new Date(client.contract_end_date + 'T00:00:00'), 'dd MMM yyyy')}`}
                             {isExpiringSoon && ` (${daysLeft} days left)`}
                           </div>
                         );
                       })() : (
                         <div className="text-slate-500 text-xs mt-1">
-                          Since {format(new Date(client.contract_start_date), 'MMM yyyy')}
+                          {client.contract_start_date 
+                            ? `Since ${format(new Date(client.contract_start_date + 'T00:00:00'), 'MMM yyyy')}`
+                            : 'No start date'}
                         </div>
                       )}
                     </td>
@@ -440,8 +460,8 @@ export default function Clients() {
             
             <div className="mb-5 p-3 bg-slate-50 border border-slate-100 rounded-lg">
               <p className="font-semibold text-slate-800">{editingClient.name}</p>
-              <p className="text-xs text-slate-500 mt-1">Current expiry: {editingClient.contract_end_date ? format(new Date(editingClient.contract_end_date), 'dd MMM yyyy') : 'Not set'}</p>
-              <p className="text-xs text-slate-500">Current rate: ₹{parseFloat(editingClient.monthly_rate).toLocaleString('en-IN')}</p>
+              <p className="text-xs text-slate-500 mt-1">Current expiry: {editingClient.contract_end_date ? format(new Date(editingClient.contract_end_date + 'T00:00:00'), 'dd MMM yyyy') : 'Not set'}</p>
+              <p className="text-xs text-slate-500">Current rate: ₹{parseFloat(editingClient.monthly_rate || 0).toLocaleString('en-IN')}</p>
             </div>
 
             {error && (
@@ -456,6 +476,7 @@ export default function Clients() {
                 <input
                   type="date"
                   required
+                  min={new Date().toISOString().split('T')[0]}
                   value={renewData.contract_end_date}
                   onChange={(e) => setRenewData({ ...renewData, contract_end_date: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-shadow"
@@ -648,16 +669,16 @@ export default function Clients() {
                       ) : (
                         statementData.transactions.map((t, idx) => (
                           <tr key={idx} className="hover:bg-slate-50">
-                            <td className="px-4 py-3 whitespace-nowrap">{format(new Date(t.date), 'dd MMM yyyy')}</td>
+                            <td className="px-4 py-3 whitespace-nowrap">{format(new Date(t.date + 'T00:00:00'), 'dd MMM yyyy')}</td>
                             <td className="px-4 py-3 font-medium text-slate-700">{t.reference}</td>
                             <td className="px-4 py-3">
                               <span className={`px-2 py-1 rounded text-xs font-medium ${t.type === 'Invoice' ? 'bg-blue-50 text-blue-600' : 'bg-emerald-50 text-emerald-600'}`}>
                                 {t.type}
                               </span>
                             </td>
-                            <td className="px-4 py-3 text-right text-slate-600">{t.debit ? t.debit.toLocaleString('en-IN') : '-'}</td>
-                            <td className="px-4 py-3 text-right text-emerald-600">{t.credit ? t.credit.toLocaleString('en-IN') : '-'}</td>
-                            <td className="px-4 py-3 text-right font-bold text-slate-800">{t.balance.toLocaleString('en-IN')}</td>
+                            <td className="px-4 py-3 text-right text-slate-600">{t.debit ? parseFloat(t.debit || 0).toLocaleString('en-IN') : '-'}</td>
+                            <td className="px-4 py-3 text-right text-emerald-600">{t.credit ? parseFloat(t.credit || 0).toLocaleString('en-IN') : '-'}</td>
+                            <td className="px-4 py-3 text-right font-bold text-slate-800">{parseFloat(t.balance || 0).toLocaleString('en-IN')}</td>
                           </tr>
                         ))
                       )}
@@ -666,7 +687,7 @@ export default function Clients() {
                       <tfoot className="bg-slate-50 border-t border-slate-200 font-bold">
                         <tr>
                           <td colSpan="5" className="px-4 py-3 text-right text-slate-600">Closing Balance:</td>
-                          <td className="px-4 py-3 text-right text-indigo-700">₹{statementData.final_balance.toLocaleString('en-IN')}</td>
+                          <td className="px-4 py-3 text-right text-indigo-700">₹{parseFloat(statementData.final_balance || 0).toLocaleString('en-IN')}</td>
                         </tr>
                       </tfoot>
                     )}

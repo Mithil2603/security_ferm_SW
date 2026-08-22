@@ -286,6 +286,9 @@ router.patch('/:id/renew', async (req, res) => {
     if (!contract_end_date) {
       return res.status(400).json({ success: false, message: 'contract_end_date is required' });
     }
+    if (new Date(contract_end_date) <= new Date()) {
+      return res.status(400).json({ success: false, message: 'New contract end date must be in the future.' });
+    }
     const updates = ['contract_end_date = $1', 'updated_at = CURRENT_TIMESTAMP'];
     const params = [contract_end_date];
     if (monthly_rate) {
