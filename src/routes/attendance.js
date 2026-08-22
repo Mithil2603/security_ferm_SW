@@ -104,6 +104,47 @@ router.post('/', validate(schemas.markAttendance), async (req, res) => {
   }
 });
 
+// PUT /api/attendance/:id
+router.put('/:id', async (req, res) => {
+  try {
+    const { client_id, check_in_time, check_out_time, status, notes } = req.body;
+    let hours_worked = null;
+    if (check_in_time && check_out_time) {
+      const [inH, inM] = check_in_time.split(':').map(Number);
+      const [outH, outM] = check_out_time.split(':').map(Number);
+      let diff = (outH * 60 + outM) - (inH * 60 + inM);
+      if (diff < 0) diff += 24 * 60;
+      hours_worked = parseFloat((diff / 60).toFixed(2));
+    }
+
+    const result = await query(
+      `UPDATE attendance SET 
+        client_id = $1, check_in_time = $2, check_out_time = $3, 
+        hours_worked = $4, status = $5, notes = $6, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $7 RETURNING *`,
+      [client_id || null, check_in_time || null, check_out_time || null, hours_worked, status, notes, req.params.id]
+    );
+
+    if (result.rowCount === 0) return res.status(404).json({ success: false, message: 'Record not found' });
+    res.json({ success: true, data: result.rows[0], message: 'Record updated successfully' });
+  } catch (error) {
+    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'attendance' });
+    res.status(500).json({ success: false, message: 'Failed to update attendance' });
+  }
+});
+
+// DELETE /api/attendance/:id
+router.delete('/:id', async (req, res) => {
+  try {
+    const result = await query('DELETE FROM attendance WHERE id = $1', [req.params.id]);
+    if (result.rowCount === 0) return res.status(404).json({ success: false, message: 'Record not found' });
+    res.json({ success: true, message: 'Record deleted successfully' });
+  } catch (error) {
+    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'attendance' });
+    res.status(500).json({ success: false, message: 'Failed to delete attendance' });
+  }
+});
+
 // POST /api/attendance/bulk
 router.post('/bulk', validate(schemas.bulkAttendance), async (req, res) => {
   try {
@@ -112,12 +153,17 @@ router.post('/bulk', validate(schemas.bulkAttendance), async (req, res) => {
       return res.status(400).json({ success: false, message: 'Records array is required' });
     }
 
+    const bulkDate = records[0]?.attendance_date;
+    if (bulkDate && new Date(bulkDate) > new Date()) {
+      return res.status(400).json({ success: false, message: 'Cannot mark attendance for future dates' });
+    }
+
     let successCount = 0;
     let errors = [];
 
     for (const record of records) {
       try {
-        const { employee_id, attendance_date, check_in_time, check_out_time, status = 'present', notes } = record;
+        const { employee_id, client_id, attendance_date, check_in_time, check_out_time, status = 'present', notes } = record;
         let hours_worked = null;
         if (check_in_time && check_out_time) {
           const [inH, inM] = check_in_time.split(':').map(Number);
@@ -127,10 +173,12 @@ router.post('/bulk', validate(schemas.bulkAttendance), async (req, res) => {
           hours_worked = parseFloat((diff / 60).toFixed(2));
         }
         await query(
-          `INSERT INTO attendance (employee_id, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, created_by)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-           ON DUPLICATE KEY UPDATE status=VALUES(status)`,
-          [employee_id, attendance_date, check_in_time || null, check_out_time || null, hours_worked, status, notes, req.user.userId]
+          `INSERT INTO attendance (employee_id, client_id, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON DUPLICATE KEY UPDATE
+             client_id=VALUES(client_id), check_in_time=VALUES(check_in_time), check_out_time=VALUES(check_out_time),
+             hours_worked=VALUES(hours_worked), status=VALUES(status), notes=VALUES(notes), updated_at=CURRENT_TIMESTAMP`,
+          [employee_id, client_id || null, attendance_date, check_in_time || null, check_out_time || null, hours_worked, status, notes, req.user.userId]
         );
         successCount++;
       } catch (err) {
@@ -202,8 +250,11 @@ router.post('/bulk-upload', upload.single('file'), (req, res) => {
           if (row.id) {
             empId = row.id;
           } else if (row.employee_id) {
-            const empRes = await query('SELECT id FROM employees WHERE employee_id = $1', [row.employee_id]);
-            if (empRes.rows.length > 0) empId = empRes.rows[0].id;
+            const empRes = await query('SELECT id, assigned_client_id FROM employees WHERE employee_id = $1', [row.employee_id]);
+            if (empRes.rows.length > 0) {
+              empId = empRes.rows[0].id;
+              row.client_id = row.client_id || empRes.rows[0].assigned_client_id;
+            }
           }
           
           if (!empId) {
@@ -232,12 +283,12 @@ router.post('/bulk-upload', upload.single('file'), (req, res) => {
           }
 
           await query(
-            `INSERT INTO attendance (employee_id, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, created_by)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+            `INSERT INTO attendance (employee_id, client_id, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, created_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
              ON DUPLICATE KEY UPDATE
-               check_in_time=VALUES(check_in_time), check_out_time=VALUES(check_out_time),
-               hours_worked=VALUES(hours_worked), status=VALUES(status), notes=VALUES(notes)`,
-            [empId, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, req.user.userId]
+               client_id=VALUES(client_id), check_in_time=VALUES(check_in_time), check_out_time=VALUES(check_out_time),
+               hours_worked=VALUES(hours_worked), status=VALUES(status), notes=VALUES(notes), updated_at=CURRENT_TIMESTAMP`,
+            [empId, row.client_id || null, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, req.user.userId]
           );
           successCount++;
         } catch (err) {
@@ -252,13 +303,15 @@ router.post('/bulk-upload', upload.single('file'), (req, res) => {
         successCount,
         errors
       });
-      // Clean up the temp file after processing is complete
-      if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
       } catch (err) {
-    logError(err, typeof req !== 'undefined' ? req : {}, { feature: 'attendance' });
+        logError(err, typeof req !== 'undefined' ? req : {}, { feature: 'attendance' });
         logger.error('Bulk upload error:', err);
         if (!res.headersSent) {
           res.status(500).json({ success: false, message: 'An error occurred during bulk processing' });
+        }
+      } finally {
+        if (req.file && fs.existsSync(req.file.path)) {
+          fs.unlinkSync(req.file.path);
         }
       }
     });
