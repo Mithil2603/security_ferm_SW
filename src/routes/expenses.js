@@ -66,7 +66,7 @@ router.get('/', async (req, res) => {
       success: true,
       data: result.rows,
       total_amount: parseFloat(sumResult.rows[0].total),
-      pagination: { total: parseInt(countResult.rows[0].count), page: parseInt(page), limit: parseInt(limit) }
+      pagination: { total: parseInt(countResult.rows[0].count), page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(parseInt(countResult.rows[0].count) / parseInt(limit)) }
     });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'expenses' });

@@ -127,7 +127,7 @@ router.get('/', async (req, res) => {
     res.json({
       success: true,
       data: result.rows,
-      pagination: { total: parseInt(countResult.rows[0].count), page: parseInt(page), limit: parseInt(limit) }
+      pagination: { total: parseInt(countResult.rows[0].count), page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(parseInt(countResult.rows[0].count) / parseInt(limit)) }
     });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'invoices' });

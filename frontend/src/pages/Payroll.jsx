@@ -28,7 +28,14 @@ export default function Payroll() {
   const [selectedSlip, setSelectedSlip] = useState(null);
   
   const [generating, setGenerating] = useState(false);
-  const [payForm, setPayForm] = useState({ payment_method: 'bank_transfer', transaction_reference: '' });
+  const [paying, setPaying] = useState(false);
+  const [processingId, setProcessingId] = useState(null);
+  const [fetchError, setFetchError] = useState('');
+  const [payForm, setPayForm] = useState({ 
+    payment_method: 'bank_transfer', 
+    transaction_reference: '',
+    payment_date: new Date().toISOString().split('T')[0]
+  });
 
   const fetchSlips = async () => {
     try {
@@ -41,8 +48,10 @@ export default function Payroll() {
       setSlips(res.data || []);
       if (res.summary) setSummary(res.summary);
       if (res.pagination) setPagination(res.pagination);
+      setFetchError('');
     } catch (err) {
       console.error('Failed to fetch salary slips', err);
+      setFetchError('Failed to load payroll data. Check server connection.');
     } finally {
       setLoading(false);
     }
@@ -67,7 +76,11 @@ export default function Payroll() {
   };
 
   const handleBulkApprove = async () => {
-    if (!window.confirm(`Approve ALL pending salary slips for ${filterMonth}?`)) return;
+    if (!summary || summary.pending_count === 0) {
+      alert('No pending salary slips to approve for this month.');
+      return;
+    }
+    if (!window.confirm(`Approve ALL ${summary.pending_count} pending salary slips for ${filterMonth}?`)) return;
     try {
       const res = await api.post('/salary-slips/bulk-approve', { payroll_month: filterMonth });
       alert(`Approved ${res.data.approved} slips.`);
@@ -78,6 +91,8 @@ export default function Payroll() {
   };
 
   const handleAction = async (id, action) => {
+    if (processingId === id) return;
+    setProcessingId(id);
     try {
       await api.post(`/salary-slips/${id}/${action}`);
       fetchSlips();
@@ -87,11 +102,14 @@ export default function Payroll() {
       }
     } catch (err) {
       alert(err.message || `Failed to ${action}`);
+    } finally {
+      setProcessingId(null);
     }
   };
 
   const handlePay = async (e) => {
     e.preventDefault();
+    setPaying(true);
     try {
       await api.post(`/salary-slips/${selectedSlip.id}/pay`, payForm);
       setIsPayOpen(false);
@@ -102,6 +120,8 @@ export default function Payroll() {
       }
     } catch (err) {
       alert(err.message || 'Failed to mark as paid');
+    } finally {
+      setPaying(false);
     }
   };
 
@@ -117,7 +137,11 @@ export default function Payroll() {
 
   const openPay = (slip) => {
     setSelectedSlip(slip);
-    setPayForm({ payment_method: 'bank_transfer', transaction_reference: '' });
+    setPayForm({ 
+      payment_method: 'bank_transfer', 
+      transaction_reference: '',
+      payment_date: new Date().toISOString().split('T')[0]
+    });
     setIsPayOpen(true);
   };
 
@@ -179,6 +203,13 @@ export default function Payroll() {
           </div>
         )}
       </div>
+
+      {fetchError && (
+        <div className="p-4 bg-red-50 text-red-600 rounded-lg text-sm flex justify-between shadow-sm border border-red-100">
+          <div className="flex items-center gap-2"><span>⚠️</span> {fetchError}</div>
+          <button onClick={fetchSlips} className="underline hover:text-red-700 font-medium">Retry</button>
+        </div>
+      )}
 
       {/* Table */}
       {loading ? <TableSkeleton /> : (
@@ -242,8 +273,8 @@ export default function Payroll() {
               </tbody>
             </table>
           </div>
-          {pagination && pagination.total > 20 && (
-            <Pagination pagination={pagination} page={page} setPage={setPage} />
+          {pagination && (
+            <Pagination pagination={pagination} onPageChange={(n) => setPage(n)} />
           )}
         </div>
       )}
@@ -281,7 +312,11 @@ export default function Payroll() {
                 <div>
                   <p className="text-slate-400 text-xs mb-1">Bank Details</p>
                   <p className="text-slate-900">{selectedSlip.bank_name || 'N/A'}</p>
-                  <p className="text-slate-500 text-xs">{selectedSlip.bank_account_number ? `A/c: ${selectedSlip.bank_account_number}` : ''}</p>
+                  <p className="text-slate-500 text-xs">
+                    {selectedSlip.bank_account_number
+                      ? `A/c: ${'X'.repeat(Math.max(0, selectedSlip.bank_account_number.length - 4))}${selectedSlip.bank_account_number.slice(-4)}`
+                      : ''}
+                  </p>
                 </div>
                 <div>
                   <p className="text-slate-400 text-xs mb-1">Tax / Legal</p>
@@ -339,15 +374,15 @@ export default function Payroll() {
             {/* Modal Actions Footer */}
             <div className="p-4 border-t border-slate-200 bg-white/80 flex justify-end gap-3">
               {selectedSlip.status === 'draft' && (
-                <button onClick={() => handleAction(selectedSlip.id, 'submit')} className="bg-amber-600 hover:bg-amber-700 text-slate-900 px-4 py-2 rounded-lg text-sm transition-colors">Submit for Approval</button>
+                <button onClick={() => handleAction(selectedSlip.id, 'submit')} disabled={processingId === selectedSlip.id} className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg text-sm transition-colors disabled:opacity-50">Submit for Approval</button>
               )}
               {selectedSlip.status === 'pending' && (
-                <button onClick={() => handleAction(selectedSlip.id, 'approve')} className="bg-teal-600 hover:bg-teal-700 text-slate-900 px-4 py-2 rounded-lg text-sm transition-colors">Approve</button>
+                <button onClick={() => handleAction(selectedSlip.id, 'approve')} disabled={processingId === selectedSlip.id} className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg text-sm transition-colors disabled:opacity-50">Approve</button>
               )}
               {selectedSlip.status === 'approved' && (
-                <button onClick={() => openPay(selectedSlip)} className="bg-emerald-600 hover:bg-emerald-700 text-slate-900 px-4 py-2 rounded-lg text-sm transition-colors">Mark as Paid</button>
+                <button onClick={() => openPay(selectedSlip)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">Mark as Paid</button>
               )}
-              <button onClick={() => setIsViewOpen(false)} className="bg-slate-100 hover:bg-gray-600 text-slate-900 px-4 py-2 rounded-lg text-sm transition-colors">Close</button>
+              <button onClick={() => setIsViewOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-900 px-4 py-2 rounded-lg text-sm transition-colors">Close</button>
             </div>
           </div>
         </div>
@@ -373,12 +408,16 @@ export default function Payroll() {
                 </select>
               </div>
               <div>
+                <label className="block text-sm text-slate-500 mb-1">Payment Date</label>
+                <input type="date" value={payForm.payment_date} onChange={e => setPayForm({...payForm, payment_date: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900" />
+              </div>
+              <div>
                 <label className="block text-sm text-slate-500 mb-1">Transaction Ref (optional)</label>
                 <input type="text" value={payForm.transaction_reference} onChange={e => setPayForm({...payForm, transaction_reference: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900" placeholder="UTR / Cheque No." />
               </div>
               <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setIsPayOpen(false)} className="flex-1 bg-slate-100 hover:bg-gray-600 text-slate-900 py-2 rounded-lg">Cancel</button>
-                <button type="submit" className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-slate-900 py-2 rounded-lg">Confirm Pay</button>
+                <button type="button" onClick={() => setIsPayOpen(false)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-900 py-2 rounded-lg">Cancel</button>
+                <button type="submit" disabled={paying} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg disabled:opacity-50">{paying ? 'Processing...' : 'Confirm Pay'}</button>
               </div>
             </form>
           </div>
