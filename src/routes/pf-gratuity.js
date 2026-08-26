@@ -114,7 +114,15 @@ router.post('/pf/accounts', async (req, res) => {
 
 router.put('/pf/accounts/:empId', async (req, res) => {
   try {
-    const result = await pfCalculator.updateAccount(parseInt(req.params.empId), req.body);
+    const schema = Joi.object({
+      uan_number: Joi.string().max(20).allow(null, ''),
+      pf_number: Joi.string().max(30).allow(null, ''),
+      interest_rate: Joi.number().min(0).max(15).precision(2)
+    });
+    const { error, value } = schema.validate(req.body);
+    if (error) return res.status(400).json({ success: false, message: error.details[0].message });
+
+    const result = await pfCalculator.updateAccount(parseInt(req.params.empId), value);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -165,8 +173,11 @@ router.post('/pf/batch-process', async (req, res) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
+    const [y, m] = value.payroll_month.split('-');
+    if (new Date(y, m - 1) > new Date()) return res.status(400).json({ success: false, message: 'Cannot process future month' });
+
     const result = await pfCalculator.batchProcess(value.payroll_month);
-    res.status(201).json({ success: true, data: result });
+    res.status(200).json({ success: true, data: result });
   } catch (err) {
     logError({
       error: err,
@@ -360,8 +371,11 @@ router.post('/gratuity/batch-accrue', async (req, res) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
+    const [y, m] = value.accrual_month.split('-');
+    if (new Date(y, m - 1) > new Date()) return res.status(400).json({ success: false, message: 'Cannot process future month' });
+
     const result = await gratuityCalculator.batchAccrual(value.accrual_month);
-    res.status(201).json({ success: true, data: result });
+    res.status(200).json({ success: true, data: result });
   } catch (err) {
     logError({
       error: err,
@@ -452,7 +466,7 @@ router.get('/gratuity/payouts', async (req, res) => {
   }
 });
 
-router.get('/gratuity/liability-report', async (req, res) => {
+router.get('/gratuity/liability-report', requirePermission('view_gratuity_reports'), async (req, res) => {
   try {
     const result = await gratuityCalculator.getLiabilityReport();
     res.json({ success: true, data: result });

@@ -23,10 +23,10 @@ class PFCalculator {
   static PF_RATE_EMPLOYEE = 12;        // 12% of basic
   static PF_RATE_EMPLOYER_PF = 3.67;   // 3.67% to PF account
   static PF_RATE_EMPLOYER_EPS = 8.33;  // 8.33% to EPS
-  static PF_BASIC_CAP = 15000;         // Statutory cap
+  static PF_BASIC_CAP = Number(process.env.PF_BASIC_CAP) || 15000;         // Statutory cap
   static ADMIN_CHARGE_RATE = 0.50;     // Admin charges
   static DEFAULT_INTEREST_RATE = 8.25; // FY 2024-25
-  static GRATUITY_CAP = 2000000;       // ₹20 lakhs
+  static GRATUITY_CAP = Number(process.env.GRATUITY_CAP) || 2000000;       // ₹20 lakhs
 
   // ═══════════════════════════════════════════════════════════════════════════
   // PF Contribution Calculation (pure, no DB)
@@ -88,6 +88,9 @@ class PFCalculator {
   }
 
   async createAccount(employeeId, data = {}) {
+    const emp = await query('SELECT id FROM employees WHERE id = $1', [employeeId]);
+    if (!emp.rows.length) throw new Error('Employee not found');
+
     const existing = await this.getAccount(employeeId);
     if (existing) throw new Error('PF account already exists for this employee');
 
@@ -173,35 +176,40 @@ class PFCalculator {
 
     const contrib = this.calculateContribution(basicSalary);
     const totalDeposit = contrib.employee_contribution + contrib.employer_pf_contribution + contrib.employer_eps_contribution;
-    const newBalance = parseFloat((account.total_balance + totalDeposit).toFixed(2));
 
-    // Insert transaction
-    await query(
-      `INSERT INTO pf_transactions 
-        (pf_account_id, employee_id, payroll_month, transaction_type,
-         basic_salary, employee_contribution, employer_pf_contribution,
-         employer_eps_contribution, admin_charges, total_amount, running_balance, salary_slip_id)
-       VALUES ($1, $2, $3, 'contribution', $4, $5, $6, $7, $8, $9, $10, $11)`,
-      [
-        account.id, employeeId, payrollMonth,
-        contrib.basic_salary, contrib.employee_contribution,
-        contrib.employer_pf_contribution, contrib.employer_eps_contribution,
-        contrib.admin_charges, totalDeposit, newBalance, salarySlipId,
-      ]
-    );
-
-    // Update account balances
-    await query(
+    // Update account balances first and get the new total balance (prevents race condition)
+    const updateRes = await query(
       `UPDATE pf_accounts SET 
          employee_balance = employee_balance + $1,
          employer_balance = employer_balance + $2,
          eps_balance = eps_balance + $3,
-         total_balance = $4,
+         total_balance = total_balance + $4,
          updated_at = CURRENT_TIMESTAMP
-       WHERE id = $5`,
+       WHERE id = $5 RETURNING total_balance`,
       [contrib.employee_contribution, contrib.employer_pf_contribution,
-       contrib.employer_eps_contribution, newBalance, account.id]
+       contrib.employer_eps_contribution, totalDeposit, account.id]
     );
+    const newBalance = parseFloat(updateRes.rows[0].total_balance);
+
+    // Insert transaction
+    try {
+      await query(
+        `INSERT INTO pf_transactions 
+          (pf_account_id, employee_id, payroll_month, transaction_type,
+           basic_salary, employee_contribution, employer_pf_contribution,
+           employer_eps_contribution, admin_charges, total_amount, running_balance, salary_slip_id)
+         VALUES ($1, $2, $3, 'contribution', $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [
+          account.id, employeeId, payrollMonth,
+          contrib.basic_salary, contrib.employee_contribution,
+          contrib.employer_pf_contribution, contrib.employer_eps_contribution,
+          contrib.admin_charges, totalDeposit, newBalance, salarySlipId,
+        ]
+      );
+    } catch (err) {
+      if (err.code === '23503') throw new Error('Employee record missing');
+      throw err;
+    }
 
     return { contribution: contrib, new_balance: newBalance };
   }

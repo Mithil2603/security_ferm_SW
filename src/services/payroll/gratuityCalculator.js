@@ -36,13 +36,15 @@ class GratuityCalculator {
     const basicPlusDa = D(lastBasic).plus(lastDA);
     const yrs = D(years);
 
-    // Formula: (Basic + DA) × 15 × Years / 26
-    // Simplified: (Basic + DA) × Years / 26 × 15
-    // Standard formula uses 15 days per year
+    // Statutory formula: (Basic + DA) × 15 days per month × Years / 26 working days per month
     const gratuity = basicPlusDa.times(15).times(yrs).dividedBy(GratuityCalculator.DIVISOR).toDecimalPlaces(2);
 
     const capped = Decimal.min(gratuity, GratuityCalculator.GRATUITY_CAP);
-    const isEligible = years >= GratuityCalculator.MIN_YEARS;
+    const isEligible = Math.floor(years) >= GratuityCalculator.MIN_YEARS;
+    
+    const monthlyProvision = (!isEligible || yrs.lte(0)) 
+                             ? 0 
+                             : capped.dividedBy(yrs.times(12)).toDecimalPlaces(2);
 
     return {
       last_drawn_basic: this._toFloat(D(lastBasic)),
@@ -53,7 +55,7 @@ class GratuityCalculator {
       calculated_amount: this._toFloat(gratuity),
       capped_amount: this._toFloat(capped),
       is_capped: gratuity.greaterThan(GratuityCalculator.GRATUITY_CAP),
-      monthly_provision: this._toFloat(capped.dividedBy(yrs.greaterThan(0) ? yrs.times(12) : 1).toDecimalPlaces(2)),
+      monthly_provision: this._toFloat(monthlyProvision),
     };
   }
 
@@ -90,6 +92,7 @@ class GratuityCalculator {
   // ═══════════════════════════════════════════════════════════════════════════
 
   async processMonthlyAccrual(employeeId, accrualMonth) {
+    if (!/^\d{4}-\d{2}$/.test(accrualMonth)) throw new Error('Invalid month format');
     const result = await query(
       `SELECT e.*, ss.base_salary, ss.dearness_allowance
        FROM employees e
@@ -208,6 +211,13 @@ class GratuityCalculator {
       [userId, payoutId]
     );
     const result = await query(`SELECT * FROM gratuity_payouts WHERE id = $1`, [payoutId]);
+    if (result.rows.length) {
+      await query(
+        `INSERT INTO audit_logs (table_name, record_id, action, changed_by, old_values, new_values)
+         VALUES ('gratuity_payouts', $1, 'APPROVE_PAYOUT', $2, '{}', '{"status":"approved"}')`
+         , [payoutId, userId]
+      ).catch(() => logger.warn('Audit log insert failed for gratuity_payouts'));
+    }
     return result.rows[0];
   }
 
@@ -272,6 +282,7 @@ class GratuityCalculator {
       totalLiability += gratuity.capped_amount;
       return {
         ...emp,
+        date_of_joining: emp.date_of_joining ? new Date(emp.date_of_joining).toLocaleDateString('en-IN') : null,
         years_of_service: years,
         is_eligible: gratuity.is_eligible,
         gratuity_liability: gratuity.capped_amount,

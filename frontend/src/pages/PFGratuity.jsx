@@ -8,6 +8,7 @@ export default function PFGratuity() {
   const [pfAccounts, setPfAccounts] = useState([]);
   const [liabilityReport, setLiabilityReport] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   // Modals
   const [isCreatePfOpen, setIsCreatePfOpen] = useState(false);
@@ -16,10 +17,12 @@ export default function PFGratuity() {
   const [transactions, setTransactions] = useState([]);
   const [pfForm, setPfForm] = useState({ employee_id: '', uan_number: '', pf_number: '' });
   const [submitting, setSubmitting] = useState(false);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
 
   // Batch Month Modal State
   const [batchModal, setBatchModal] = useState({ open: false, type: 'pf', month: new Date().toISOString().slice(0, 7) });
   const [batchProcessing, setBatchProcessing] = useState(false);
+  const [batchResult, setBatchResult] = useState(null);
 
   const fetchPfAccounts = async () => {
     try {
@@ -39,9 +42,15 @@ export default function PFGratuity() {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { tab === 'pf' ? fetchPfAccounts() : fetchLiability(); }, [tab]);
+  useEffect(() => { 
+    setError('');
+    tab === 'pf' ? fetchPfAccounts() : fetchLiability(); 
+  }, [tab]);
 
-  const fmt = (v) => `₹${Number(v || 0).toLocaleString('en-IN')}`;
+  const fmt = (v) => {
+    const n = Number(v);
+    return isNaN(n) ? '₹0' : `₹${n.toLocaleString('en-IN')}`;
+  };
 
   // ─── PF Actions ────────────────────────────────────────────────────────────
 
@@ -55,16 +64,20 @@ export default function PFGratuity() {
         pf_number: pfForm.pf_number || null,
       });
       setIsCreatePfOpen(false);
-      fetchPfAccounts();
-    } catch (err) { alert(err.message || 'Failed'); }
+      setPfForm({ employee_id: '', uan_number: '', pf_number: '' });
+      await fetchPfAccounts();
+    } catch (err) { setError(err.response?.data?.message || err.message || 'Failed to create PF account'); }
     finally { setSubmitting(false); }
   };
 
   const handleBatchPf = () => {
+    setBatchResult(null);
     setBatchModal({ open: true, type: 'pf', month: new Date().toISOString().slice(0, 7) });
   };
 
   const openViewPf = async (empId) => {
+    setIsViewPfOpen(true);
+    setIsLoadingDetail(true);
     try {
       const [accRes, txnRes] = await Promise.all([
         api.get(`/pf-gratuity/pf/accounts/${empId}`),
@@ -72,13 +85,14 @@ export default function PFGratuity() {
       ]);
       setSelectedAccount(accRes.data);
       setTransactions(txnRes.data || []);
-      setIsViewPfOpen(true);
-    } catch (err) { alert('Failed to load PF details'); }
+    } catch (err) { setError('Failed to load PF details'); setIsViewPfOpen(false); }
+    finally { setIsLoadingDetail(false); }
   };
 
   // ─── Gratuity Actions ─────────────────────────────────────────────────────
 
   const handleBatchAccrue = () => {
+    setBatchResult(null);
     setBatchModal({ open: true, type: 'gratuity', month: new Date().toISOString().slice(0, 7) });
   };
 
@@ -86,19 +100,21 @@ export default function PFGratuity() {
     e.preventDefault();
     if (!batchModal.month) return;
     setBatchProcessing(true);
+    setBatchResult(null);
     try {
       if (batchModal.type === 'pf') {
         const res = await api.post('/pf-gratuity/pf/batch-process', { payroll_month: batchModal.month });
-        alert(`Processed: ${res.data.processed} | Skipped: ${res.data.skipped} | Errors: ${res.data.errors}`);
-        fetchPfAccounts();
+        setBatchResult(res.data);
+        await fetchPfAccounts();
       } else {
         const res = await api.post('/pf-gratuity/gratuity/batch-accrue', { accrual_month: batchModal.month });
-        alert(`Processed: ${res.data.processed} | Skipped: ${res.data.skipped} | Errors: ${res.data.errors}`);
-        fetchLiability();
+        setBatchResult(res.data);
+        await fetchLiability();
       }
-      setBatchModal({ ...batchModal, open: false });
+      // Keep modal open to show results
     } catch (err) {
-      alert(err.message || 'Processing failed');
+      setError(err.response?.data?.message || err.message || 'Processing failed');
+      setBatchModal({ ...batchModal, open: false });
     } finally {
       setBatchProcessing(false);
     }
@@ -133,6 +149,12 @@ export default function PFGratuity() {
         </div>
       </div>
 
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4">
+          <p className="text-red-500 text-sm font-medium">{error}</p>
+        </div>
+      )}
+
       <div className="flex bg-white rounded-lg p-1 w-fit">
         <button onClick={() => setTab('pf')} className={`px-6 py-2 rounded-lg text-sm transition-colors ${tab === 'pf' ? 'bg-emerald-600 text-slate-900' : 'text-slate-500 hover:text-slate-900'}`}>
           <Shield className="w-4 h-4 inline mr-1" /> Provident Fund
@@ -142,7 +164,7 @@ export default function PFGratuity() {
         </button>
       </div>
 
-      {loading ? <TableSkeleton /> : tab === 'pf' ? (
+      {(loading || (tab === 'gratuity' && !liabilityReport && !error)) ? <TableSkeleton /> : tab === 'pf' ? (
         /* ═══ PF Accounts Tab ═══ */
         <div className="bg-white shadow-sm border border-slate-200 rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
@@ -153,7 +175,7 @@ export default function PFGratuity() {
                   <th className="text-left p-4 font-medium">UAN</th>
                   <th className="text-right p-4 font-medium">Employee Bal</th>
                   <th className="text-right p-4 font-medium">Employer Bal</th>
-                  <th className="text-right p-4 font-medium">EPS</th>
+                  <th className="text-right p-4 font-medium">Employer EPS</th>
                   <th className="text-right p-4 font-medium">Total</th>
                   <th className="text-right p-4 font-medium">Actions</th>
                 </tr>
@@ -264,7 +286,7 @@ export default function PFGratuity() {
                   className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900" />
               </div>
               <div className="flex gap-3">
-                <button type="button" onClick={() => setIsCreatePfOpen(false)} className="flex-1 bg-slate-100 hover:bg-gray-600 text-slate-900 py-2 rounded-lg">Cancel</button>
+                <button type="button" onClick={() => { setIsCreatePfOpen(false); setPfForm({ employee_id: '', uan_number: '', pf_number: '' }); }} className="flex-1 bg-slate-100 hover:bg-gray-600 text-slate-900 py-2 rounded-lg">Cancel</button>
                 <button type="submit" disabled={submitting} className="flex-1 bg-teal-600 hover:bg-teal-700 text-slate-900 py-2 rounded-lg">
                   {submitting ? 'Creating...' : 'Create'}
                 </button>
@@ -282,7 +304,11 @@ export default function PFGratuity() {
               <h2 className="text-lg font-bold text-slate-900">{selectedAccount.full_name} — PF Account</h2>
               <button onClick={() => setIsViewPfOpen(false)} className="text-slate-500 hover:text-slate-900"><X className="w-5 h-5" /></button>
             </div>
-            <div className="p-6 overflow-y-auto space-y-4">
+            {isLoadingDetail ? (
+              <div className="p-12 text-center text-slate-400">Loading details...</div>
+            ) : (
+              <>
+                <div className="p-6 overflow-y-auto space-y-4">
               <div className="grid grid-cols-3 gap-4">
                 <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3 text-center">
                   <p className="text-xs text-slate-500">Total Balance</p>
@@ -306,7 +332,7 @@ export default function PFGratuity() {
               {transactions.length === 0 ? (
                 <p className="text-slate-400 text-sm">No transactions yet.</p>
               ) : (
-                <div className="space-y-2 max-h-60 overflow-y-auto">
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-2 relative shadow-inner">
                   {transactions.map(t => (
                     <div key={t.id} className="flex items-center justify-between bg-white/30 rounded-lg px-3 py-2 text-sm">
                       <div>
@@ -319,12 +345,17 @@ export default function PFGratuity() {
                       </div>
                     </div>
                   ))}
+                  {transactions.length === 24 && (
+                    <p className="text-center text-[10px] text-slate-400 pt-2 border-t border-slate-100">Showing latest 24 transactions. Scroll for more.</p>
+                  )}
                 </div>
               )}
             </div>
             <div className="p-4 border-t border-slate-200">
               <button onClick={() => setIsViewPfOpen(false)} className="w-full bg-slate-100 hover:bg-gray-600 text-slate-900 py-2 rounded-lg">Close</button>
             </div>
+          </>
+        )}
           </div>
         </div>
       )}
@@ -353,9 +384,29 @@ export default function PFGratuity() {
                   autoFocus
                 />
               </div>
+              {batchResult && (
+                <div className="mt-4 p-4 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+                  <h4 className="font-bold text-slate-700 text-sm">Batch Complete</h4>
+                  <div className="flex gap-4 text-xs font-medium">
+                    <span className="text-emerald-600">Processed: {batchResult.processed}</span>
+                    <span className="text-slate-500">Skipped: {batchResult.skipped}</span>
+                    <span className="text-red-500">Errors: {batchResult.errors}</span>
+                  </div>
+                  {batchResult.details && batchResult.details.filter(d => d.status === 'error').length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-slate-200 max-h-32 overflow-y-auto text-xs">
+                      {batchResult.details.filter(d => d.status === 'error').map((err, idx) => (
+                        <p key={idx} className="text-red-600 mb-1">
+                          <span className="font-bold">{err.employee || 'Unknown'}:</span> {err.error}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              
               <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-slate-100">
-                <button type="button" onClick={() => setBatchModal({ ...batchModal, open: false })} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
-                <button type="submit" disabled={batchProcessing} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50">
+                <button type="button" onClick={() => setBatchModal({ ...batchModal, open: false })} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Close</button>
+                <button type="submit" disabled={batchProcessing || !!batchResult} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50">
                   {batchProcessing ? 'Processing...' : 'Run Batch Process'}
                 </button>
               </div>
