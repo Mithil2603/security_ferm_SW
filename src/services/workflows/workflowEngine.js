@@ -228,11 +228,13 @@ class WorkflowEngine {
     let pc = 2;
     if (is_read !== undefined) { conditions.push(`is_read = $${pc}`); params.push(is_read); pc++; }
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const p = parseInt(page) || 1;
+    const l = parseInt(limit) || 50;
+    const offset = (p - 1) * l;
     const result = await query(
       `SELECT * FROM notifications WHERE ${conditions.join(' AND ')}
        ORDER BY created_at DESC LIMIT $${pc} OFFSET $${pc + 1}`,
-      [...params, parseInt(limit), offset]
+      [...params, l, offset]
     );
 
     const unreadCount = await query(
@@ -330,7 +332,9 @@ class WorkflowEngine {
     if (rule_id) { conditions.push(`wl.workflow_rule_id = $${pc}`); params.push(rule_id); pc++; }
     if (status) { conditions.push(`wl.status = $${pc}`); params.push(status); pc++; }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const p = parseInt(page) || 1;
+    const l = parseInt(limit) || 50;
+    const offset = (p - 1) * l;
 
     const result = await query(
       `SELECT wl.*, wr.name as rule_name
@@ -339,7 +343,7 @@ class WorkflowEngine {
        ${where}
        ORDER BY wl.created_at DESC
        LIMIT $${pc} OFFSET $${pc + 1}`,
-      [...params, parseInt(limit), offset]
+      [...params, l, offset]
     );
     return result.rows;
   }

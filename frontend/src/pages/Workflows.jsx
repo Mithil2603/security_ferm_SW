@@ -14,6 +14,8 @@ export default function Workflows() {
   const [approvals, setApprovals] = useState([]);
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [createRule, setCreateRule] = useState(false);
   const [ruleForm, setRuleForm] = useState({
     name: '', trigger_entity: 'invoice', trigger_event: 'overdue',
@@ -22,10 +24,10 @@ export default function Workflows() {
     action_config: { message: '' },
   });
 
-  const fetchRules = async () => { try { setLoading(true); const r = await api.get('/workflows/rules'); setRules(r.data || []); } catch {} finally { setLoading(false); } };
-  const fetchNotifications = async () => { try { setLoading(true); const r = await api.get('/workflows/notifications'); setNotifications(r.data || []); setUnreadCount(r.unread_count || 0); } catch {} finally { setLoading(false); } };
-  const fetchApprovals = async () => { try { setLoading(true); const r = await api.get('/workflows/auto-approvals'); setApprovals(r.data || []); } catch {} finally { setLoading(false); } };
-  const fetchLogs = async () => { try { setLoading(true); const r = await api.get('/workflows/logs?limit=50'); setLogs(r.data || []); } catch {} finally { setLoading(false); } };
+  const fetchRules = async () => { try { setLoading(true); setError(''); const r = await api.get('/workflows/rules'); setRules(r.data || []); } catch (err) { setError(err?.response?.data?.message || 'Failed to load rules'); } finally { setLoading(false); } };
+  const fetchNotifications = async () => { try { setLoading(true); setError(''); const r = await api.get('/workflows/notifications'); setNotifications(r.data || []); setUnreadCount(r.unread_count || 0); } catch (err) { setError(err?.response?.data?.message || 'Failed to load notifications'); } finally { setLoading(false); } };
+  const fetchApprovals = async () => { try { setLoading(true); setError(''); const r = await api.get('/workflows/auto-approvals'); setApprovals(r.data || []); } catch (err) { setError(err?.response?.data?.message || 'Failed to load approvals'); } finally { setLoading(false); } };
+  const fetchLogs = async () => { try { setLoading(true); setError(''); const r = await api.get('/workflows/logs?limit=50'); setLogs(r.data || []); } catch (err) { setError(err?.response?.data?.message || 'Failed to load logs'); } finally { setLoading(false); } };
 
   useEffect(() => {
     if (tab === 'rules') fetchRules();
@@ -34,32 +36,38 @@ export default function Workflows() {
     else fetchLogs();
   }, [tab]);
 
+  const initialRuleForm = { name: '', trigger_entity: 'invoice', trigger_event: 'overdue', action_type: 'send_notification', priority: 5, condition: { field: '', operator: '>=', value: '' }, action_config: { message: '' } };
+
   const handleCreateRule = async (e) => {
     e.preventDefault();
+    setError(''); setSuccess('');
     try {
       await api.post('/workflows/rules', ruleForm);
+      setSuccess('Workflow rule created successfully!');
       setCreateRule(false);
+      setRuleForm(initialRuleForm);
       fetchRules();
-    } catch (err) { alert(err.message || 'Failed'); }
+    } catch (err) { setError(err?.response?.data?.message || err.message || 'Failed to create rule'); }
   };
 
   const scanOverdue = async () => {
+    setError(''); setSuccess('');
     try {
       const r = await api.post('/workflows/scan-overdue');
-      alert(`Scanned ${r.data.scanned} invoices. ${r.data.reminders_created} new reminders created.`);
-    } catch (err) { alert(err.message || 'Failed'); }
+      setSuccess(`Scanned ${r.data.scanned} invoices. ${r.data.reminders_created} new reminders created.`);
+    } catch (err) { setError(err?.response?.data?.message || err.message || 'Scan failed'); }
   };
 
   const markAllRead = async () => {
-    try { await api.post('/workflows/notifications/read-all'); fetchNotifications(); } catch {}
+    try { await api.post('/workflows/notifications/read-all'); fetchNotifications(); } catch (err) { setError(err?.response?.data?.message || 'Failed to mark notifications read'); }
   };
 
   const markRead = async (id) => {
-    try { await api.post(`/workflows/notifications/${id}/read`); fetchNotifications(); } catch {}
+    try { await api.post(`/workflows/notifications/${id}/read`); fetchNotifications(); } catch (err) { setError(err?.response?.data?.message || 'Failed to mark notification read'); }
   };
 
   const toggleRule = async (id, currentActive) => {
-    try { await api.put(`/workflows/rules/${id}`, { is_active: currentActive ? 0 : 1 }); fetchRules(); } catch {}
+    try { await api.put(`/workflows/rules/${id}`, { is_active: currentActive ? 0 : 1 }); fetchRules(); } catch (err) { setError(err?.response?.data?.message || 'Failed to toggle rule'); }
   };
 
   return (
@@ -89,6 +97,20 @@ export default function Workflows() {
           )}
         </div>
       </div>
+
+      {/* Error / Success banners */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 flex justify-between items-center text-sm">
+          <span>⚠ {error}</span>
+          <button onClick={() => setError('')} className="text-red-400 hover:text-red-600 ml-4"><X className="w-4 h-4" /></button>
+        </div>
+      )}
+      {success && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl px-4 py-3 flex justify-between items-center text-sm">
+          <span>✓ {success}</span>
+          <button onClick={() => setSuccess('')} className="text-emerald-400 hover:text-emerald-600 ml-4"><X className="w-4 h-4" /></button>
+        </div>
+      )}
 
       <div className="flex bg-white rounded-lg p-1 w-fit">
         {[
@@ -191,7 +213,7 @@ export default function Workflows() {
                 <tr key={a.id} className="border-b border-slate-200 hover:bg-slate-50">
                   <td className="p-4 text-slate-900 font-medium">{a.name}</td>
                   <td className="p-4"><span className="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded">{a.entity_type}</span></td>
-                  <td className="p-4 text-right text-slate-900">{a.max_amount ? `₹${Number(a.max_amount).toLocaleString('en-IN')}` : 'No limit'}</td>
+                  <td className="p-4 text-right text-slate-900">{a.max_amount ? `₹${parseFloat(a.max_amount).toLocaleString('en-IN')}` : 'No limit'}</td>
                   <td className="p-4 text-center text-slate-700">{a.approval_count}</td>
                   <td className="p-4 text-center"><span className={`text-xs px-2 py-0.5 rounded ${a.is_active ? 'bg-emerald-500/20 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}>{a.is_active ? 'Active' : 'Inactive'}</span></td>
                 </tr>
@@ -237,7 +259,7 @@ export default function Workflows() {
           <div className="bg-white border border-slate-200 rounded-2xl p-6 w-full max-w-md">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-bold text-slate-900">New Workflow Rule</h2>
-              <button onClick={() => setCreateRule(false)} className="text-slate-500 hover:text-slate-900"><X className="w-5 h-5" /></button>
+              <button onClick={() => { setCreateRule(false); setRuleForm(initialRuleForm); }} className="text-slate-500 hover:text-slate-900"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleCreateRule} className="space-y-3">
               <div>
@@ -269,7 +291,7 @@ export default function Workflows() {
                 <input type="text" value={ruleForm.action_config.message} onChange={e => setRuleForm({...ruleForm, action_config: {...ruleForm.action_config, message: e.target.value}})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 text-sm" />
               </div>
               <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setCreateRule(false)} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors text-sm font-medium">Cancel</button>
+                <button type="button" onClick={() => { setCreateRule(false); setRuleForm(initialRuleForm); }} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors text-sm font-medium">Cancel</button>
                 <button type="submit" className="flex-1 bg-teal-600 hover:bg-teal-700 text-white py-2 rounded-lg font-medium transition-colors text-sm">Create Rule</button>
               </div>
             </form>

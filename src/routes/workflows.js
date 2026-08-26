@@ -37,20 +37,15 @@ router.get('/rules', requirePermission('manage_settings'), async (req, res) => {
   }
 });
 
-router.get('/rules/:id', async (req, res) => {
+router.get('/rules/:id', requirePermission('manage_settings'), async (req, res) => {
   try {
-    const rule = await workflowEngine.getRule(parseInt(req.params.id));
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) return res.status(400).json({ success: false, message: 'Invalid rule ID' });
+    const rule = await workflowEngine.getRule(id);
     if (!rule) return res.status(404).json({ success: false, message: 'Rule not found' });
     res.json({ success: true, data: rule });
   } catch (err) {
-    logError({
-      error: err,
-      req,
-      severity: ERROR_SEVERITY.HIGH,
-      category: ERROR_CATEGORY.REPORTING,
-      feature: 'workflows',
-      extra: { message: 'Get rule error:' }
-    });
+    logError({ error: err, req, severity: ERROR_SEVERITY.HIGH, category: ERROR_CATEGORY.REPORTING, feature: 'workflows', extra: { message: 'Get rule error:' } });
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -88,34 +83,37 @@ router.post('/rules', requirePermission('manage_settings'), async (req, res) => 
 
 router.put('/rules/:id', requirePermission('manage_settings'), async (req, res) => {
   try {
-    const result = await workflowEngine.updateRule(parseInt(req.params.id), req.body);
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) return res.status(400).json({ success: false, message: 'Invalid rule ID' });
+    const schema = Joi.object({
+      name: Joi.string().optional(),
+      description: Joi.string().allow('', null).optional(),
+      trigger_entity: Joi.string().valid('invoice', 'expense', 'payroll', 'attendance', 'employee', 'pf', 'gst').optional(),
+      trigger_event: Joi.string().valid('created', 'updated', 'status_changed', 'overdue', 'approaching_due', 'amount_exceeded', 'monthly_cycle', 'approval_required').optional(),
+      condition: Joi.object().optional(),
+      action_type: Joi.string().valid('send_notification', 'auto_approve', 'escalate', 'create_reminder', 'update_status', 'send_email', 'generate_report').optional(),
+      action_config: Joi.object().optional(),
+      priority: Joi.number().integer().min(1).max(10).optional(),
+      is_active: Joi.number().valid(0, 1).optional(),
+    });
+    const { error, value } = schema.validate(req.body);
+    if (error) return res.status(400).json({ success: false, message: error.details[0].message });
+    const result = await workflowEngine.updateRule(id, value);
     res.json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
-      severity: ERROR_SEVERITY.HIGH,
-      category: ERROR_CATEGORY.REPORTING,
-      feature: 'workflows',
-      extra: { message: 'Update rule error:' }
-    });
+    logError({ error: err, req, severity: ERROR_SEVERITY.HIGH, category: ERROR_CATEGORY.REPORTING, feature: 'workflows', extra: { message: 'Update rule error:' } });
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 router.delete('/rules/:id', requirePermission('manage_settings'), async (req, res) => {
   try {
-    await workflowEngine.deleteRule(parseInt(req.params.id));
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) return res.status(400).json({ success: false, message: 'Invalid rule ID' });
+    await workflowEngine.deleteRule(id);
     res.json({ success: true, message: 'Rule deactivated' });
   } catch (err) {
-    logError({
-      error: err,
-      req,
-      severity: ERROR_SEVERITY.HIGH,
-      category: ERROR_CATEGORY.REPORTING,
-      feature: 'workflows',
-      extra: { message: 'Delete rule error:' }
-    });
+    logError({ error: err, req, severity: ERROR_SEVERITY.HIGH, category: ERROR_CATEGORY.REPORTING, feature: 'workflows', extra: { message: 'Delete rule error:' } });
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -143,17 +141,12 @@ router.get('/notifications', async (req, res) => {
 
 router.post('/notifications/:id/read', async (req, res) => {
   try {
-    await workflowEngine.markRead(parseInt(req.params.id));
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) return res.status(400).json({ success: false, message: 'Invalid notification ID' });
+    await workflowEngine.markRead(id);
     res.json({ success: true });
   } catch (err) {
-    logError({
-      error: err,
-      req,
-      severity: ERROR_SEVERITY.HIGH,
-      category: ERROR_CATEGORY.REPORTING,
-      feature: 'workflows',
-      extra: { message: 'Mark read error:' }
-    });
+    logError({ error: err, req, severity: ERROR_SEVERITY.HIGH, category: ERROR_CATEGORY.REPORTING, feature: 'workflows', extra: { message: 'Mark read error:' } });
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -179,7 +172,7 @@ router.post('/notifications/read-all', async (req, res) => {
 // Overdue Scanner
 // ═══════════════════════════════════════════════════════════════════════════
 
-router.post('/scan-overdue', requirePermission('manage_payroll'), async (req, res) => {
+router.post('/scan-overdue', requirePermission('manage_settings'), async (req, res) => {
   try {
     const result = await workflowEngine.scanOverdueInvoices();
     res.json({ success: true, data: result });
