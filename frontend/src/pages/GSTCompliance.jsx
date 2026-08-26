@@ -10,6 +10,9 @@ export default function GSTCompliance() {
   const [config, setConfig] = useState(null);
   const [loading, setLoading] = useState(true);
   const [viewFiling, setViewFiling] = useState(null);
+  const [errorMsg, setErrorMsg] = useState(null);
+  const [successMsg, setSuccessMsg] = useState(null);
+  const [configError, setConfigError] = useState(null);
 
   // Config form
   const [configForm, setConfigForm] = useState({
@@ -23,7 +26,16 @@ export default function GSTCompliance() {
 
   const fetchFilings = async () => { try { setLoading(true); const r = await api.get('/gst/filings?limit=24'); setFilings(r.data || []); } catch {} finally { setLoading(false); } };
   const fetchHSN = async () => { try { setLoading(true); const r = await api.get('/gst/hsn-sac'); setHsnCodes(r.data || []); } catch {} finally { setLoading(false); } };
-  const fetchConfig = async () => { try { const r = await api.get('/gst/config'); setConfig(r.data); if (r.data) setConfigForm(r.data); } catch {} };
+  const fetchConfig = async () => { 
+    try { 
+      setConfigError(null);
+      const r = await api.get('/gst/config'); 
+      setConfig(r.data); 
+      if (r.data) setConfigForm(r.data); 
+    } catch (err) {
+      setConfigError(err.message || 'Failed to load GST config');
+    } 
+  };
 
   useEffect(() => {
     fetchConfig();
@@ -31,7 +43,10 @@ export default function GSTCompliance() {
     else if (tab === 'hsn') fetchHSN();
   }, [tab]);
 
-  const fmt = (v) => `₹${Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+  const fmt = (v) => { 
+    const n = Number(v); 
+    return isNaN(n) ? '₹0.00' : `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`; 
+  };
 
   // ─── Generate Returns ──────────────────────────────────────────────────────
   const generateReturn = (type) => {
@@ -42,14 +57,16 @@ export default function GSTCompliance() {
     e.preventDefault();
     if (!returnModal.period) return;
     setGeneratingReturn(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
     try {
       const endpoint = returnModal.type === 'GSTR1' ? '/gst/gstr1/generate' : '/gst/gstr3b/generate';
       const res = await api.post(endpoint, { return_period: returnModal.period });
-      alert(`${returnModal.type} generated! ${res.data.summary?.total_invoices || 0} invoices processed.`);
-      setReturnModal({ ...returnModal, open: false });
-      fetchFilings();
+      setSuccessMsg(`${returnModal.type} generated! ${res.data.summary?.total_invoices || 0} invoices processed.`);
+      setReturnModal({ open: false, type: 'GSTR1', period: new Date().toISOString().slice(0, 7) });
+      try { await fetchFilings(); } catch (err) { setErrorMsg('Failed to refresh filings'); }
     } catch (err) {
-      alert(err.message || 'Generation failed');
+      setErrorMsg(err.message || 'Generation failed');
     } finally {
       setGeneratingReturn(false);
     }
@@ -57,18 +74,21 @@ export default function GSTCompliance() {
 
   const saveConfig = async (e) => {
     e.preventDefault();
+    setErrorMsg(null);
+    setSuccessMsg(null);
     try {
       await api.post('/gst/config', configForm);
-      alert('GST configuration saved!');
+      setSuccessMsg('GST configuration saved!');
       fetchConfig();
-    } catch (err) { alert(err.message || 'Failed to save'); }
+    } catch (err) { setErrorMsg(err.message || 'Failed to save configuration'); }
   };
 
   const openFiling = async (id) => {
+    setErrorMsg(null);
     try {
       const r = await api.get(`/gst/filings/${id}`);
       setViewFiling(r.data);
-    } catch { alert('Failed to load filing'); }
+    } catch { setErrorMsg('Failed to load filing'); }
   };
 
   const downloadFiling = (id) => {
@@ -77,6 +97,18 @@ export default function GSTCompliance() {
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {errorMsg && (
+        <div className="bg-red-50 text-red-600 p-4 rounded-lg flex justify-between items-center">
+          <p>{errorMsg}</p>
+          <button onClick={() => setErrorMsg(null)}><X className="w-4 h-4" /></button>
+        </div>
+      )}
+      {successMsg && (
+        <div className="bg-emerald-50 text-emerald-600 p-4 rounded-lg flex justify-between items-center">
+          <p>{successMsg}</p>
+          <button onClick={() => setSuccessMsg(null)}><X className="w-4 h-4" /></button>
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -196,6 +228,9 @@ export default function GSTCompliance() {
       {/* ═══ Config Tab ═══ */}
       {tab === 'config' && (
         <div className="bg-white shadow-sm border border-slate-200 rounded-xl p-6 max-w-2xl">
+          {configError && (
+            <div className="bg-red-50 text-red-600 p-3 rounded-lg mb-4 text-sm">{configError}</div>
+          )}
           <h2 className="text-sm font-bold text-slate-700 border-b border-slate-200 pb-2 mb-4">GST Registration Details</h2>
           <form onSubmit={saveConfig} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
@@ -280,7 +315,7 @@ export default function GSTCompliance() {
                 <div>
                   <h3 className="text-sm font-bold text-slate-700 mb-2">JSON Data</h3>
                   <pre className="bg-white border border-slate-200 rounded-lg p-4 text-xs text-slate-700 overflow-auto max-h-64 font-mono">
-                    {JSON.stringify(viewFiling.json, null, 2)}
+                    {JSON.stringify(viewFiling.json, null, 2).replace(/</g, '&lt;').replace(/>/g, '&gt;')}
                   </pre>
                 </div>
               )}
@@ -301,7 +336,7 @@ export default function GSTCompliance() {
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-slide-up">
             <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-teal-50">
               <h3 className="text-lg font-bold text-teal-800">Generate {returnModal.type}</h3>
-              <button type="button" onClick={() => setReturnModal({ ...returnModal, open: false })} className="text-slate-400 hover:text-slate-600">✕</button>
+              <button type="button" onClick={() => setReturnModal({ open: false, type: 'GSTR1', period: new Date().toISOString().slice(0, 7) })} className="text-slate-400 hover:text-slate-600">✕</button>
             </div>
             <form onSubmit={handleReturnSubmit} className="p-6 space-y-4">
               <div>
@@ -316,7 +351,7 @@ export default function GSTCompliance() {
                 />
               </div>
               <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-slate-100">
-                <button type="button" onClick={() => setReturnModal({ ...returnModal, open: false })} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
+                <button type="button" onClick={() => setReturnModal({ open: false, type: 'GSTR1', period: new Date().toISOString().slice(0, 7) })} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
                 <button type="submit" disabled={generatingReturn} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50">
                   {generatingReturn ? 'Generating...' : `Generate ${returnModal.type}`}
                 </button>

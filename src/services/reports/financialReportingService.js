@@ -42,8 +42,9 @@ class FinancialReportingService {
 
     const payroll = await query(
       `SELECT COALESCE(SUM(net_salary), 0) as paid
-       FROM salary_slips WHERE DATE_FORMAT(payroll_month, '%Y-%m') >= DATE_FORMAT($1, '%Y-%m')
-         AND DATE_FORMAT(payroll_month, '%Y-%m') <= DATE_FORMAT($2, '%Y-%m')
+       FROM salary_slips
+       WHERE strftime('%Y-%m', payroll_month) >= strftime('%Y-%m', $1)
+         AND strftime('%Y-%m', payroll_month) <= strftime('%Y-%m', $2)
        AND status = 'paid'`,
       [startDate, endDate]
     );
@@ -118,8 +119,10 @@ class FinancialReportingService {
     // Get actuals from invoices (revenue) and expenses
     const fy = b.financial_year;
     const [fyStart, fyEndSuffix] = fy.split('-');
+    // Support both '2025-26' (2-digit suffix) and '2025-2026' (4-digit)
+    const endYr = fyEndSuffix.length === 2 ? '20' + fyEndSuffix : fyEndSuffix;
     const startDate = `${fyStart}-04-01`;
-    const endDate = `20${fyEndSuffix}-03-31`;
+    const endDate = `${endYr}-03-31`;
 
     const actualRevenue = await query(
       `SELECT COALESCE(SUM(final_amount), 0) as total
@@ -138,8 +141,9 @@ class FinancialReportingService {
 
     const actualPayroll = await query(
       `SELECT COALESCE(SUM(total_earnings), 0) as total
-       FROM salary_slips WHERE DATE_FORMAT(payroll_month, '%Y-%m') >= DATE_FORMAT($1, '%Y-%m')
-         AND DATE_FORMAT(payroll_month, '%Y-%m') <= DATE_FORMAT($2, '%Y-%m')
+       FROM salary_slips
+       WHERE strftime('%Y-%m', payroll_month) >= strftime('%Y-%m', $1)
+         AND strftime('%Y-%m', payroll_month) <= strftime('%Y-%m', $2)
        AND status IN ('approved', 'paid')`,
       [startDate, endDate]
     );

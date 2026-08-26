@@ -180,13 +180,14 @@ router.get('/budgets', async (req, res) => {
 
 router.get('/budgets/:id', async (req, res) => {
   try {
-    const result = await reportService.getBudget(parseInt(req.params.id));
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) return res.status(400).json({ success: false, message: 'Invalid budget ID' });
+    const result = await reportService.getBudget(id);
     if (!result) return res.status(404).json({ success: false, message: 'Budget not found' });
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
-      error: err,
-      req,
+      error: err, req,
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.REPORTING,
       feature: 'financial-reports',
@@ -226,6 +227,8 @@ router.post('/budgets', async (req, res) => {
 
 router.post('/budgets/:id/items', async (req, res) => {
   try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) return res.status(400).json({ success: false, message: 'Invalid budget ID' });
     const schema = Joi.object({
       category: Joi.string().required(),
       sub_category: Joi.string().allow('', null),
@@ -257,7 +260,9 @@ router.post('/budgets/:id/items', async (req, res) => {
 
 router.post('/budgets/:id/approve', async (req, res) => {
   try {
-    const result = await reportService.approveBudget(parseInt(req.params.id), req.user.id);
+    const id = parseInt(req.params.id);
+    if (isNaN(id) || id <= 0) return res.status(400).json({ success: false, message: 'Invalid budget ID' });
+    const result = await reportService.approveBudget(id, req.user.id);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -278,7 +283,9 @@ router.post('/budgets/:id/approve', async (req, res) => {
 
 router.get('/variance/:budgetId', async (req, res) => {
   try {
-    const result = await reportService.getVarianceAnalysis(parseInt(req.params.budgetId));
+    const budgetId = parseInt(req.params.budgetId);
+    if (isNaN(budgetId) || budgetId <= 0) return res.status(400).json({ success: false, message: 'Invalid budget ID' });
+    const result = await reportService.getVarianceAnalysis(budgetId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({

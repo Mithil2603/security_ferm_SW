@@ -52,6 +52,9 @@ class GSTComplianceService {
   }
 
   async addHSNSACCode(data) {
+    if (data.gst_rate % 2 !== 0 && (!data.cgst_rate || !data.sgst_rate)) {
+      throw new Error('GST rate must be even for automatic CGST/SGST split');
+    }
     await query(
       `INSERT INTO hsn_sac_codes (code, type, description, gst_rate, cgst_rate, sgst_rate, igst_rate)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -122,6 +125,9 @@ class GSTComplianceService {
    * Determine tax type (CGST+SGST vs IGST).
    */
   determineTaxType(sellerStateCode, buyerStateCode) {
+    if (!sellerStateCode || !buyerStateCode || sellerStateCode.length !== 2 || buyerStateCode.length !== 2) {
+      throw new Error('Invalid state code for tax determination');
+    }
     if (sellerStateCode === buyerStateCode) {
       return 'cgst_sgst';
     }
@@ -175,6 +181,8 @@ class GSTComplianceService {
       [returnPeriod]
     );
 
+    if (invoices.rows.length === 0) throw new Error('No invoices found for period');
+
     // Classify and group
     const b2b = [];
     const b2cs = [];
@@ -193,25 +201,28 @@ class GSTComplianceService {
         inv.buyer_state_code || (inv.buyer_gstin ? inv.buyer_gstin.substring(0, 2) : config.state_code)
       );
 
-      const taxableValue = parseFloat(inv.amount_subtotal || 0);
-      const gstAmounts = this.calculateGST(taxableValue, inv.tax_rate || 18, taxType);
+      const taxableValue = parseFloat(inv.amount_subtotal || 0) || 0;
+      const gstAmounts = this.calculateGST(taxableValue, parseFloat(inv.tax_rate || 18), taxType);
 
       totalTaxable += taxableValue;
       totalCGST += gstAmounts.cgst;
       totalSGST += gstAmounts.sgst;
       totalIGST += gstAmounts.igst;
+      
+      const sac = inv.sac_code;
+      if (!sac) throw new Error(`Invoice ${inv.invoice_number} is missing SAC code`);
 
       const record = {
         invoice_number: inv.invoice_number,
         invoice_date: this._formatDate(inv.invoice_date),
-        invoice_value: parseFloat(inv.final_amount || 0),
+        invoice_value: parseFloat(inv.final_amount || 0) || 0,
         taxable_value: taxableValue,
-        tax_rate: inv.tax_rate || 18,
+        tax_rate: parseFloat(inv.tax_rate || 18),
         cgst: gstAmounts.cgst,
         sgst: gstAmounts.sgst,
         igst: gstAmounts.igst,
         place_of_supply: inv.place_of_supply || inv.buyer_state_code || config.state_code,
-        sac_code: inv.sac_code || '998915',
+        sac_code: sac,
         supply_type: supplyType,
       };
 
@@ -233,17 +244,17 @@ class GSTComplianceService {
       }
 
       // HSN Summary
-      const sac = inv.sac_code || '998915';
       if (!hsnSummary[sac]) {
-        hsnSummary[sac] = { hsn_sc: sac, desc: 'Security Services', qty: 0,
+        hsnSummary[sac] = { hsn_sc: sac, desc: 'Services', qty: 0,
           total_val: 0, taxable_val: 0, cgst: 0, sgst: 0, igst: 0 };
       }
+      const D = (v) => new Decimal(v || 0);
       hsnSummary[sac].qty++;
-      hsnSummary[sac].total_val += parseFloat(inv.final_amount || 0);
-      hsnSummary[sac].taxable_val += taxableValue;
-      hsnSummary[sac].cgst += gstAmounts.cgst;
-      hsnSummary[sac].sgst += gstAmounts.sgst;
-      hsnSummary[sac].igst += gstAmounts.igst;
+      hsnSummary[sac].total_val = D(hsnSummary[sac].total_val).plus(D(inv.final_amount || 0)).toDecimalPlaces(2).toNumber();
+      hsnSummary[sac].taxable_val = D(hsnSummary[sac].taxable_val).plus(D(taxableValue)).toDecimalPlaces(2).toNumber();
+      hsnSummary[sac].cgst = D(hsnSummary[sac].cgst).plus(D(gstAmounts.cgst)).toDecimalPlaces(2).toNumber();
+      hsnSummary[sac].sgst = D(hsnSummary[sac].sgst).plus(D(gstAmounts.sgst)).toDecimalPlaces(2).toNumber();
+      hsnSummary[sac].igst = D(hsnSummary[sac].igst).plus(D(gstAmounts.igst)).toDecimalPlaces(2).toNumber();
     }
 
     // Build GSTR-1 JSON (simplified government format)
@@ -288,28 +299,19 @@ class GSTComplianceService {
     };
 
     // Save filing record
-    const existing = await query(
-      `SELECT id FROM gstr_filings WHERE return_type = 'GSTR1' AND return_period = $1 AND gstin = $2`,
-      [returnPeriod, config.gstin]
+    await query(
+      `INSERT INTO gstr_filings (return_type, return_period, financial_year, gstin,
+       total_taxable_value, total_cgst, total_sgst, total_igst, total_invoices,
+       status, json_data, generated_at)
+       VALUES ('GSTR1', $1, $2, $3, $4, $5, $6, $7, $8, 'generated', $9, CURRENT_TIMESTAMP)
+       ON CONFLICT (return_type, return_period, gstin) DO UPDATE SET
+       json_data=EXCLUDED.json_data, total_taxable_value=EXCLUDED.total_taxable_value,
+       total_cgst=EXCLUDED.total_cgst, total_sgst=EXCLUDED.total_sgst,
+       total_igst=EXCLUDED.total_igst, total_invoices=EXCLUDED.total_invoices,
+       status='generated', generated_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP`,
+      [returnPeriod, fy, config.gstin, totalTaxable, totalCGST, totalSGST, totalIGST,
+       invoices.rows.length, JSON.stringify(gstr1Json)]
     );
-    if (existing.rows.length > 0) {
-      await query(
-        `UPDATE gstr_filings SET json_data=$1, total_taxable_value=$2, total_cgst=$3,
-         total_sgst=$4, total_igst=$5, total_invoices=$6, status='generated',
-         generated_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=$7`,
-        [JSON.stringify(gstr1Json), totalTaxable, totalCGST, totalSGST, totalIGST,
-         invoices.rows.length, existing.rows[0].id]
-      );
-    } else {
-      await query(
-        `INSERT INTO gstr_filings (return_type, return_period, financial_year, gstin,
-         total_taxable_value, total_cgst, total_sgst, total_igst, total_invoices,
-         status, json_data, generated_at)
-         VALUES ('GSTR1', $1, $2, $3, $4, $5, $6, $7, $8, 'generated', $9, CURRENT_TIMESTAMP)`,
-        [returnPeriod, fy, config.gstin, totalTaxable, totalCGST, totalSGST, totalIGST,
-         invoices.rows.length, JSON.stringify(gstr1Json)]
-      );
-    }
 
     return {
       return_type: 'GSTR1',
@@ -403,27 +405,19 @@ class GSTComplianceService {
     };
 
     // Save filing
-    const existing = await query(
-      `SELECT id FROM gstr_filings WHERE return_type = 'GSTR3B' AND return_period = $1 AND gstin = $2`,
-      [returnPeriod, config.gstin]
+    await query(
+      `INSERT INTO gstr_filings (return_type, return_period, financial_year, gstin,
+       total_taxable_value, total_cgst, total_sgst, total_igst, total_invoices,
+       status, json_data, generated_at)
+       VALUES ('GSTR3B', $1, $2, $3, $4, $5, $6, $7, $8, 'generated', $9, CURRENT_TIMESTAMP)
+       ON CONFLICT (return_type, return_period, gstin) DO UPDATE SET
+       json_data=EXCLUDED.json_data, total_taxable_value=EXCLUDED.total_taxable_value,
+       total_cgst=EXCLUDED.total_cgst, total_sgst=EXCLUDED.total_sgst,
+       total_igst=EXCLUDED.total_igst, total_invoices=EXCLUDED.total_invoices,
+       status='generated', generated_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP`,
+      [returnPeriod, fy, config.gstin, out.taxable, netCGST, netSGST, netIGST,
+       out.count, JSON.stringify(gstr3b)]
     );
-    if (existing.rows.length > 0) {
-      await query(
-        `UPDATE gstr_filings SET json_data=$1, total_taxable_value=$2, total_cgst=$3,
-         total_sgst=$4, total_igst=$5, total_invoices=$6, status='generated',
-         generated_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=$7`,
-        [JSON.stringify(gstr3b), out.taxable, netCGST, netSGST, netIGST, out.count, existing.rows[0].id]
-      );
-    } else {
-      await query(
-        `INSERT INTO gstr_filings (return_type, return_period, financial_year, gstin,
-         total_taxable_value, total_cgst, total_sgst, total_igst, total_invoices,
-         status, json_data, generated_at)
-         VALUES ('GSTR3B', $1, $2, $3, $4, $5, $6, $7, $8, 'generated', $9, CURRENT_TIMESTAMP)`,
-        [returnPeriod, fy, config.gstin, out.taxable, netCGST, netSGST, netIGST,
-         out.count, JSON.stringify(gstr3b)]
-      );
-    }
 
     return {
       return_type: 'GSTR3B',

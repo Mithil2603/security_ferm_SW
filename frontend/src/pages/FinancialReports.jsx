@@ -9,23 +9,34 @@ export default function FinancialReports() {
   const [cashFlow, setCashFlow] = useState(null);
   const [budgets, setBudgets] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [createBudget, setCreateBudget] = useState(false);
   const [budgetForm, setBudgetForm] = useState({ name: '', financial_year: '2025-26', budget_type: 'annual', notes: '' });
 
-  const fmt = (v) => `₹${Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 0 })}`;
+  const fmt = (v) => `₹${parseFloat(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 0 })}`;
+
+  // Compute Indian fiscal year start: April of the current or previous calendar year
+  const getFYStart = () => {
+    const now = new Date();
+    const yr = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
+    return `${yr}-04-01`;
+  };
 
   const [snapshotModal, setSnapshotModal] = useState({ open: false, month: new Date().toISOString().slice(0, 7) });
-  const [cashFlowModal, setCashFlowModal] = useState({ open: false, start: `${new Date().getFullYear()}-04-01`, end: new Date().toISOString().split('T')[0] });
+  const [cashFlowModal, setCashFlowModal] = useState({ open: false, start: getFYStart(), end: new Date().toISOString().split('T')[0] });
   const [generatingSnapshot, setGeneratingSnapshot] = useState(false);
 
   const fetchSnapshots = async () => {
-    try { setLoading(true); const r = await api.get('/financial-reports/snapshots?financial_year=2025-26'); setSnapshots(r.data || []); }
-    catch {} finally { setLoading(false); }
+    try { setLoading(true); setError(''); const r = await api.get('/financial-reports/snapshots?financial_year=2025-26'); setSnapshots(r.data || []); }
+    catch (err) { setError(err?.response?.data?.message || 'Failed to load snapshots'); }
+    finally { setLoading(false); }
   };
 
   const fetchBudgets = async () => {
-    try { setLoading(true); const r = await api.get('/financial-reports/budgets'); setBudgets(r.data || []); }
-    catch {} finally { setLoading(false); }
+    try { setLoading(true); setError(''); const r = await api.get('/financial-reports/budgets'); setBudgets(r.data || []); }
+    catch (err) { setError(err?.response?.data?.message || 'Failed to load budgets'); }
+    finally { setLoading(false); }
   };
 
   useEffect(() => {
@@ -42,38 +53,46 @@ export default function FinancialReports() {
     e.preventDefault();
     if (!snapshotModal.month) return;
     setGeneratingSnapshot(true);
+    setError(''); setSuccess('');
     try {
       await api.post('/financial-reports/snapshots/generate', { month: snapshotModal.month });
-      alert('Snapshot generated!');
+      setSuccess('Snapshot generated successfully!');
       setSnapshotModal({ ...snapshotModal, open: false });
       fetchSnapshots();
-    } catch (err) { alert(err.message || 'Failed'); }
+    } catch (err) { setError(err?.response?.data?.message || err.message || 'Failed to generate snapshot'); }
     finally { setGeneratingSnapshot(false); }
   };
 
   const generateCashFlow = () => {
-    setCashFlowModal({ open: true, start: `${new Date().getFullYear()}-04-01`, end: new Date().toISOString().split('T')[0] });
+    setCashFlowModal({ open: true, start: getFYStart(), end: new Date().toISOString().split('T')[0] });
   };
 
   const handleCashFlowSubmit = async (e) => {
     e.preventDefault();
     if (!cashFlowModal.start || !cashFlowModal.end) return;
+    if (cashFlowModal.end < cashFlowModal.start) {
+      setError('End date cannot be before start date'); return;
+    }
+    setError(''); setSuccess('');
     try {
       setLoading(true);
       const r = await api.post('/financial-reports/cash-flow', { start_date: cashFlowModal.start, end_date: cashFlowModal.end });
       setCashFlow(r.data);
       setCashFlowModal({ ...cashFlowModal, open: false });
-    } catch (err) { alert(err.message || 'Failed'); }
+    } catch (err) { setError(err?.response?.data?.message || err.message || 'Failed to generate cash flow'); }
     finally { setLoading(false); }
   };
 
   const handleCreateBudget = async (e) => {
     e.preventDefault();
+    setError(''); setSuccess('');
     try {
       await api.post('/financial-reports/budgets', budgetForm);
+      setSuccess('Budget created successfully!');
       setCreateBudget(false);
+      setBudgetForm({ name: '', financial_year: '2025-26', budget_type: 'annual', notes: '' });
       fetchBudgets();
-    } catch (err) { alert(err.message || 'Failed'); }
+    } catch (err) { setError(err?.response?.data?.message || err.message || 'Failed to create budget'); }
   };
 
   // ─── KPI Cards ─────────────────────────────────────────────────────────────
@@ -87,7 +106,7 @@ export default function FinancialReports() {
           <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
             <BarChart3 className="w-6 h-6 text-cyan-400" /> Financial Reports
           </h1>
-          <p className="text-slate-500 mt-1">Cash flow, KPIs, budgets & variance analysis</p>
+          <p className="text-slate-500 mt-1">Cash flow, KPIs, budgets &amp; variance analysis</p>
         </div>
         <div className="flex gap-2">
           {tab === 'kpis' && (
@@ -107,6 +126,20 @@ export default function FinancialReports() {
           )}
         </div>
       </div>
+
+      {/* Error / Success banners */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 flex justify-between items-center text-sm">
+          <span>⚠ {error}</span>
+          <button onClick={() => setError('')} className="text-red-400 hover:text-red-600 ml-4"><X className="w-4 h-4" /></button>
+        </div>
+      )}
+      {success && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl px-4 py-3 flex justify-between items-center text-sm">
+          <span>✓ {success}</span>
+          <button onClick={() => setSuccess('')} className="text-emerald-400 hover:text-emerald-600 ml-4"><X className="w-4 h-4" /></button>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex bg-white rounded-lg p-1 w-fit">
@@ -312,7 +345,7 @@ export default function FinancialReports() {
           <div className="bg-white border border-slate-200 rounded-2xl p-6 w-full max-w-sm">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-bold text-slate-900">New Budget</h2>
-              <button onClick={() => setCreateBudget(false)} className="text-slate-500 hover:text-slate-900"><X className="w-5 h-5" /></button>
+              <button onClick={() => { setCreateBudget(false); setBudgetForm({ name: '', financial_year: '2025-26', budget_type: 'annual', notes: '' }); }} className="text-slate-500 hover:text-slate-900"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleCreateBudget} className="space-y-4">
               <div>
