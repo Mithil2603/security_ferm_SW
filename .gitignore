@@ -1,8 +1,8 @@
-# Node modules
+# ─── Dependencies ────────────────────────────────────────────────────────────
 node_modules/
 frontend/node_modules/
 
-# Build outputs
+# ─── Build outputs ───────────────────────────────────────────────────────────
 dist/
 dist-ssr/
 frontend/dist/
@@ -10,12 +10,14 @@ frontend/dist-ssr/
 electron-dist/
 frontend-dist/
 
-# Environment variables (NEVER commit secrets)
+# ─── Environment variables (NEVER commit secrets) ────────────────────────────
 .env
 .env.local
 .env.*.local
+# Keep the example template
+!.env.example
 
-# IDE & Editor settings
+# ─── IDE & Editor ────────────────────────────────────────────────────────────
 .vscode/
 !.vscode/extensions.json
 .idea/
@@ -26,8 +28,9 @@ frontend-dist/
 *.sw?
 *.swp
 .DS_Store
+Thumbs.db
 
-# Logs
+# ─── Logs ────────────────────────────────────────────────────────────────────
 logs/
 *.log
 npm-debug.log*
@@ -36,7 +39,21 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# Debug and temporary scripts
+# ─── Local databases (NEVER commit real data) ────────────────────────────────
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+database.sqlite*
+security_agency.db
+
+# ─── User uploads (runtime generated) ───────────────────────────────────────
+uploads/
+!uploads/.gitkeep
+
+# ─── Debug, scratch, and one-off root scripts ────────────────────────────────
 scratch.js
 scratch_filter_test.js
 check_pr_error.js
@@ -51,38 +68,36 @@ verify.js
 seed_employees.js
 debug*.txt
 failures.txt
-fix*.js
 log*.txt
-patch_*.js
 test_results.json
 test_run.txt
+# Root-level ad-hoc scripts (kept in scripts/ or tests/ instead)
+get_userdata.js
+list_tables.js
+test.js
+test_db.js
+test_text.js
+test_migration_009.js
+test_migration_018.js
+test_vouchers.sql
+patch.js
+seed.js
+fix.js
+fix_tests.js
+generate_pdf.js
+generate_tour.js
+capture_all_views.js
+build_master_tour.js
 
-# User uploads (runtime generated)
-uploads/
-!uploads/.gitkeep
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Package lock files (optional - uncomment if you want to commit them)
-# package-lock.json
-# yarn.lock
-# pnpm-lock.yaml
-
-# Local databases & media reports
-database.sqlite*
+# ─── Other generated/temporary files ─────────────────────────────────────────
 *.pdf
 debug_error.png
 debug_html.html
 captured_slides.json
-generate_tour.js
-generate_pdf.js
-capture_all_views.js
-build_master_tour.js
 button_styles.txt
 refactor.py
 scratch/
 
-# License signing keys (NEVER commit private key)
+# ─── License signing keys (NEVER commit private keys) ────────────────────────
 tools/private.pem
+*.pem
