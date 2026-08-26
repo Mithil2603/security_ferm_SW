@@ -32,7 +32,7 @@ class TaxCalculator {
     { min: 1200000, max: 1600000,  rate: 0.15 },
     { min: 1600000, max: 2000000,  rate: 0.20 },
     { min: 2000000, max: 2400000,  rate: 0.25 },
-    { min: 2400000, max: Infinity, rate: 0.30 },
+    { min: 2400000, max: 9999999999, rate: 0.30 },
   ];
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -42,7 +42,7 @@ class TaxCalculator {
     { min: 0,       max: 250000,   rate: 0    },
     { min: 250000,  max: 500000,   rate: 0.05 },
     { min: 500000,  max: 1000000,  rate: 0.20 },
-    { min: 1000000, max: Infinity, rate: 0.30 },
+    { min: 1000000, max: 9999999999, rate: 0.30 },
   ];
 
   static STANDARD_DEDUCTION_NEW = 75000;
@@ -372,7 +372,7 @@ class TaxCalculator {
     let tax = new Decimal(0);
     for (const slab of slabs) {
       const min = new Decimal(slab.min);
-      const max = slab.max === Infinity ? new Decimal('999999999999') : new Decimal(slab.max);
+      const max = slab.max === Infinity || slab.max >= 9999999999 ? new Decimal('999999999999') : new Decimal(slab.max);
       if (taxableIncome.greaterThan(min)) {
         const slabAmount = Decimal.min(taxableIncome, max).minus(min);
         tax = tax.plus(slabAmount.times(slab.rate));

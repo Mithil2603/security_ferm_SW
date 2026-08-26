@@ -28,6 +28,7 @@ export default function TaxCalculatorPage() {
   const [result, setResult] = useState(null);
   const [comparison, setComparison] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const [showDeductions, setShowDeductions] = useState(false);
 
   const handleInput = (e) => {
@@ -41,10 +42,17 @@ export default function TaxCalculatorPage() {
   };
 
   const computeTax = async () => {
+    setError('');
+    const income = parseFloat(form.grossAnnualIncome) || 0;
+    if (income < 0) {
+      setError('Gross Annual Income must be a positive number.');
+      return;
+    }
+    
     setLoading(true);
     try {
       const payload = {
-        grossAnnualIncome: parseFloat(form.grossAnnualIncome) || 0,
+        grossAnnualIncome: income,
         regime: form.regime,
         basicAnnual: parseFloat(form.basicAnnual) || 0,
         hraAnnual: parseFloat(form.hraAnnual) || 0,
@@ -52,34 +60,50 @@ export default function TaxCalculatorPage() {
         declarations: { ...declarations, hra_rent_paid_annual: parseFloat(form.hra_rent_paid_annual) || 0, hra_city_type: form.hra_city_type },
       };
       const res = await api.post('/tax/compute', payload);
-      setResult(res.data);
+      const data = res.data?.data || res.data;
+      if (!data) throw new Error('Invalid response from server');
+      setResult(data);
     } catch (err) {
-      alert(err.message || 'Computation failed');
+      setError(err.response?.data?.message || err.message || 'Computation failed');
+      setResult(null);
     } finally {
       setLoading(false);
     }
   };
 
   const compareRegimes = async () => {
+    setError('');
+    const income = parseFloat(form.grossAnnualIncome) || 0;
+    if (income < 0) {
+      setError('Gross Annual Income must be a positive number.');
+      return;
+    }
+    
     setLoading(true);
     try {
       const payload = {
-        grossAnnualIncome: parseFloat(form.grossAnnualIncome) || 0,
+        grossAnnualIncome: income,
         basicAnnual: parseFloat(form.basicAnnual) || 0,
         hraAnnual: parseFloat(form.hraAnnual) || 0,
         daAnnual: parseFloat(form.daAnnual) || 0,
         declarations: { ...declarations, hra_rent_paid_annual: parseFloat(form.hra_rent_paid_annual) || 0, hra_city_type: form.hra_city_type },
       };
       const res = await api.post('/tax/compare-regimes', payload);
-      setComparison(res.data);
+      const data = res.data?.data || res.data;
+      if (!data) throw new Error('Invalid response from server');
+      setComparison(data);
     } catch (err) {
-      alert(err.message || 'Comparison failed');
+      setError(err.response?.data?.message || err.message || 'Comparison failed');
+      setComparison(null);
     } finally {
       setLoading(false);
     }
   };
 
-  const fmt = (v) => `₹${Number(v || 0).toLocaleString('en-IN')}`;
+  const fmt = (v) => {
+    const num = parseFloat(v);
+    return isNaN(num) ? '₹0' : `₹${num.toLocaleString('en-IN')}`;
+  };
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -87,7 +111,7 @@ export default function TaxCalculatorPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
-            <Calculator className="w-6 h-6 text-orange-400" /> Tax Calculator
+            <Calculator className="w-6 h-6 text-teal-600" /> Tax Calculator
           </h1>
           <p className="text-slate-500 mt-1">Indian Income Tax — FY 2025-26 (New + Old Regime)</p>
         </div>
@@ -108,23 +132,23 @@ export default function TaxCalculatorPage() {
             <h2 className="text-sm font-bold text-slate-700 border-b border-slate-200 pb-2">Income Details</h2>
             <div>
               <label className="block text-xs text-slate-400 mb-1">Gross Annual Income (CTC) *</label>
-              <input type="number" name="grossAnnualIncome" value={form.grossAnnualIncome} onChange={handleInput}
+              <input type="number" min="0" name="grossAnnualIncome" value={form.grossAnnualIncome} onChange={handleInput}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900" placeholder="e.g. 600000" />
             </div>
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Basic (Annual)</label>
-                <input type="number" name="basicAnnual" value={form.basicAnnual} onChange={handleInput}
+                <input type="number" min="0" name="basicAnnual" value={form.basicAnnual} onChange={handleInput}
                   className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 text-sm" />
               </div>
               <div>
                 <label className="block text-xs text-slate-400 mb-1">HRA (Annual)</label>
-                <input type="number" name="hraAnnual" value={form.hraAnnual} onChange={handleInput}
+                <input type="number" min="0" name="hraAnnual" value={form.hraAnnual} onChange={handleInput}
                   className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 text-sm" />
               </div>
               <div>
                 <label className="block text-xs text-slate-400 mb-1">DA (Annual)</label>
-                <input type="number" name="daAnnual" value={form.daAnnual} onChange={handleInput}
+                <input type="number" min="0" name="daAnnual" value={form.daAnnual} onChange={handleInput}
                   className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 text-sm" />
               </div>
             </div>
@@ -156,8 +180,11 @@ export default function TaxCalculatorPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs text-slate-400 mb-1">Annual Rent Paid</label>
-                      <input type="number" name="hra_rent_paid_annual" value={form.hra_rent_paid_annual} onChange={handleInput}
+                      <input type="number" min="0" name="hra_rent_paid_annual" value={form.hra_rent_paid_annual} onChange={handleInput}
                         className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 text-sm" />
+                      {(form.hraAnnual > 0 && (!form.hra_rent_paid_annual || form.hra_rent_paid_annual <= 0)) && (
+                        <p className="text-[10px] text-orange-500 mt-1">Requires rent paid to claim HRA exemption.</p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-xs text-slate-400 mb-1">City Type</label>
@@ -179,7 +206,7 @@ export default function TaxCalculatorPage() {
                           {fields.map(f => (
                             <div key={f.key}>
                               <label className="block text-[10px] text-gray-600 mb-0.5">{f.label}</label>
-                              <input type="number" name={f.key} value={declarations[f.key] || ''} onChange={handleDeclInput}
+                              <input type="number" min="0" name={f.key} value={declarations[f.key] || ''} onChange={handleDeclInput}
                                 className="w-full bg-white border border-slate-200 rounded px-2 py-1.5 text-slate-900 text-xs" />
                             </div>
                           ))}
@@ -200,6 +227,13 @@ export default function TaxCalculatorPage() {
 
         {/* ─── Results Panel ───────────────────────────────────────────────── */}
         <div className="space-y-4">
+          
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-center">
+              <p className="text-red-500 text-sm font-medium">{error}</p>
+            </div>
+          )}
+
           {/* Single Regime Result */}
           {mode === 'calculator' && result && (
             <div className="bg-white shadow-sm border border-slate-200 rounded-xl p-5 space-y-4">

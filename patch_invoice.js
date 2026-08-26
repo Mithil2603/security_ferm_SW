@@ -1,0 +1,1 @@
+const fs = require('fs'); const file = 'src/routes/invoices.js'; let content = fs.readFileSync(file, 'utf8'); content = content.replace('DELETE FROM invoices WHERE id = $1 RETURNING id', 'DELETE FROM invoices WHERE id = $1'); content = content.replace('if (result.rows.length === 0) {', 'if (result.rowCount === 0) {'); fs.writeFileSync(file, content, 'utf8');
