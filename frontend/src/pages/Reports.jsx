@@ -35,39 +35,42 @@ const FlipCard = ({ children, infoTitle, infoText, infoIcon: InfoIcon, container
   const [isFlipped, setIsFlipped] = useState(false);
 
   return (
-    <div className={`relative perspective-1000 group ${containerClassName}`}>
-      <div className={`w-full h-full transition-transform duration-700 transform-style-3d ${isFlipped ? 'rotate-y-180' : ''}`}>
-        
+    <div className={`relative group ${containerClassName}`}>
+      <div className={`w-full h-full transition-all duration-300`}>
         {/* Front */}
-        <div className="backface-hidden w-full h-full relative z-10">
-          {children}
-          <button 
-            onClick={() => setIsFlipped(true)}
-            className="absolute top-2 right-2 p-1.5 bg-slate-100/80 hover:bg-teal-100 text-slate-400 hover:text-teal-600 rounded-full backdrop-blur-sm transition-all z-20 opacity-0 group-hover:opacity-100 shadow-sm no-print"
-            title="What is this?"
-          >
-            <Info className="w-4 h-4" />
-          </button>
-        </div>
+        {!isFlipped && (
+          <div className="w-full h-full relative z-10">
+            {children}
+            <button 
+              onClick={() => setIsFlipped(true)}
+              className="absolute top-2 right-2 p-1.5 bg-slate-100/80 hover:bg-teal-100 text-slate-400 hover:text-teal-600 rounded-full backdrop-blur-sm transition-all z-20 opacity-0 group-hover:opacity-100 shadow-sm no-print"
+              title="What is this?"
+            >
+              <Info className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
         {/* Back */}
-        <div className="absolute inset-0 backface-hidden w-full h-full rotate-y-180 bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-center items-center text-center shadow-inner z-0 overflow-y-auto no-print flex-1 min-h-0">
-          <button 
-            onClick={() => setIsFlipped(false)}
-            className="absolute top-2 right-2 p-1.5 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-full transition-colors z-20"
-            title="Go back"
-          >
-            <RotateCw className="w-4 h-4" />
-          </button>
-          
-          <div className="w-10 h-10 bg-teal-100 text-teal-600 rounded-full flex items-center justify-center mb-3 shrink-0">
-            {InfoIcon ? <InfoIcon className="w-5 h-5" /> : <Info className="w-5 h-5" />}
+        {isFlipped && (
+          <div className="w-full h-full bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-center items-center text-center shadow-inner z-0 overflow-y-auto no-print flex-1 min-h-0">
+            <button 
+              onClick={() => setIsFlipped(false)}
+              className="absolute top-2 right-2 p-1.5 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-full transition-colors z-20"
+              title="Go back"
+            >
+              <RotateCw className="w-4 h-4" />
+            </button>
+            
+            <div className="w-10 h-10 bg-teal-100 text-teal-600 rounded-full flex items-center justify-center mb-3 shrink-0">
+              {InfoIcon ? <InfoIcon className="w-5 h-5" /> : <Info className="w-5 h-5" />}
+            </div>
+            <h4 className="font-bold text-slate-800 text-sm mb-1">{infoTitle}</h4>
+            <p className="text-xs text-slate-600 leading-relaxed max-w-[90%]">
+              {infoText}
+            </p>
           </div>
-          <h4 className="font-bold text-slate-800 text-sm mb-1">{infoTitle}</h4>
-          <p className="text-xs text-slate-600 leading-relaxed max-w-[90%]">
-            {infoText}
-          </p>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -85,6 +88,7 @@ export default function Reports() {
   const [bizData, setBizData] = useState(null);
   const [costPerGuardData, setCostPerGuardData] = useState(null);
   const [tdsData, setTdsData] = useState([]);
+  const [reportError, setReportError] = useState('');
   const [dateRange, setDateRange] = useState({
     from_date: '2024-08-01',
     to_date: new Date().toISOString().split('T')[0]
@@ -255,52 +259,69 @@ export default function Reports() {
   };
 
   const fetchReports = async () => {
+    if (isNaN(new Date(dateRange.from_date)) || isNaN(new Date(dateRange.to_date))) {
+      setReportError('Invalid date range');
+      return;
+    }
+    
     try {
       setLoading(true);
+      setReportError('');
       const params = new URLSearchParams();
       if (dateRange.from_date) params.append('from_date', dateRange.from_date);
       if (dateRange.to_date) params.append('to_date', dateRange.to_date);
       const queryStr = params.toString() ? `?${params.toString()}` : '';
 
-      // Only fetch basic reports initially to improve load time
-      const [expenseRes, plRes, tdsRes] = await Promise.all([
+      const results = await Promise.allSettled([
         api.get(`/reports/expense-summary${queryStr}`),
         api.get(`/reports/profit-loss${queryStr}`),
         api.get(`/reports/tds${queryStr}`)
       ]);
-      setExpenseData(expenseRes.data?.data?.by_category || []);
-      setPlData(plRes.data?.data || plRes.data || null);
-      if (tdsRes.data?.success) setTdsData(tdsRes.data.data);
+
+      if (results[0].status === 'fulfilled') setExpenseData(results[0].value.data?.data?.by_category || []);
+      else console.error('Failed to fetch expense summary', results[0].reason);
+
+      if (results[1].status === 'fulfilled') setPlData(results[1].value.data?.data || results[1].value.data || null);
+      else console.error('Failed to fetch profit-loss', results[1].reason);
+
+      if (results[2].status === 'fulfilled' && results[2].value.data?.success) setTdsData(results[2].value.data.data);
+      else console.error('Failed to fetch tds', results[2].reason);
 
       const year = new Date(dateRange.from_date).getFullYear();
-      const [trendRes, agingRes] = await Promise.all([
+      const advancedResults = await Promise.allSettled([
         api.get(`/reports/monthly-trend?from_date=${dateRange.from_date}&to_date=${dateRange.to_date}`),
         api.get('/reports/receivables-aging')
       ]);
-      if (trendRes.data?.success) setTrendData(trendRes.data);
-      if (agingRes.data?.success) setAgingData(agingRes.data);
+
+      if (advancedResults[0].status === 'fulfilled' && advancedResults[0].value.data?.success) setTrendData(advancedResults[0].value.data);
+      if (advancedResults[1].status === 'fulfilled' && advancedResults[1].value.data?.success) setAgingData(advancedResults[1].value.data);
+      
     } catch (err) {
       console.error('Failed to fetch reports', err);
+      setReportError('Failed to load reports. Please try again later.');
     } finally {
       setLoading(false);
     }
   };
 
   const fetchAdvancedReports = async () => {
+    if (isNaN(new Date(dateRange.from_date)) || isNaN(new Date(dateRange.to_date))) return;
+    
     try {
       const params = new URLSearchParams();
       if (dateRange.from_date) params.append('from_date', dateRange.from_date);
       if (dateRange.to_date) params.append('to_date', dateRange.to_date);
       const queryStr = params.toString() ? `?${params.toString()}` : '';
 
-      const [advRes, bizRes, cpgRes] = await Promise.all([
+      const results = await Promise.allSettled([
         api.get(`/reports/advanced-metrics${queryStr}`),
         api.get(`/reports/business-analytics${queryStr}`),
         api.get(`/reports/cost-per-guard${queryStr}`)
       ]);
-      setAdvancedData(advRes.data?.data || advRes.data || null);
-      if (bizRes.data?.success) setBizData(bizRes.data);
-      if (cpgRes.data?.success) setCostPerGuardData(cpgRes.data?.data ?? cpgRes.data);
+      
+      if (results[0].status === 'fulfilled') setAdvancedData(results[0].value.data?.data || results[0].value.data || null);
+      if (results[1].status === 'fulfilled' && results[1].value.data?.success) setBizData(results[1].value.data);
+      if (results[2].status === 'fulfilled' && results[2].value.data?.success) setCostPerGuardData(results[2].value.data?.data || []);
     } catch (err) {
       console.error('Failed to fetch advanced reports', err);
     }
@@ -361,6 +382,15 @@ export default function Reports() {
     const url = `${baseUrl}/reports/export-excel?type=${type}&from_date=${dateRange.from_date}&to_date=${dateRange.to_date}&token=${token}`;
     window.open(url, '_blank');
   };
+
+  // Prepare combined Cost Breakdown data (Moved up so handleExportSheet can use it without being undefined)
+  const costData = expenseData.map(d => ({
+    name: d.category.replace('_', ' ').toUpperCase(),
+    amount: parseFloat(d.total)
+  }));
+  if (plData && plData.payroll > 0) {
+    costData.push({ name: 'PAYROLL', amount: parseFloat(plData.payroll) });
+  }
 
   const handleExportSheet = async () => {
     if (!plData) return;
@@ -533,15 +563,6 @@ export default function Reports() {
       setExportingSheet(false);
     }
   };
-
-  // Prepare combined Cost Breakdown data
-  const costData = expenseData.map(d => ({
-    name: d.category.replace('_', ' ').toUpperCase(),
-    amount: parseFloat(d.total)
-  }));
-  if (plData && plData.payroll > 0) {
-    costData.push({ name: 'PAYROLL', amount: parseFloat(plData.payroll) });
-  }
 
   // Revenue Mode toggle — 'collected' | 'billed'
   const [revenueMode, setRevenueMode] = useState('collected');
@@ -716,7 +737,19 @@ export default function Reports() {
         .rotate-y-180 { transform: rotateY(180deg); }
       `}</style>
 
-      {loading ? (
+      {reportError ? (
+        <div className="bg-rose-50 border border-rose-200 rounded-xl p-8 text-center mt-8">
+          <AlertTriangle className="w-12 h-12 text-rose-500 mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-rose-800 mb-2">Error Loading Reports</h2>
+          <p className="text-rose-600">{reportError}</p>
+          <button 
+            onClick={fetchReports}
+            className="mt-4 px-4 py-2 bg-rose-600 text-white rounded-lg hover:bg-rose-700 font-medium transition-colors"
+          >
+            Try Again
+          </button>
+        </div>
+      ) : loading ? (
         <div className="bg-white/80 backdrop-blur-xl p-8 rounded-3xl shadow-sm border border-slate-100">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-12 gap-y-16 animate-pulse">
             <div className="space-y-8 flex flex-col justify-center px-6">
@@ -1012,18 +1045,18 @@ export default function Reports() {
               infoText="DSO measures the average number of days it takes your clients to pay their invoices after being billed. A lower number means faster cash flow."
               infoIcon={Clock}
             >
-              <div className={`bg-white rounded-2xl border p-6 shadow-sm hover:shadow-lg transition-all duration-300 border-${dsoZone}-200 h-full`}>
+              <div className={`bg-white rounded-2xl border p-6 shadow-sm hover:shadow-lg transition-all duration-300 ${dsoZone === 'emerald' ? 'border-emerald-200' : dsoZone === 'amber' ? 'border-amber-200' : dsoZone === 'red' ? 'border-red-200' : 'border-slate-200'} h-full`}>
                 <div className="flex items-start justify-between mb-4">
                   <div>
                     <p className="text-slate-500 text-sm font-semibold uppercase tracking-wide">Days Sales Outstanding</p>
                     <p className="text-slate-400 text-xs mt-0.5">How long clients take to pay on average</p>
                   </div>
-                  <Clock className={`w-6 h-6 text-${dsoZone}-500`} />
+                  <Clock className={`w-6 h-6 ${dsoZone === 'emerald' ? 'text-emerald-500' : dsoZone === 'amber' ? 'text-amber-500' : dsoZone === 'red' ? 'text-red-500' : 'text-slate-500'}`} />
                 </div>
                 <div className="flex items-end gap-3 mb-4">
-                  <span className={`text-5xl font-black text-${dsoZone}-600`}>{dso ?? '—'}</span>
+                  <span className={`text-5xl font-black ${dsoZone === 'emerald' ? 'text-emerald-600' : dsoZone === 'amber' ? 'text-amber-600' : dsoZone === 'red' ? 'text-red-600' : 'text-slate-600'}`}>{dso ?? '—'}</span>
                   <span className="text-slate-400 font-semibold text-lg mb-1">days</span>
-                  <span className={`ml-auto text-sm font-bold px-3 py-1 rounded-full bg-${dsoZone}-100 text-${dsoZone}-700`}>{dsoLabel}</span>
+                  <span className={`ml-auto text-sm font-bold px-3 py-1 rounded-full ${dsoZone === 'emerald' ? 'bg-emerald-100 text-emerald-700' : dsoZone === 'amber' ? 'bg-amber-100 text-amber-700' : dsoZone === 'red' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-700'}`}>{dsoLabel}</span>
                 </div>
                 {/* Gauge bar */}
                 <div className="space-y-1.5">
@@ -1032,7 +1065,7 @@ export default function Reports() {
                   </div>
                   <div className="relative h-3 bg-gradient-to-r from-emerald-200 via-amber-200 to-red-300 rounded-full overflow-hidden">
                     <div
-                      className={`absolute top-0 left-0 h-full rounded-full bg-${dsoZone}-500 transition-all duration-700`}
+                      className={`absolute top-0 left-0 h-full rounded-full ${dsoZone === 'emerald' ? 'bg-emerald-500' : dsoZone === 'amber' ? 'bg-amber-500' : dsoZone === 'red' ? 'bg-red-500' : 'bg-slate-500'} transition-all duration-700`}
                       style={{ width: `${Math.min((dso / 90) * 100, 100)}%` }}
                     />
                   </div>
@@ -1049,18 +1082,18 @@ export default function Reports() {
               infoText="This shows what percentage of your collected revenue goes strictly towards paying guard salaries. Keeping this below 65% is crucial for profitability."
               infoIcon={Users}
             >
-              <div className={`bg-white rounded-2xl border p-6 shadow-sm hover:shadow-lg transition-all duration-300 border-${labourZone}-200 h-full`}>
+              <div className={`bg-white rounded-2xl border p-6 shadow-sm hover:shadow-lg transition-all duration-300 ${labourZone === 'emerald' ? 'border-emerald-200' : labourZone === 'amber' ? 'border-amber-200' : labourZone === 'red' ? 'border-red-200' : 'border-slate-200'} h-full`}>
                 <div className="flex items-start justify-between mb-4">
                   <div>
                     <p className="text-slate-500 text-sm font-semibold uppercase tracking-wide">Labour Cost Ratio</p>
                     <p className="text-slate-400 text-xs mt-0.5">Payroll as % of collected revenue — target &lt; 65%</p>
                   </div>
-                  <Users className={`w-6 h-6 text-${labourZone}-500`} />
+                  <Users className={`w-6 h-6 ${labourZone === 'emerald' ? 'text-emerald-500' : labourZone === 'amber' ? 'text-amber-500' : labourZone === 'red' ? 'text-red-500' : 'text-slate-500'}`} />
                 </div>
                 <div className="flex items-end gap-3 mb-4">
-                  <span className={`text-5xl font-black text-${labourZone}-600`}>{labourRatio}</span>
+                  <span className={`text-5xl font-black ${labourZone === 'emerald' ? 'text-emerald-600' : labourZone === 'amber' ? 'text-amber-600' : labourZone === 'red' ? 'text-red-600' : 'text-slate-600'}`}>{labourRatio}</span>
                   <span className="text-slate-400 font-semibold text-lg mb-1">%</span>
-                  <span className={`ml-auto text-sm font-bold px-3 py-1 rounded-full bg-${labourZone}-100 text-${labourZone}-700`}>{labourLabel}</span>
+                  <span className={`ml-auto text-sm font-bold px-3 py-1 rounded-full ${labourZone === 'emerald' ? 'bg-emerald-100 text-emerald-700' : labourZone === 'amber' ? 'bg-amber-100 text-amber-700' : labourZone === 'red' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-700'}`}>{labourLabel}</span>
                 </div>
                 {/* Segmented gauge */}
                 <div className="space-y-1.5">

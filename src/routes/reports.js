@@ -31,7 +31,7 @@ router.get('/client-revenue', async (req, res) => {
         COALESCE(SUM(i.payment_due), 0) as total_due,
         ROUND(CASE WHEN SUM(i.final_amount) > 0 THEN SUM(i.payment_received) * 100.0 / SUM(i.final_amount) ELSE 0 END, 2) as collection_rate
        FROM clients c
-       LEFT JOIN invoices i ON c.id = i.client_id ${from_date || to_date || client_id ? `AND ${conditions.filter(c => c !== "i.status != 'cancelled'").join(' AND ')}` : ''}
+       LEFT JOIN invoices i ON c.id = i.client_id ${from_date || to_date || client_id ? `AND ${conditions.filter(c => c !== "i.status != 'cancelled'").join(' AND ')}` : ''} AND i.status != 'cancelled'
        WHERE c.is_active = 1
        GROUP BY c.id, c.name, c.city
        ORDER BY total_billed DESC`,
@@ -52,15 +52,15 @@ router.get('/monthly-revenue', async (req, res) => {
     const { year = new Date().getFullYear() } = req.query;
     const result = await query(
       `SELECT 
-        strftime('%Y-%m', invoice_date) as month,
-        (CASE strftime('%m', invoice_date) WHEN '01' THEN 'Jan ' WHEN '02' THEN 'Feb ' WHEN '03' THEN 'Mar ' WHEN '04' THEN 'Apr ' WHEN '05' THEN 'May ' WHEN '06' THEN 'Jun ' WHEN '07' THEN 'Jul ' WHEN '08' THEN 'Aug ' WHEN '09' THEN 'Sep ' WHEN '10' THEN 'Oct ' WHEN '11' THEN 'Nov ' WHEN '12' THEN 'Dec ' END) || strftime('%Y', invoice_date) as month_label,
+        DATE_FORMAT(invoice_date, '%Y-%m') as month,
+        DATE_FORMAT(invoice_date, '%b %Y') as month_label,
         COUNT(*) as invoice_count,
         COALESCE(SUM(final_amount), 0) as total_billed,
         COALESCE(SUM(payment_received), 0) as total_paid,
         COALESCE(SUM(payment_due), 0) as total_due
        FROM invoices
-       WHERE CAST(strftime('%Y', invoice_date) AS INTEGER) = $1 AND status != 'cancelled'
-       GROUP BY strftime('%Y-%m', invoice_date), (CASE strftime('%m', invoice_date) WHEN '01' THEN 'Jan ' WHEN '02' THEN 'Feb ' WHEN '03' THEN 'Mar ' WHEN '04' THEN 'Apr ' WHEN '05' THEN 'May ' WHEN '06' THEN 'Jun ' WHEN '07' THEN 'Jul ' WHEN '08' THEN 'Aug ' WHEN '09' THEN 'Sep ' WHEN '10' THEN 'Oct ' WHEN '11' THEN 'Nov ' WHEN '12' THEN 'Dec ' END) || strftime('%Y', invoice_date)
+       WHERE YEAR(invoice_date) = $1 AND status != 'cancelled'
+       GROUP BY DATE_FORMAT(invoice_date, '%Y-%m'), DATE_FORMAT(invoice_date, '%b %Y')
        ORDER BY month ASC`,
       [year]
     );
@@ -87,7 +87,7 @@ router.get('/expense-summary', async (req, res) => {
       categoryWhere = `AND expense_date >= date($1)`;
       categoryParams = [from_date];
     } else {
-      categoryWhere = `AND CAST(strftime('%Y', expense_date) AS INTEGER) = $1`;
+      categoryWhere = `AND YEAR(expense_date) = $1`;
       categoryParams = [year];
     }
 
@@ -105,17 +105,17 @@ router.get('/expense-summary', async (req, res) => {
       monthlyWhere = `AND expense_date >= date($1) AND expense_date <= date($2)`;
       monthlyParams = [from_date, to_date];
     } else {
-      monthlyWhere = `AND CAST(strftime('%Y', expense_date) AS INTEGER) = $1`;
+      monthlyWhere = `AND YEAR(expense_date) = $1`;
       monthlyParams = [year];
     }
 
     const monthly = await query(
-      `SELECT strftime('%Y-%m', expense_date) as month,
-        (CASE strftime('%m', expense_date) WHEN '01' THEN 'Jan ' WHEN '02' THEN 'Feb ' WHEN '03' THEN 'Mar ' WHEN '04' THEN 'Apr ' WHEN '05' THEN 'May ' WHEN '06' THEN 'Jun ' WHEN '07' THEN 'Jul ' WHEN '08' THEN 'Aug ' WHEN '09' THEN 'Sep ' WHEN '10' THEN 'Oct ' WHEN '11' THEN 'Nov ' WHEN '12' THEN 'Dec ' END) || strftime('%Y', expense_date) as month_label,
+      `SELECT DATE_FORMAT(expense_date, '%Y-%m') as month,
+        DATE_FORMAT(expense_date, '%b %Y') as month_label,
         COALESCE(SUM(amount), 0) as total
        FROM expenses
        WHERE status IN ('approved', 'paid') ${monthlyWhere}
-       GROUP BY strftime('%Y-%m', expense_date), (CASE strftime('%m', expense_date) WHEN '01' THEN 'Jan ' WHEN '02' THEN 'Feb ' WHEN '03' THEN 'Mar ' WHEN '04' THEN 'Apr ' WHEN '05' THEN 'May ' WHEN '06' THEN 'Jun ' WHEN '07' THEN 'Jul ' WHEN '08' THEN 'Aug ' WHEN '09' THEN 'Sep ' WHEN '10' THEN 'Oct ' WHEN '11' THEN 'Nov ' WHEN '12' THEN 'Dec ' END) || strftime('%Y', expense_date)
+       GROUP BY DATE_FORMAT(expense_date, '%Y-%m'), DATE_FORMAT(expense_date, '%b %Y')
        ORDER BY month ASC`,
       monthlyParams
     );
@@ -132,18 +132,18 @@ router.get('/payroll-summary', async (req, res) => {
   try {
     const { month, year = new Date().getFullYear() } = req.query;
 
-    let whereClause = `WHERE CAST(strftime('%Y', payroll_month) AS INTEGER) = $1`;
+    let whereClause = `WHERE YEAR(payroll_month) = $1`;
     let params = [year];
 
     if (month) {
-      whereClause += ` AND CAST(strftime('%m', payroll_month) AS INTEGER) = $2`;
+      whereClause += ` AND MONTH(payroll_month) = $2`;
       params.push(month);
     }
 
     const result = await query(
       `SELECT 
-        strftime('%Y-%m', payroll_month) as month,
-        (CASE strftime('%m', payroll_month) WHEN '01' THEN 'Jan ' WHEN '02' THEN 'Feb ' WHEN '03' THEN 'Mar ' WHEN '04' THEN 'Apr ' WHEN '05' THEN 'May ' WHEN '06' THEN 'Jun ' WHEN '07' THEN 'Jul ' WHEN '08' THEN 'Aug ' WHEN '09' THEN 'Sep ' WHEN '10' THEN 'Oct ' WHEN '11' THEN 'Nov ' WHEN '12' THEN 'Dec ' END) || strftime('%Y', payroll_month) as month_label,
+        DATE_FORMAT(payroll_month, '%Y-%m') as month,
+        DATE_FORMAT(payroll_month, '%b %Y') as month_label,
         COUNT(*) as employee_count,
         COALESCE(SUM(gross_salary), 0) as total_gross,
         COALESCE(SUM(pf_deduction), 0) as total_pf,
@@ -151,7 +151,7 @@ router.get('/payroll-summary', async (req, res) => {
         SUM(CASE WHEN payment_status = 'paid' THEN 1 ELSE 0 END) as paid_count,
         SUM(CASE WHEN payment_status = 'pending' THEN 1 ELSE 0 END) as pending_count
        FROM payroll ${whereClause}
-       GROUP BY strftime('%Y-%m', payroll_month), (CASE strftime('%m', payroll_month) WHEN '01' THEN 'Jan ' WHEN '02' THEN 'Feb ' WHEN '03' THEN 'Mar ' WHEN '04' THEN 'Apr ' WHEN '05' THEN 'May ' WHEN '06' THEN 'Jun ' WHEN '07' THEN 'Jul ' WHEN '08' THEN 'Aug ' WHEN '09' THEN 'Sep ' WHEN '10' THEN 'Oct ' WHEN '11' THEN 'Nov ' WHEN '12' THEN 'Dec ' END) || strftime('%Y', payroll_month)
+       GROUP BY DATE_FORMAT(payroll_month, '%Y-%m'), DATE_FORMAT(payroll_month, '%b %Y')
        ORDER BY month DESC`,
       params
     );
@@ -169,6 +169,10 @@ router.get('/profit-loss', async (req, res) => {
     const { from_date, to_date } = req.query;
     const fromDate = from_date || `${new Date().getFullYear()}-01-01`;
     const toDate   = to_date   || new Date().toISOString().split('T')[0];
+    
+    if (new Date(toDate) < new Date(fromDate)) {
+      return res.status(400).json({ success: false, message: 'Invalid date range: to_date must be after from_date' });
+    }
 
     // ── Revenue: filter by exact invoice date within the range ──────────────
     const revenue = await query(
@@ -279,6 +283,10 @@ router.get('/advanced-metrics', async (req, res) => {
     const { from_date, to_date } = req.query;
     const fromDate = from_date || `${new Date().getFullYear()}-01-01`;
     const toDate   = to_date   || new Date().toISOString().split('T')[0];
+
+    if (new Date(toDate) < new Date(fromDate)) {
+      return res.status(400).json({ success: false, message: 'Invalid date range: to_date must be after from_date' });
+    }
 
     // Days in the selected period
     const msPerDay = 1000 * 60 * 60 * 24;
