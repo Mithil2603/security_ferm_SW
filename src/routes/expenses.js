@@ -9,8 +9,9 @@ const multer = require('multer');
 const path = require('path');
 const crypto = require('crypto');
 const { logError } = require('../utils/errorLogger');
+const { logAudit } = require('../middleware/audit');
 
-const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
+const uploadDir = process.env.UPLOAD_DIR || path.join(__dirname, '../../uploads');
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => cb(null, `expense_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${path.extname(file.originalname)}`)
@@ -145,8 +146,9 @@ router.get('/:id', async (req, res) => {
 // POST /api/expenses
 router.post('/', upload.single('receipt_file'), validate(schemas.createExpense), async (req, res) => {
   try {
-    const { expense_date, description, amount, payment_method, vendor_id, receipt_number, notes } = req.body;
+    const { expense_date, description, amount, payment_method, receipt_number, notes } = req.body;
     let { category } = req.body;
+    const vendor_id = req.body.vendor_id === "" ? null : req.body.vendor_id;
     
     // Normalize category
     if (category) category = category.trim().toLowerCase().replace(/\s+/g, '_');
@@ -176,8 +178,9 @@ router.post('/', upload.single('receipt_file'), validate(schemas.createExpense),
 // PUT /api/expenses/:id
 router.put('/:id', upload.single('receipt_file'), async (req, res) => {
   try {
-    const { expense_date, description, amount, payment_method, vendor_id, receipt_number, notes } = req.body;
+    const { expense_date, description, amount, payment_method, receipt_number, notes } = req.body;
     let { category } = req.body;
+    const vendor_id = req.body.vendor_id === "" ? null : req.body.vendor_id;
     
     // Normalize category
     if (category) category = category.trim().toLowerCase().replace(/\s+/g, '_');
@@ -304,42 +307,48 @@ router.post('/:id/pay', async (req, res) => {
     // Allowed to pay if status is pending, approved, or partially_paid?
     // Wait, the status is restricted to pending, approved, rejected, paid. 
     // We can just check if it's already fully paid.
-    if (expense.status === 'paid') {
-      return res.status(400).json({ success: false, message: 'Expense is already fully paid' });
+    if (expense.status === 'rejected') {
+      return res.status(400).json({ success: false, message: 'Cannot pay a rejected expense' });
     }
 
     const currentPaid = parseFloat(expense.amount_paid) || 0;
     const newPaid = currentPaid + paymentAmount;
     
-    // Check if fully paid (or overpaid, but we just cap status)
-    let newStatus = expense.status; // Keep it whatever it is (e.g. pending or approved)
+    if (newPaid > parseFloat(expense.amount)) {
+      return res.status(400).json({ success: false, message: `Payment amount exceeds remaining balance. Max allowed: ${parseFloat(expense.amount) - currentPaid}` });
+    }
+
+    let newStatus = expense.status; 
     if (newPaid >= parseFloat(expense.amount)) {
       newStatus = 'paid';
     }
 
-    // Begin Transaction manually since we don't have a transaction helper, but await queries sequentially is okay for now
-    
-    // 2. Insert into vendor_payments
-    await query(
-      `INSERT INTO vendor_payments (vendor_id, expense_id, payment_date, amount, payment_method, reference_number, notes, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [expense.vendor_id, expense.id, payment_date || new Date().toISOString().split('T')[0], paymentAmount, payment_method || 'bank_transfer', reference_number, notes, req.user.userId]
-    );
+    await query('BEGIN');
+    try {
+      await query(
+        `INSERT INTO vendor_payments (vendor_id, expense_id, payment_date, amount, payment_method, reference_number, notes, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [expense.vendor_id, expense.id, payment_date || new Date().toISOString().split('T')[0], paymentAmount, payment_method || 'bank_transfer', reference_number, notes, req.user.userId]
+      );
 
-    // 3. Update expense
-    const result = await query(
-      `UPDATE expenses SET amount_paid = $1, status = $2 WHERE id = $3`,
-      [newPaid, newStatus, expense.id]
-    );
+      await query(
+        `UPDATE expenses SET amount_paid = $1, status = $2 WHERE id = $3`,
+        [newPaid, newStatus, expense.id]
+      );
+      
+      await query('COMMIT');
+    } catch (txError) {
+      await query('ROLLBACK');
+      throw txError;
+    }
+
     const updated = await query('SELECT * FROM expenses WHERE id = $1', [expense.id]);
     const finalExpense = updated.rows[0];
 
-    // Get vendor name for statement
     const vendorRes = await query('SELECT name FROM vendors WHERE id = $1', [expense.vendor_id]);
     const vendorName = vendorRes.rows.length > 0 ? vendorRes.rows[0].name : (expense.vendor_name || 'Unknown');
     const payDate = payment_date || new Date().toISOString().split('T')[0];
 
-    // Auto-save Vendor Payment statement
     saveStatement({
       domain: 'vendor',
       statement_number: `VP-${vendorName.replace(/\s+/g, '_')}-${payDate}`,
@@ -357,6 +366,8 @@ router.post('/:id/pay', async (req, res) => {
       party_id: expense.vendor_id,
       generated_by: req.user.userId
     });
+
+    logAudit(req, 'vendor_payments', expense.id, 'create', `Recorded payment of ₹${paymentAmount} for expense #${expense.id}`);
 
     res.json({ success: true, data: finalExpense, message: 'Payment recorded successfully' });
   } catch (error) {

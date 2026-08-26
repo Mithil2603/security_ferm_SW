@@ -20,6 +20,10 @@ api.interceptors.request.use((config) => {
     config.headers.Authorization = `Bearer ${token}`;
   }
   
+  if (config.data instanceof FormData) {
+    delete config.headers['Content-Type'];
+  }
+
   // Prevent double slashes when combining baseURL and url
   if (config.url && config.url.startsWith('/')) {
     config.url = config.url.substring(1);

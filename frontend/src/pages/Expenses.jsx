@@ -5,6 +5,8 @@ import { getServerBaseUrl } from '../utils/apiUrl';
 import { format } from 'date-fns';
 import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
+import { useAuth } from '../context/AuthContext';
+import UpdateNotification from '../components/UpdateNotification';
 
 // Categories are now fetched dynamically from the database
 
@@ -28,6 +30,7 @@ const emptyForm = {
 };
 
 export default function Expenses() {
+  const { hasPermission } = useAuth();
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -40,6 +43,9 @@ export default function Expenses() {
   const [pagination, setPagination] = useState(null);
   const [categories, setCategories] = useState([]);
   const [vendors, setVendors] = useState([]);
+  const [categoryError, setCategoryError] = useState(false);
+  const [vendorError, setVendorError] = useState(false);
+  const [notification, setNotification] = useState({ show: false, message: '', type: 'success' });
   
   // Payment Modal State
   const [payModalExpense, setPayModalExpense] = useState(null);
@@ -48,23 +54,37 @@ export default function Expenses() {
   // Reject Modal State
   const [rejectModal, setRejectModal] = useState({ open: false, id: null, reason: '' });
   const [rejecting, setRejecting] = useState(false);
+  
+  // Approve Modal State
+  const [approveModal, setApproveModal] = useState({ open: false, id: null, notes: '' });
+  const [approving, setApproving] = useState(false);
+
   const [paying, setPaying] = useState(false);
+
+  const showNotification = (message, type = 'success') => {
+    setNotification({ show: true, message, type });
+    setTimeout(() => setNotification({ show: false, message: '', type: 'success' }), 3000);
+  };
 
   const fetchCategories = async () => {
     try {
+      setCategoryError(false);
       const res = await api.get('/expenses/categories');
       setCategories(res.data || []);
     } catch (err) {
       console.error('Failed to fetch categories', err);
+      setCategoryError(true);
     }
   };
 
   const fetchVendors = async () => {
     try {
+      setVendorError(false);
       const res = await api.get('/vendors');
       setVendors(res.data || []);
     } catch (err) {
       console.error('Failed to fetch vendors', err);
+      setVendorError(true);
     }
   };
 
@@ -88,7 +108,10 @@ export default function Expenses() {
     fetchVendors();
   }, [statusFilter, page]);
 
-  useEffect(() => { setPage(1); }, [statusFilter]);
+  useEffect(() => { 
+    setPage(1); 
+    setLoading(true);
+  }, [statusFilter]);
 
   const handleInputChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -114,29 +137,36 @@ export default function Expenses() {
       });
       if (receiptFile) data.append('receipt_file', receiptFile);
 
-      // Using raw axios for FormData to prevent Content-Type being strictly JSON in our interceptor
-      // Wait, axios automatically sets correct Content-Type for FormData, but our interceptor forces JSON.
-      // We will override headers.
-      await api.post('/expenses', data, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
+      await api.post('/expenses', data); // Interceptor handles FormData Content-Type natively now
       
       setIsModalOpen(false);
+      showNotification('Expense recorded successfully');
       fetchExpenses();
     } catch (err) {
-      setError(err.message || 'Failed to record expense');
+      setError(err.message || err.response?.data?.message || 'An error occurred while recording the expense');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleApprove = async (id) => {
-    if (!window.confirm("Are you sure you want to approve this expense?")) return;
+  const handleApproveClick = (id) => {
+    setApproveModal({ open: true, id, notes: '' });
+  };
+
+  const handleApproveSubmit = async (e) => {
+    e.preventDefault();
+    if (!approveModal.id) return;
+    setApproving(true);
     try {
-      await api.put(`/expenses/${id}/approve`, { approval_notes: '' });
+      await api.put(`/expenses/${approveModal.id}/approve`, { approval_notes: approveModal.notes || '' });
+      setApproveModal({ open: false, id: null, notes: '' });
+      showNotification('Expense approved successfully');
       fetchExpenses();
     } catch (err) {
       console.error('Failed to approve expense', err);
+      alert(err.message || err.response?.data?.message || 'Failed to approve expense');
+    } finally {
+      setApproving(false);
     }
   };
 
@@ -151,10 +181,11 @@ export default function Expenses() {
     try {
       await api.put(`/expenses/${rejectModal.id}/reject`, { approval_notes: rejectModal.reason || '' });
       setRejectModal({ open: false, id: null, reason: '' });
+      showNotification('Expense rejected');
       fetchExpenses();
     } catch (err) {
       console.error('Failed to reject expense', err);
-      alert(err.message || 'Failed to reject expense');
+      alert(err.message || err.response?.data?.message || 'Failed to reject expense');
     } finally {
       setRejecting(false);
     }
@@ -166,9 +197,10 @@ export default function Expenses() {
     try {
       await api.post(`/expenses/${payModalExpense.id}/pay`, payFormData);
       setPayModalExpense(null);
+      showNotification('Payment recorded successfully');
       fetchExpenses();
     } catch (err) {
-      alert(err.message || 'Failed to record payment');
+      alert(err.message || err.response?.data?.message || 'Failed to record payment');
     } finally {
       setPaying(false);
     }
@@ -178,17 +210,34 @@ export default function Expenses() {
     if (!window.confirm("Are you sure you want to delete this expense permanently?")) return;
     try {
       await api.delete(`/expenses/${id}`);
+      showNotification('Expense deleted');
       fetchExpenses();
     } catch (err) {
       console.error('Failed to delete expense', err);
-      alert('Failed to delete expense');
+      alert(err.message || err.response?.data?.message || 'Failed to delete expense');
     }
   };
 
   const inputCls = "w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm";
 
+  if (!hasPermission('manage_expenses')) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[60vh] bg-white rounded-xl shadow-sm border border-slate-200 p-8">
+        <XCircle className="w-16 h-16 text-rose-500 mb-4" />
+        <h2 className="text-xl font-bold text-slate-800">Access Denied</h2>
+        <p className="text-slate-500 mt-2 text-center max-w-md">You do not have the required permissions to view or manage expenses. Please contact your administrator if you believe this is an error.</p>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-6 animate-fade-in relative">
+      <UpdateNotification 
+        message={notification.message}
+        show={notification.show}
+        type={notification.type}
+        onClose={() => setNotification({ ...notification, show: false })}
+      />
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
@@ -302,7 +351,7 @@ export default function Expenses() {
                         )}
                         {expense.status === 'pending' && (
                           <>
-                            <button onClick={() => handleApprove(expense.id)}
+                            <button onClick={() => handleApproveClick(expense.id)}
                               className="p-1.5 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="Approve">
                               <CheckCircle className="w-4 h-4" />
                             </button>
@@ -349,6 +398,7 @@ export default function Expenses() {
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Category *</label>
+                    {categoryError && <p className="text-xs text-rose-500 mb-1">Failed to load categories</p>}
                     <select required name="category" value={formData.category} onChange={handleInputChange} className={inputCls}>
                       <option value="">-- Select Category --</option>
                       {categories.map(c => <option key={c.id} value={c.name}>{c.name.replace('_', ' ').toUpperCase()}</option>)}
@@ -374,6 +424,7 @@ export default function Expenses() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Vendor</label>
+                    {vendorError && <p className="text-xs text-rose-500 mb-1">Failed to load vendors</p>}
                     <select name="vendor_id" value={formData.vendor_id} onChange={handleInputChange} className={inputCls}>
                       <option value="">-- No Vendor --</option>
                       {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
@@ -386,7 +437,7 @@ export default function Expenses() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Receipt Attachment</label>
-                  <input type="file" accept="image/*,.pdf" onChange={e => setReceiptFile(e.target.files[0])} className="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-teal-50 file:text-teal-700 hover:file:bg-teal-100" />
+                  <input type="file" accept="image/*,.pdf,.xlsx" onChange={e => setReceiptFile(e.target.files[0])} className="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-teal-50 file:text-teal-700 hover:file:bg-teal-100" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
@@ -420,7 +471,7 @@ export default function Expenses() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Payment Method *</label>
-                  <select required value={payFormData.payment_method} onChange={e => setPayFormData({...payFormData, payment_method: e.target.value})} className={inputCls}>
+                  <select required name="payment_method" value={payFormData.payment_method} onChange={e => setPayFormData({...payFormData, payment_method: e.target.value})} className={inputCls}>
                     {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                   </select>
                 </div>
@@ -472,6 +523,37 @@ export default function Expenses() {
                 <button type="button" onClick={() => setRejectModal({ open: false, id: null, reason: '' })} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
                 <button type="submit" disabled={rejecting} className="px-4 py-2 text-sm font-medium text-white bg-rose-600 rounded-lg hover:bg-rose-700 disabled:opacity-50">
                   {rejecting ? 'Rejecting...' : 'Confirm Rejection'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Approve Modal */}
+      {approveModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-slide-up">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-emerald-50">
+              <h3 className="text-lg font-bold text-emerald-800">Approve Expense</h3>
+              <button type="button" onClick={() => setApproveModal({ open: false, id: null, notes: '' })} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleApproveSubmit} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Approval Notes (Optional)</label>
+                <textarea
+                  rows="3"
+                  value={approveModal.notes}
+                  onChange={e => setApproveModal({ ...approveModal, notes: e.target.value })}
+                  className={inputCls}
+                  placeholder="Enter any notes or conditions for approval..."
+                  autoFocus
+                ></textarea>
+              </div>
+              <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-slate-100">
+                <button type="button" onClick={() => setApproveModal({ open: false, id: null, notes: '' })} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
+                <button type="submit" disabled={approving} className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50">
+                  {approving ? 'Approving...' : 'Confirm Approval'}
                 </button>
               </div>
             </form>
