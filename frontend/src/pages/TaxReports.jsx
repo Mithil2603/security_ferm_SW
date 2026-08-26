@@ -6,33 +6,61 @@ import * as XLSX from 'xlsx';
 export default function TaxReports() {
   const [activeTab, setActiveTab] = useState('gst-clients'); // 'gst-clients', 'gst-vendors', 'tds'
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [error, setError] = useState('');
   const [data, setData] = useState([]);
-  const [dateRange, setDateRange] = useState({
-    from_date: `${new Date().getFullYear()}-01-01`,
-    to_date: new Date().toISOString().split('T')[0]
+  
+  const [dateRange, setDateRange] = useState(() => {
+    const today = new Date();
+    // Default from_date to 1st of current month
+    const from_date = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
+    const to_date = today.toISOString().split('T')[0];
+    return { from_date, to_date };
   });
 
-  const fetchData = async () => {
+  const fetchData = async (abortController) => {
     try {
-      setLoading(true);
-      const params = new URLSearchParams();
-      if (dateRange.from_date) params.append('from_date', dateRange.from_date);
-      if (dateRange.to_date) params.append('to_date', dateRange.to_date);
-
-      let res;
-      if (activeTab === 'gst-clients') {
-        params.append('type', 'client');
-        res = await api.get(`/reports/gst-bifurcation?${params.toString()}`);
-      } else if (activeTab === 'gst-vendors') {
-        params.append('type', 'vendor');
-        res = await api.get(`/reports/gst-bifurcation?${params.toString()}`);
-      } else if (activeTab === 'tds') {
-        res = await api.get(`/reports/tds?${params.toString()}`);
+      setError('');
+      
+      // Date Validation
+      if (!dateRange.from_date || !dateRange.to_date) return;
+      const from = new Date(dateRange.from_date);
+      const to = new Date(dateRange.to_date);
+      if (isNaN(from.getTime()) || isNaN(to.getTime())) {
+        setError('Invalid date format selected.');
+        return;
+      }
+      if (to < from) {
+        setError('End date cannot be earlier than start date.');
+        return;
       }
 
-      setData(res.data || []);
+      setLoading(true);
+      const params = new URLSearchParams();
+      params.append('from_date', dateRange.from_date);
+      params.append('to_date', dateRange.to_date);
+
+      let res;
+      const reqConfig = { signal: abortController?.signal };
+      
+      if (activeTab === 'gst-clients') {
+        params.append('type', 'client');
+        res = await api.get(`/reports/gst-bifurcation?${params.toString()}`, reqConfig);
+      } else if (activeTab === 'gst-vendors') {
+        params.append('type', 'vendor');
+        res = await api.get(`/reports/gst-bifurcation?${params.toString()}`, reqConfig);
+      } else if (activeTab === 'tds') {
+        res = await api.get(`/reports/tds?${params.toString()}`, reqConfig);
+      }
+
+      // Check if response contains array in data.data or just data
+      const responseData = res?.data?.data || res?.data || [];
+      setData(Array.isArray(responseData) ? responseData : []);
+      
     } catch (err) {
-      console.error('Failed to fetch tax reports', err);
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
+      console.error('Failed to fetch tax reports:', err);
+      setError('Failed to load reports. Please try again.');
       setData([]);
     } finally {
       setLoading(false);
@@ -40,80 +68,96 @@ export default function TaxReports() {
   };
 
   useEffect(() => {
-    fetchData();
+    window.scrollTo(0, 0);
+    const abortController = new AbortController();
+    fetchData(abortController);
+    return () => abortController.abort();
   }, [activeTab, dateRange.from_date, dateRange.to_date]);
 
-  const handleExport = () => {
-    const wb = XLSX.utils.book_new();
-    const wsData = [];
+  const handleExport = async () => {
+    if (!Array.isArray(data) || data.length === 0) return;
     
-    // Add Title and Date Range
-    let reportTitle = '';
-    if (activeTab === 'gst-clients') reportTitle = 'GST Bifurcation (Clients)';
-    else if (activeTab === 'gst-vendors') reportTitle = 'GST Bifurcation (Vendors)';
-    else if (activeTab === 'tds') reportTitle = 'TDS Receivable Report';
-    
-    wsData.push([reportTitle]);
-    wsData.push([`Period: ${dateRange.from_date} to ${dateRange.to_date}`]);
-    wsData.push([]); // blank row
-    
-    if (activeTab.startsWith('gst')) {
-      wsData.push(['Party Name', 'GSTIN', 'Taxable Value', 'CGST', 'SGST', 'IGST', 'Total Amount', 'Invoice Count']);
-      data.forEach(row => {
-        wsData.push([
-          row.party_name,
-          row.gst_number || 'N/A',
-          row.total_taxable_value || 0,
-          row.total_cgst || 0,
-          row.total_sgst || 0,
-          row.total_igst || 0,
-          row.total_invoice_amount || 0,
-          row.invoice_count
-        ]);
-      });
+    try {
+      setExporting(true);
+      // Brief timeout to allow React to render loading state before heavy sync operation
+      await new Promise(resolve => setTimeout(resolve, 50));
       
-      // Totals
-      const sumTaxable = data.reduce((s, r) => s + (r.total_taxable_value || 0), 0);
-      const sumCgst = data.reduce((s, r) => s + (r.total_cgst || 0), 0);
-      const sumSgst = data.reduce((s, r) => s + (r.total_sgst || 0), 0);
-      const sumIgst = data.reduce((s, r) => s + (r.total_igst || 0), 0);
-      const sumTotal = data.reduce((s, r) => s + (r.total_invoice_amount || 0), 0);
-      wsData.push(['Grand Total', '', sumTaxable, sumCgst, sumSgst, sumIgst, sumTotal, '']);
-    } else {
-      wsData.push(['Client Name', 'GSTIN', 'Total Amount Paid', 'Total TDS Deducted', 'Payment Count']);
-      data.forEach(row => {
-        wsData.push([
-          row.client_name,
-          row.gst_number || 'N/A',
-          row.total_amount_paid || 0,
-          row.total_tds_deducted || 0,
-          row.payment_count
-        ]);
-      });
+      const wb = XLSX.utils.book_new();
+      const wsData = [];
       
-      // Totals
-      const sumPaid = data.reduce((s, r) => s + (r.total_amount_paid || 0), 0);
-      const sumTds = data.reduce((s, r) => s + (r.total_tds_deducted || 0), 0);
-      wsData.push(['Grand Total', '', sumPaid, sumTds, '']);
-    }
+      // Add Title and Date Range
+      let reportTitle = '';
+      if (activeTab === 'gst-clients') reportTitle = 'GST Bifurcation (Clients)';
+      else if (activeTab === 'gst-vendors') reportTitle = 'GST Bifurcation (Vendors)';
+      else if (activeTab === 'tds') reportTitle = 'TDS Receivable Report';
+      
+      wsData.push([reportTitle]);
+      wsData.push([`Period: ${dateRange.from_date} to ${dateRange.to_date}`]);
+      wsData.push([]); // blank row
+      
+      if (activeTab.startsWith('gst')) {
+        wsData.push(['Party Name', 'GSTIN', 'Taxable Value', 'CGST', 'SGST', 'IGST', 'Total Amount', 'Invoice Count']);
+        data.forEach(row => {
+          wsData.push([
+            row.party_name,
+            row.gst_number || 'N/A',
+            parseFloat(row.total_taxable_value || 0),
+            parseFloat(row.total_cgst || 0),
+            parseFloat(row.total_sgst || 0),
+            parseFloat(row.total_igst || 0),
+            parseFloat(row.total_invoice_amount || 0),
+            parseInt(row.invoice_count || 0, 10)
+          ]);
+        });
+        
+        // Totals
+        const sumTaxable = data.reduce((s, r) => s + parseFloat(r.total_taxable_value || 0), 0);
+        const sumCgst = data.reduce((s, r) => s + parseFloat(r.total_cgst || 0), 0);
+        const sumSgst = data.reduce((s, r) => s + parseFloat(r.total_sgst || 0), 0);
+        const sumIgst = data.reduce((s, r) => s + parseFloat(r.total_igst || 0), 0);
+        const sumTotal = data.reduce((s, r) => s + parseFloat(r.total_invoice_amount || 0), 0);
+        wsData.push(['Grand Total', '', sumTaxable, sumCgst, sumSgst, sumIgst, sumTotal, '']);
+      } else {
+        wsData.push(['Client Name', 'GSTIN', 'Total Amount Paid', 'Total TDS Deducted', 'Payment Count']);
+        data.forEach(row => {
+          wsData.push([
+            row.client_name,
+            row.gst_number || 'N/A',
+            parseFloat(row.total_amount_paid || 0),
+            parseFloat(row.total_tds_deducted || 0),
+            parseInt(row.payment_count || 0, 10)
+          ]);
+        });
+        
+        // Totals
+        const sumPaid = data.reduce((s, r) => s + parseFloat(r.total_amount_paid || 0), 0);
+        const sumTds = data.reduce((s, r) => s + parseFloat(r.total_tds_deducted || 0), 0);
+        wsData.push(['Grand Total', '', sumPaid, sumTds, '']);
+      }
 
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    
-    // Auto-size columns for better readability
-    const colWidths = [
-      { wch: 30 }, // Name
-      { wch: 20 }, // GSTIN
-      { wch: 18 }, // Col 3
-      { wch: 18 }, // Col 4
-      { wch: 18 }, // Col 5
-      { wch: 18 }, // Col 6
-      { wch: 18 }, // Col 7
-      { wch: 15 }, // Col 8
-    ];
-    ws['!cols'] = colWidths;
-    
-    XLSX.utils.book_append_sheet(wb, ws, 'Report');
-    XLSX.writeFile(wb, `Tax_Report_${activeTab}_${dateRange.from_date}_to_${dateRange.to_date}.xlsx`);
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+      
+      // Auto-size columns for better readability
+      const colWidths = [
+        { wch: 30 }, // Name
+        { wch: 20 }, // GSTIN
+        { wch: 18 }, // Col 3
+        { wch: 18 }, // Col 4
+        { wch: 18 }, // Col 5
+        { wch: 18 }, // Col 6
+        { wch: 18 }, // Col 7
+        { wch: 15 }, // Col 8
+      ];
+      ws['!cols'] = colWidths;
+      
+      XLSX.utils.book_append_sheet(wb, ws, 'Report');
+      XLSX.writeFile(wb, `Tax_Report_${activeTab}_${dateRange.from_date}_to_${dateRange.to_date}.xlsx`);
+    } catch (err) {
+      console.error('Export failed:', err);
+      alert('Failed to export data. Please try again.');
+    } finally {
+      setExporting(false);
+    }
   };
 
   return (
@@ -206,6 +250,14 @@ export default function TaxReports() {
             <div className="flex justify-center items-center h-64 print:hidden">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600"></div>
             </div>
+          ) : error ? (
+            <div className="text-center py-12">
+              <div className="bg-red-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 print:hidden">
+                <span className="text-red-500 font-bold text-2xl">!</span>
+              </div>
+              <h3 className="text-lg font-medium text-slate-800 mb-1">Error Loading Data</h3>
+              <p className="text-red-500">{error}</p>
+            </div>
           ) : data.length === 0 ? (
             <div className="text-center py-12">
               <div className="bg-slate-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 print:hidden">
@@ -227,6 +279,7 @@ export default function TaxReports() {
                       <th className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider print:text-black print:px-2">SGST</th>
                       <th className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider print:text-black print:px-2">IGST</th>
                       <th className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider print:text-black print:px-2">Total Amount</th>
+                      <th className="px-6 py-4 text-center text-xs font-bold text-slate-500 uppercase tracking-wider print:text-black print:px-2">Invoices</th>
                     </tr>
                   ) : (
                     <tr>
@@ -245,21 +298,26 @@ export default function TaxReports() {
                         <>
                           <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-800 print:px-2 print:py-2">{row.party_name}</td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 font-mono print:px-2 print:py-2">{row.gst_number || 'N/A'}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600 text-right print:px-2 print:py-2">₹{(row.total_taxable_value || 0).toLocaleString()}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600 text-right print:px-2 print:py-2">₹{(row.total_cgst || 0).toLocaleString()}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600 text-right print:px-2 print:py-2">₹{(row.total_sgst || 0).toLocaleString()}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600 text-right print:px-2 print:py-2">₹{(row.total_igst || 0).toLocaleString()}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-slate-800 text-right print:px-2 print:py-2">₹{(row.total_invoice_amount || 0).toLocaleString()}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600 text-right print:px-2 print:py-2">₹{parseFloat(row.total_taxable_value || 0).toLocaleString('en-IN')}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600 text-right print:px-2 print:py-2">₹{parseFloat(row.total_cgst || 0).toLocaleString('en-IN')}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600 text-right print:px-2 print:py-2">₹{parseFloat(row.total_sgst || 0).toLocaleString('en-IN')}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600 text-right print:px-2 print:py-2">₹{parseFloat(row.total_igst || 0).toLocaleString('en-IN')}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-slate-800 text-right print:px-2 print:py-2">₹{parseFloat(row.total_invoice_amount || 0).toLocaleString('en-IN')}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 text-center print:px-2 print:py-2">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800 print:bg-transparent print:border print:border-slate-300">
+                              {parseInt(row.invoice_count || 0, 10)}
+                            </span>
+                          </td>
                         </>
                       ) : (
                         <>
                           <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-800 print:px-2 print:py-2">{row.client_name}</td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 font-mono print:px-2 print:py-2">{row.gst_number || 'N/A'}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600 text-right print:px-2 print:py-2">₹{(row.total_amount_paid || 0).toLocaleString()}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-teal-600 text-right print:px-2 print:py-2">₹{(row.total_tds_deducted || 0).toLocaleString()}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600 text-right print:px-2 print:py-2">₹{parseFloat(row.total_amount_paid || 0).toLocaleString('en-IN')}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-teal-600 text-right print:px-2 print:py-2">₹{parseFloat(row.total_tds_deducted || 0).toLocaleString('en-IN')}</td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 text-center print:px-2 print:py-2">
                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800 print:bg-transparent print:border print:border-slate-300">
-                              {row.payment_count} {row.payment_count === 1 ? 'pmt' : 'pmts'}
+                              {parseInt(row.payment_count || 0, 10)} {parseInt(row.payment_count || 0, 10) === 1 ? 'Payment' : 'Payments'}
                             </span>
                           </td>
                         </>
@@ -267,25 +325,28 @@ export default function TaxReports() {
                     </tr>
                   ))}
                   {/* Totals Row */}
-                  <tr className="bg-slate-50 font-bold border-t-2 border-slate-300 print:bg-transparent print:border-black">
-                    {activeTab.startsWith('gst') ? (
-                      <>
-                        <td colSpan={2} className="px-6 py-4 text-right text-slate-800 print:px-2">Grand Total:</td>
-                        <td className="px-6 py-4 text-right text-slate-800 print:px-2">₹{data.reduce((sum, r) => sum + (r.total_taxable_value || 0), 0).toLocaleString()}</td>
-                        <td className="px-6 py-4 text-right text-slate-800 print:px-2">₹{data.reduce((sum, r) => sum + (r.total_cgst || 0), 0).toLocaleString()}</td>
-                        <td className="px-6 py-4 text-right text-slate-800 print:px-2">₹{data.reduce((sum, r) => sum + (r.total_sgst || 0), 0).toLocaleString()}</td>
-                        <td className="px-6 py-4 text-right text-slate-800 print:px-2">₹{data.reduce((sum, r) => sum + (r.total_igst || 0), 0).toLocaleString()}</td>
-                        <td className="px-6 py-4 text-right text-teal-700 print:px-2">₹{data.reduce((sum, r) => sum + (r.total_invoice_amount || 0), 0).toLocaleString()}</td>
-                      </>
-                    ) : (
-                      <>
-                        <td colSpan={2} className="px-6 py-4 text-right text-slate-800 print:px-2">Grand Total:</td>
-                        <td className="px-6 py-4 text-right text-slate-800 print:px-2">₹{data.reduce((sum, r) => sum + (r.total_amount_paid || 0), 0).toLocaleString()}</td>
-                        <td className="px-6 py-4 text-right text-teal-700 print:px-2">₹{data.reduce((sum, r) => sum + (r.total_tds_deducted || 0), 0).toLocaleString()}</td>
-                        <td></td>
-                      </>
-                    )}
-                  </tr>
+                  {data.length > 0 && (
+                    <tr className="bg-slate-50 font-bold border-t-2 border-slate-300 print:bg-transparent print:border-black">
+                      {activeTab.startsWith('gst') ? (
+                        <>
+                          <td colSpan={2} className="px-6 py-4 text-right text-slate-800 print:px-2">Grand Total:</td>
+                          <td className="px-6 py-4 text-right text-slate-800 print:px-2">₹{data.reduce((sum, r) => sum + parseFloat(r.total_taxable_value || 0), 0).toLocaleString('en-IN')}</td>
+                          <td className="px-6 py-4 text-right text-slate-800 print:px-2">₹{data.reduce((sum, r) => sum + parseFloat(r.total_cgst || 0), 0).toLocaleString('en-IN')}</td>
+                          <td className="px-6 py-4 text-right text-slate-800 print:px-2">₹{data.reduce((sum, r) => sum + parseFloat(r.total_sgst || 0), 0).toLocaleString('en-IN')}</td>
+                          <td className="px-6 py-4 text-right text-slate-800 print:px-2">₹{data.reduce((sum, r) => sum + parseFloat(r.total_igst || 0), 0).toLocaleString('en-IN')}</td>
+                          <td className="px-6 py-4 text-right text-teal-700 print:px-2">₹{data.reduce((sum, r) => sum + parseFloat(r.total_invoice_amount || 0), 0).toLocaleString('en-IN')}</td>
+                          <td></td>
+                        </>
+                      ) : (
+                        <>
+                          <td colSpan={2} className="px-6 py-4 text-right text-slate-800 print:px-2">Grand Total:</td>
+                          <td className="px-6 py-4 text-right text-slate-800 print:px-2">₹{data.reduce((sum, r) => sum + parseFloat(r.total_amount_paid || 0), 0).toLocaleString('en-IN')}</td>
+                          <td className="px-6 py-4 text-right text-teal-700 print:px-2">₹{data.reduce((sum, r) => sum + parseFloat(r.total_tds_deducted || 0), 0).toLocaleString('en-IN')}</td>
+                          <td></td>
+                        </>
+                      )}
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
