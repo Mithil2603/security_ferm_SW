@@ -6,7 +6,7 @@ import {
   Settings as SettingsIcon, Banknote, Users, Building2,
   Plus, Edit2, Trash2, X, CheckCircle2, AlertCircle,
   Shield, ShieldCheck, ShieldOff, Eye, EyeOff, RotateCcw,
-  IndianRupee, Percent, Clock, UserPlus, Key, Mail, Receipt, Settings2
+  IndianRupee, Percent, Clock, UserPlus, Key, Mail, Receipt, Settings2, Download
 } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────
@@ -127,7 +127,7 @@ function SalaryStructuresTab() {
       pf_percentage: ss.pf_percentage || '12',
       esi_applicable: ss.esi_applicable || false,
       income_tax_applicable: ss.income_tax_applicable || false,
-      effective_from: ss.effective_from ? ss.effective_from.substring(0, 10) : format(new Date(), 'yyyy-MM-dd'),
+      effective_from: ss.effective_from ? format(new Date(ss.effective_from), 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd'),
     });
     setError('');
     setIsModalOpen(true);
@@ -186,8 +186,11 @@ function SalaryStructuresTab() {
 
   const computeNet = () => {
     const gross = computeGross();
+    const base = parseFloat(formData.base_salary) || 0;
+    const da = parseFloat(formData.dearness_allowance) || 0;
+    const pfBase = Math.min(base + da, 15000);
     const pfPct = parseFloat(formData.pf_percentage) || 0;
-    const pfDeduction = (gross * pfPct) / 100;
+    const pfDeduction = (pfBase * pfPct) / 100;
     return gross - pfDeduction;
   };
 
@@ -256,7 +259,7 @@ function SalaryStructuresTab() {
                     <td className="px-4 py-3 font-medium text-slate-600">{ss.pf_percentage}%</td>
                     <td className="px-4 py-3">{ss.esi_applicable ? <span className="text-emerald-600 text-xs font-bold">Yes</span> : <span className="text-slate-400 text-xs">No</span>}</td>
                     <td className="px-4 py-3 font-black text-emerald-700">₹{gross.toLocaleString('en-IN')}</td>
-                    <td className="px-4 py-3 text-slate-500 text-xs">{ss.effective_from?.substring(0, 10)}</td>
+                    <td className="px-4 py-3 text-slate-500 text-xs">{ss.effective_from ? format(new Date(ss.effective_from), 'yyyy-MM-dd') : ''}</td>
                     <td className="px-4 py-3">
                       <span className="inline-block bg-blue-100 text-blue-700 text-xs font-bold px-2 py-0.5 rounded-full">{ss.active_guards}</span>
                     </td>
@@ -372,8 +375,8 @@ function SalaryStructuresTab() {
                   <span className="font-black text-emerald-700">₹{computeGross().toLocaleString('en-IN')}</span>
                 </div>
                 <div className="flex justify-between text-sm mt-1">
-                  <span className="text-slate-600">PF Deduction ({formData.pf_percentage}%):</span>
-                  <span className="font-bold text-red-500">- ₹{((computeGross() * (parseFloat(formData.pf_percentage) || 0)) / 100).toLocaleString('en-IN')}</span>
+                  <span className="text-slate-600">PF Deduction ({formData.pf_percentage}% on Base+DA max 15k):</span>
+                  <span className="font-bold text-red-500">- ₹{(((Math.min((parseFloat(formData.base_salary)||0) + (parseFloat(formData.dearness_allowance)||0), 15000)) * (parseFloat(formData.pf_percentage) || 0)) / 100).toLocaleString('en-IN')}</span>
                 </div>
                 <hr className="my-2 border-slate-200" />
                 <div className="flex justify-between text-sm">
@@ -585,10 +588,20 @@ function TeamManagementTab() {
                   <td className="px-4 py-3">
                     {u.id !== currentUser?.id && (
                       <div className="flex gap-1">
-                        <button onClick={() => toggleUser(u.id)} className={`p-1.5 rounded-lg transition-colors ${u.is_active ? 'text-slate-400 hover:text-red-600 hover:bg-red-50' : 'text-slate-400 hover:text-emerald-600 hover:bg-emerald-50'}`} title={u.is_active ? 'Disable' : 'Enable'}>
+                        <button onClick={() => {
+                          if(window.confirm(`Are you sure you want to ${u.is_active ? 'disable' : 'enable'} this user?`)) {
+                            toggleUser(u.id);
+                          }
+                        }} className={`p-1.5 rounded-lg transition-colors ${u.is_active ? 'text-slate-400 hover:text-red-600 hover:bg-red-50' : 'text-slate-400 hover:text-emerald-600 hover:bg-emerald-50'}`} title={u.is_active ? 'Disable' : 'Enable'}>
                           {u.is_active ? <ShieldOff className="w-4 h-4" /> : <ShieldCheck className="w-4 h-4" />}
                         </button>
-                        <button onClick={() => { setIsPermissionsOpen(u); setSelectedPermissions(u.permissions ? (typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions) : []); setError(''); }} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors" title="Permissions">
+                        <button onClick={() => {
+                          setIsPermissionsOpen(u);
+                          let p = [];
+                          try { p = typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions; } catch(e){}
+                          setSelectedPermissions(Array.isArray(p) ? p : []);
+                          setError('');
+                        }} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors" title="Permissions">
                           <Settings2 className="w-4 h-4" />
                         </button>
                         <button onClick={() => { setIsResetOpen(u.id); setResetPwd(''); setError(''); }} className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Reset Password">
@@ -740,6 +753,175 @@ function TeamManagementTab() {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// DATABASE BACKUPS (Extracted Component)
+// ═══════════════════════════════════════════════════════════════
+function DatabaseBackups() {
+  const [backups, setBackups] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [triggering, setTriggering] = useState(false);
+  const [message, setMessage] = useState({ type: '', text: '' });
+  const [downloading, setDownloading] = useState(null);
+
+  const fetchBackups = async () => {
+    try {
+      setLoading(true);
+      const res = await api.get('/backups');
+      setBackups(res.data?.data || []);
+    } catch (err) {
+      console.error('Failed to load backups', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchBackups(); }, []);
+
+  const triggerManualBackup = async () => {
+    setTriggering(true);
+    setMessage({ type: '', text: '' });
+    try {
+      const res = await api.post('/backups/create');
+      if (res.data.success) {
+        setMessage({ type: 'success', text: 'Backup created successfully!' });
+        fetchBackups();
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: err.response?.data?.message || 'Failed to create manual backup' });
+    } finally {
+      setTriggering(false);
+    }
+  };
+
+  const downloadBackup = async (filename) => {
+    setDownloading(filename);
+    try {
+      const token = localStorage.getItem('token');
+      // S-H3 & BK-C2 & BK-L6: Secure download without exposing token in URL, works in all environments
+      const apiUrl = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:3000';
+      const dlRes = await fetch(`${apiUrl}/api/backups/download/${filename}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (dlRes.ok) {
+        const blob = await dlRes.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        a.remove();
+      } else {
+        setMessage({ type: 'error', text: 'Download failed. Backup might be corrupted or missing.' });
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Failed to download backup' });
+    } finally {
+      setDownloading(null);
+    }
+  };
+
+  const deleteBackup = async (filename) => {
+    if (!window.confirm(`Are you sure you want to delete ${filename}?`)) return;
+    try {
+      await api.delete(`/backups/${filename}`);
+      fetchBackups();
+      setMessage({ type: 'success', text: 'Backup deleted.' });
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Failed to delete backup' });
+    }
+  };
+
+  const formatSize = (bytes) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  // BK-L2: Check if last backup is older than 48 hours
+  const isBackupStale = backups.length === 0 || (Date.now() - new Date(backups[0].createdAt).getTime() > 48 * 60 * 60 * 1000);
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+          <ShieldCheck className="w-5 h-5 text-emerald-600" />
+          Database Backups
+        </h3>
+      </div>
+      <p className="text-sm text-slate-600 mb-4">
+        The system automatically backs up your database locally every night at 2:00 AM.
+      </p>
+
+      {message.text && (
+        <div className={`mb-4 p-3 rounded-lg text-sm flex items-start gap-2 ${message.type === 'error' ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-emerald-50 text-emerald-600 border border-emerald-200'}`}>
+          {message.type === 'error' ? <AlertCircle className="w-4 h-4 mt-0.5" /> : <CheckCircle2 className="w-4 h-4 mt-0.5" />}
+          {message.text}
+        </div>
+      )}
+
+      {/* Overview Card */}
+      <div className={`mb-6 p-4 rounded-xl border ${isBackupStale ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200'} flex items-center justify-between`}>
+        <div>
+          <p className="text-sm font-bold text-slate-700">Last Backup</p>
+          <p className={`text-sm ${isBackupStale ? 'text-amber-700 font-medium' : 'text-slate-500'}`}>
+            {backups.length > 0 
+              ? `${format(new Date(backups[0].createdAt), 'dd MMM yyyy, HH:mm')} (${formatSize(backups[0].sizeBytes)})`
+              : 'No backups found'}
+          </p>
+          {isBackupStale && backups.length > 0 && <p className="text-xs text-amber-600 mt-1">Warning: Last backup is over 48 hours old.</p>}
+        </div>
+        <button 
+          onClick={triggerManualBackup}
+          disabled={triggering}
+          className="px-4 py-2 text-sm font-medium text-emerald-700 bg-white border border-emerald-200 rounded-lg hover:bg-emerald-50 transition-colors flex items-center gap-2 disabled:opacity-50"
+        >
+          {triggering ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-emerald-700"></div> : <RotateCcw className="w-4 h-4" />}
+          Trigger Manual Backup
+        </button>
+      </div>
+
+      {/* Backup List (BK-M1, BK-L4) */}
+      <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+        {loading ? (
+          <p className="text-sm text-slate-500 text-center py-4">Loading backups...</p>
+        ) : backups.length === 0 ? (
+          <p className="text-sm text-slate-500 text-center py-4">No backups available.</p>
+        ) : (
+          backups.map(backup => (
+            <div key={backup.filename} className="flex justify-between items-center p-3 bg-white border border-slate-200 rounded-lg hover:border-slate-300 transition-colors">
+              <div>
+                <p className="text-sm font-semibold text-slate-800">{backup.filename}</p>
+                <p className="text-xs text-slate-500">{format(new Date(backup.createdAt), 'dd MMM yyyy, HH:mm')} • {formatSize(backup.sizeBytes)}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => downloadBackup(backup.filename)}
+                  disabled={downloading === backup.filename}
+                  className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded transition-colors disabled:opacity-50"
+                  title="Download"
+                >
+                  {downloading === backup.filename ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-600"></div> : <Download className="w-4 h-4" />}
+                </button>
+                <button 
+                  onClick={() => deleteBackup(backup.filename)}
+                  className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors"
+                  title="Delete"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 // TAB 3: AGENCY PROFILE & DEFAULTS
 // ═══════════════════════════════════════════════════════════════
 function AgencyProfileTab() {
@@ -763,7 +945,7 @@ function AgencyProfileTab() {
     setSubmitting(true);
     try {
       await api.put('/auth/update-profile', profileForm);
-      setProfileSuccess('Profile updated successfully! Refresh to see changes.');
+      setProfileSuccess('Profile updated successfully!');
       setEditProfile(false);
     } catch (err) {
       setProfileError(err.message || 'Failed to update profile');
@@ -794,9 +976,7 @@ function AgencyProfileTab() {
   const [smtpSaved, setSmtpSaved] = useState(false);
 
   useEffect(() => {
-    // Only fetch if admin
-    if (user?.role !== 'admin') return;
-    
+    // S-H6: Remove admin requirement so that any user with access to the tab can see the settings
     api.get('/settings/system/agency_settings')
       .then(res => {
         if (res.data) setAgencySettings(JSON.parse(res.data));
@@ -911,7 +1091,7 @@ function AgencyProfileTab() {
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mb-6">
             <div className="w-24 h-24 border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center rounded-lg overflow-hidden flex-shrink-0">
               {agencySettings.agency_logo_url ? (
-                <img src={`http://localhost:3000${agencySettings.agency_logo_url}`} alt="Logo" className="w-full h-full object-contain" />
+                <img src={(import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:3000') + agencySettings.agency_logo_url} alt="Logo" className="w-full h-full object-contain" />
               ) : (
                 <span className="text-xs text-slate-400 text-center px-2">No Logo</span>
               )}
@@ -1005,54 +1185,7 @@ function AgencyProfileTab() {
       </div>
 
       <div className="space-y-6">
-        {/* Database Backup Section */}
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-              <ShieldCheck className="w-5 h-5 text-emerald-600" />
-              Database Backups
-            </h3>
-          </div>
-          <p className="text-sm text-slate-600 mb-4">
-            The system automatically backs up your database locally every night at 2:00 AM. You can also manually trigger a backup or download the latest backup archive here.
-          </p>
-          <div className="flex flex-col gap-3">
-            <button 
-              onClick={async () => {
-                try {
-                  const res = await api.post('/backups/create');
-                  if (res.data.success) {
-                    alert('Backup created successfully!');
-                  }
-                } catch (err) {
-                  alert('Failed to create manual backup');
-                }
-              }}
-              className="w-full px-4 py-2.5 text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors flex items-center justify-center gap-2"
-            >
-              <RotateCcw className="w-4 h-4" /> Trigger Manual Backup
-            </button>
-            <button 
-              onClick={async () => {
-                try {
-                  const res = await api.get('/backups');
-                  if (res.data.success && res.data.data.length > 0) {
-                    const latest = res.data.data[0].filename;
-                    const token = localStorage.getItem('token');
-                    window.open(`http://localhost:3000/api/backups/download/${latest}?token=${token}`, '_blank');
-                  } else {
-                    alert('No backups available. Trigger one first.');
-                  }
-                } catch (err) {
-                  alert('Failed to fetch backup list');
-                }
-              }}
-              className="w-full px-4 py-2.5 text-sm font-medium text-white bg-slate-800 rounded-lg hover:bg-slate-900 shadow-sm transition-colors flex items-center justify-center gap-2"
-            >
-              <CheckCircle2 className="w-4 h-4" /> Download Latest Backup
-            </button>
-          </div>
-        </div>
+        <DatabaseBackups />
 
         {/* Profile Card */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
@@ -1190,6 +1323,7 @@ function ExpenseCategoriesTab() {
       const res = await api.get('/settings/expense-categories');
       setCategories(res.data || []);
     } catch (err) {
+      setError('Failed to load categories');
       console.error('Failed to load categories', err);
     } finally {
       setLoading(false);
@@ -1471,7 +1605,7 @@ function VendorsTab() {
 
   const handleToggleActive = async (v) => {
     try {
-      await api.put(`/vendors/${v.id}`, { ...v, is_active: v.is_active ? 0 : 1 });
+      await api.put(`/vendors/${v.id}`, { is_active: v.is_active ? 0 : 1 });
       fetchVendors();
     } catch (err) {
       console.error(err);

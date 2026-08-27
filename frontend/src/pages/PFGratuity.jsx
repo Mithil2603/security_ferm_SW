@@ -7,7 +7,8 @@ export default function PFGratuity() {
   const [tab, setTab] = useState('pf'); // pf | gratuity
   const [pfAccounts, setPfAccounts] = useState([]);
   const [liabilityReport, setLiabilityReport] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [pfLoading, setPfLoading] = useState(true);
+  const [gratuityLoading, setGratuityLoading] = useState(true);
   const [error, setError] = useState('');
 
   // Modals
@@ -19,27 +20,45 @@ export default function PFGratuity() {
   const [submitting, setSubmitting] = useState(false);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
 
-  // Batch Month Modal State
-  const [batchModal, setBatchModal] = useState({ open: false, type: 'pf', month: new Date().toISOString().slice(0, 7) });
+  const prevMonth = new Date(new Date().setMonth(new Date().getMonth() - 1)).toISOString().slice(0, 7);
+  const [batchModal, setBatchModal] = useState({ open: false, type: 'pf', month: prevMonth });
   const [batchProcessing, setBatchProcessing] = useState(false);
   const [batchResult, setBatchResult] = useState(null);
 
+  const [employeesList, setEmployeesList] = useState([]);
+  
+  useEffect(() => {
+    if (isCreatePfOpen && employeesList.length === 0) {
+      api.get('/employees?limit=1000').then(res => setEmployeesList(res.data.data || [])).catch(() => {});
+    }
+  }, [isCreatePfOpen]);
+
   const fetchPfAccounts = async () => {
     try {
-      setLoading(true);
+      setPfLoading(true);
+      setError('');
       const res = await api.get('/pf-gratuity/pf/accounts?limit=100');
-      setPfAccounts(res.data || []);
-    } catch { setPfAccounts([]); }
-    finally { setLoading(false); }
+      setPfAccounts(res.data.data || []);
+    } catch { 
+      setPfAccounts([]); 
+      setError('Failed to load PF accounts. Please try again.');
+    } finally { 
+      setPfLoading(false); 
+    }
   };
 
   const fetchLiability = async () => {
     try {
-      setLoading(true);
+      setGratuityLoading(true);
+      setError('');
       const res = await api.get('/pf-gratuity/gratuity/liability-report');
-      setLiabilityReport(res.data);
-    } catch { setLiabilityReport(null); }
-    finally { setLoading(false); }
+      setLiabilityReport(res.data.data);
+    } catch { 
+      setLiabilityReport(null); 
+      setError('Failed to load Gratuity liability report. Please try again.');
+    } finally { 
+      setGratuityLoading(false); 
+    }
   };
 
   useEffect(() => { 
@@ -72,43 +91,53 @@ export default function PFGratuity() {
 
   const handleBatchPf = () => {
     setBatchResult(null);
-    setBatchModal({ open: true, type: 'pf', month: new Date().toISOString().slice(0, 7) });
+    setBatchModal({ open: true, type: 'pf', month: prevMonth });
   };
 
   const openViewPf = async (empId) => {
     setIsViewPfOpen(true);
     setIsLoadingDetail(true);
+    setSelectedAccount(null);
+    setTransactions([]);
     try {
-      const [accRes, txnRes] = await Promise.all([
+      const [accRes, txnRes] = await Promise.allSettled([
         api.get(`/pf-gratuity/pf/accounts/${empId}`),
         api.get(`/pf-gratuity/pf/transactions/${empId}?limit=24`),
       ]);
-      setSelectedAccount(accRes.data);
-      setTransactions(txnRes.data || []);
-    } catch (err) { setError('Failed to load PF details'); setIsViewPfOpen(false); }
-    finally { setIsLoadingDetail(false); }
+      
+      if (accRes.status === 'fulfilled') {
+        setSelectedAccount(accRes.value.data.data || accRes.value.data);
+      } else {
+        setError('Failed to load PF account details');
+      }
+      
+      if (txnRes.status === 'fulfilled') {
+        setTransactions(txnRes.value.data.data || []);
+      }
+    } finally { setIsLoadingDetail(false); }
   };
 
   // ─── Gratuity Actions ─────────────────────────────────────────────────────
 
   const handleBatchAccrue = () => {
     setBatchResult(null);
-    setBatchModal({ open: true, type: 'gratuity', month: new Date().toISOString().slice(0, 7) });
+    setBatchModal({ open: true, type: 'gratuity', month: prevMonth });
   };
 
   const handleBatchSubmit = async (e) => {
     e.preventDefault();
     if (!batchModal.month) return;
+    if (!window.confirm(`This will process ${batchModal.type === 'pf' ? 'PF' : 'Gratuity'} for all eligible employees for ${batchModal.month}. Are you sure?`)) return;
     setBatchProcessing(true);
     setBatchResult(null);
     try {
       if (batchModal.type === 'pf') {
         const res = await api.post('/pf-gratuity/pf/batch-process', { payroll_month: batchModal.month });
-        setBatchResult(res.data);
+        setBatchResult(res.data.data);
         await fetchPfAccounts();
       } else {
         const res = await api.post('/pf-gratuity/gratuity/batch-accrue', { accrual_month: batchModal.month });
-        setBatchResult(res.data);
+        setBatchResult(res.data.data);
         await fetchLiability();
       }
       // Keep modal open to show results
@@ -137,7 +166,7 @@ export default function PFGratuity() {
                 <Zap className="w-4 h-4" /> Batch Process PF
               </button>
               <button onClick={() => { setPfForm({ employee_id: '', uan_number: '', pf_number: '' }); setIsCreatePfOpen(true); }}
-                className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-slate-900 px-4 py-2 rounded-lg">
+                className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg">
                 <Plus className="w-4 h-4" /> New PF Account
               </button>
             </>
@@ -164,7 +193,7 @@ export default function PFGratuity() {
         </button>
       </div>
 
-      {(loading || (tab === 'gratuity' && !liabilityReport && !error)) ? <TableSkeleton /> : tab === 'pf' ? (
+      {(pfLoading && tab === 'pf') || (gratuityLoading && tab === 'gratuity') ? <TableSkeleton /> : tab === 'pf' ? (
         /* ═══ PF Accounts Tab ═══ */
         <div className="bg-white shadow-sm border border-slate-200 rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
@@ -242,7 +271,9 @@ export default function PFGratuity() {
                           <div className="font-medium text-slate-900">{e.full_name}</div>
                           <div className="text-xs text-slate-400">{e.designation}</div>
                         </td>
-                        <td className="p-4 text-center text-slate-900">{e.years_of_service}</td>
+                        <td className="p-4 text-center text-slate-900">
+                          {Math.floor(e.years_of_service)} yrs {Math.round((e.years_of_service % 1) * 12)} mo
+                        </td>
                         <td className="p-4 text-center">
                           {e.is_eligible
                             ? <span className="text-emerald-600 text-xs bg-emerald-500/10 px-2 py-0.5 rounded">Yes</span>
@@ -250,13 +281,25 @@ export default function PFGratuity() {
                         </td>
                         <td className="p-4 text-right text-slate-900">{fmt(e.gratuity_liability)}</td>
                         <td className="p-4 text-right text-emerald-600">{fmt(e.provisioned)}</td>
-                        <td className="p-4 text-right text-red-600">{fmt(e.gap)}</td>
+                        <td className={`p-4 text-right font-medium ${e.gap < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                          {e.gap < 0 ? `${fmt(Math.abs(e.gap))} short` : `${fmt(e.gap)} excess`}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             </>
+          )}
+          {!liabilityReport && !gratuityLoading && (
+            <div className="bg-white border border-slate-200 rounded-xl p-8 text-center shadow-sm">
+              <Award className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+              <h3 className="text-lg font-bold text-slate-700">No Gratuity Data</h3>
+              <p className="text-slate-500 text-sm mt-1 mb-4">Run batch accrue to generate gratuity provisions.</p>
+              <button onClick={fetchLiability} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm transition-colors">
+                Refresh Report
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -271,9 +314,14 @@ export default function PFGratuity() {
             </div>
             <form onSubmit={handleCreatePf} className="space-y-4">
               <div>
-                <label className="block text-sm text-slate-500 mb-1">Employee ID *</label>
-                <input type="number" value={pfForm.employee_id} onChange={e => setPfForm({...pfForm, employee_id: e.target.value})} required
-                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900" />
+                <label className="block text-sm text-slate-500 mb-1">Employee *</label>
+                <select value={pfForm.employee_id} onChange={e => setPfForm({...pfForm, employee_id: e.target.value})} required
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900">
+                  <option value="">Select an employee...</option>
+                  {employeesList.map(emp => (
+                    <option key={emp.id} value={emp.id}>{emp.full_name} ({emp.employee_id})</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="block text-sm text-slate-500 mb-1">UAN Number</label>
@@ -286,8 +334,8 @@ export default function PFGratuity() {
                   className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900" />
               </div>
               <div className="flex gap-3">
-                <button type="button" onClick={() => { setIsCreatePfOpen(false); setPfForm({ employee_id: '', uan_number: '', pf_number: '' }); }} className="flex-1 bg-slate-100 hover:bg-gray-600 text-slate-900 py-2 rounded-lg">Cancel</button>
-                <button type="submit" disabled={submitting} className="flex-1 bg-teal-600 hover:bg-teal-700 text-slate-900 py-2 rounded-lg">
+                <button type="button" onClick={() => { setIsCreatePfOpen(false); setPfForm({ employee_id: '', uan_number: '', pf_number: '' }); }} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-900 py-2 rounded-lg transition-colors">Cancel</button>
+                <button type="submit" disabled={submitting} className="flex-1 bg-teal-600 hover:bg-teal-700 text-white py-2 rounded-lg transition-colors">
                   {submitting ? 'Creating...' : 'Create'}
                 </button>
               </div>
@@ -319,8 +367,12 @@ export default function PFGratuity() {
                   <p className="text-lg font-bold text-slate-900">{fmt(selectedAccount.employee_balance)}</p>
                 </div>
                 <div className="bg-slate-900/50 border border-slate-200 rounded-lg p-3 text-center">
-                  <p className="text-xs text-slate-500">Employer + EPS</p>
-                  <p className="text-lg font-bold text-slate-900">{fmt((selectedAccount.employer_balance || 0) + (selectedAccount.eps_balance || 0))}</p>
+                  <p className="text-xs text-slate-500">Employer PF</p>
+                  <p className="text-lg font-bold text-slate-900">{fmt(selectedAccount.employer_balance || 0)}</p>
+                </div>
+                <div className="bg-slate-900/50 border border-slate-200 rounded-lg p-3 text-center" title="Pension corpus, not freely withdrawable">
+                  <p className="text-xs text-slate-500">EPS (Pension)</p>
+                  <p className="text-lg font-bold text-slate-900">{fmt(selectedAccount.eps_balance || 0)}</p>
                 </div>
               </div>
               <div className="bg-slate-900/50 rounded-lg p-3 grid grid-cols-3 gap-4 text-sm">
@@ -336,7 +388,9 @@ export default function PFGratuity() {
                   {transactions.map(t => (
                     <div key={t.id} className="flex items-center justify-between bg-white/30 rounded-lg px-3 py-2 text-sm">
                       <div>
-                        <span className="text-slate-900 font-medium">{t.payroll_month}</span>
+                        <span className="text-slate-900 font-medium">
+                          {new Date(t.payroll_month + '-01').toLocaleDateString('en-US', {month: 'short', year: 'numeric'})}
+                        </span>
                         <span className="text-slate-400 ml-2 text-xs capitalize">{t.transaction_type}</span>
                       </div>
                       <div className="text-right">
@@ -352,7 +406,7 @@ export default function PFGratuity() {
               )}
             </div>
             <div className="p-4 border-t border-slate-200">
-              <button onClick={() => setIsViewPfOpen(false)} className="w-full bg-slate-100 hover:bg-gray-600 text-slate-900 py-2 rounded-lg">Close</button>
+              <button onClick={() => setIsViewPfOpen(false)} className="w-full bg-slate-100 hover:bg-slate-200 text-slate-900 py-2 rounded-lg transition-colors">Close</button>
             </div>
           </>
         )}

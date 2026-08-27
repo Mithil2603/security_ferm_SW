@@ -33,11 +33,23 @@ const upload = multer({
   storage: storage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
   fileFilter: (req, file, cb) => {
-    const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
+    const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
     if (allowedMimes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Invalid file type. Only PDF, JPG, PNG, WEBP, and XLSX are allowed.'));
+      cb(new Error('Invalid file type. Only PDF, JPG, PNG, WEBP are allowed.'));
+    }
+  }
+});
+
+const importUpload = multer({ 
+  storage: storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || file.originalname.endsWith('.xlsx')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only XLSX is allowed for import.'));
     }
   }
 });
@@ -54,16 +66,16 @@ router.get('/', async (req, res) => {
     let pc = 1;
 
     if (search) {
-      conditions.push(`(e.full_name LIKE $${pc} OR e.employee_id LIKE $${pc} OR e.phone LIKE $${pc})`);
-      params.push(`%${search}%`); pc++;
+      conditions.push(`(e.full_name LIKE $${params.length + 1} OR e.employee_id LIKE $${params.length + 2} OR e.phone LIKE $${params.length + 3})`);
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
     if (is_active !== undefined) {
-      conditions.push(`e.is_active = $${pc}`);
-      params.push(is_active === 'true'); pc++;
+      conditions.push(`e.is_active = $${params.length + 1}`);
+      params.push(is_active === 'true');
     }
     if (client_id) {
-      conditions.push(`e.assigned_client_id = $${pc}`);
-      params.push(client_id); pc++;
+      conditions.push(`e.assigned_client_id = $${params.length + 1}`);
+      params.push(client_id);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -79,7 +91,7 @@ router.get('/', async (req, res) => {
        LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
        ${where}
        ORDER BY e.is_active DESC, e.full_name ASC
-       LIMIT $${pc} OFFSET $${pc + 1}`,
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, parseInt(limit), offset]
     );
 
@@ -112,9 +124,20 @@ router.get('/', async (req, res) => {
       pagination: { total: parseInt(countResult.rows[0].count), page: parseInt(page), limit: parseInt(limit) }
     });
   } catch (error) {
-    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
+    logError(error, req, { feature: 'employees' });
     logger.error('Get employees error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch employees' });
+  }
+});
+
+// GET /api/employees/salary-structures
+router.get('/meta/salary-structures', async (req, res) => {
+  try {
+    const result = await query('SELECT * FROM salary_structures WHERE is_active = 1 ORDER BY base_salary ASC');
+    res.json({ success: true, data: result.rows });
+  } catch (error) {
+    logError(error, req, { feature: 'employees' });
+    res.status(500).json({ success: false, message: 'Failed to fetch salary structures' });
   }
 });
 
@@ -147,33 +170,31 @@ router.get('/:id', async (req, res) => {
 
     res.json({ success: true, data: emp });
   } catch (error) {
-    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
+    logError(error, req, { feature: 'employees' });
     res.status(500).json({ success: false, message: 'Failed to fetch employee' });
   }
 });
 
 // POST /api/employees/import
-router.post('/import', upload.single('file'), async (req, res) => {
+router.post('/import', importUpload.single('file'), async (req, res) => {
+  let filePath = null;
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No file uploaded' });
     }
-
-    const filePath = req.file.path;
+    filePath = req.file.path;
     const workbook = new exceljs.Workbook();
     await workbook.xlsx.readFile(filePath);
     
     const worksheet = workbook.getWorksheet(1); // Get first sheet
     if (!worksheet) {
-      fs.unlinkSync(filePath);
       return res.status(400).json({ success: false, message: 'Invalid or empty Excel file' });
     }
 
     let importedCount = 0;
     let skippedCount = 0;
     
-    // Assume row 1 is headers. We'll read from row 2 onwards.
-    // Expected Columns: Name, Phone, Email, Address, City
+    const rowsToProcess = [];
     worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       if (rowNumber === 1) return; // Skip headers
       
@@ -184,27 +205,29 @@ router.post('/import', upload.single('file'), async (req, res) => {
       const city = row.getCell(5).value?.toString() || '';
       
       if (full_name && phone) {
-        try {
-          const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase();
-          const employee_id = `EMP-${randomHex}`;
-          const date_of_joining = new Date().toISOString().split('T')[0];
-          
-          query(
-            `INSERT INTO employees (employee_id, full_name, phone, email, address, city, date_of_joining)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [employee_id, full_name, phone, email, address, city, date_of_joining]
-          );
-          importedCount++;
-        } catch (e) {
-          skippedCount++;
-        }
+        rowsToProcess.push({ full_name, phone, email, address, city });
       } else {
         skippedCount++;
       }
     });
 
-    // Cleanup the uploaded file
-    fs.unlinkSync(filePath);
+    const promises = rowsToProcess.map(async (data) => {
+      const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase();
+      const employee_id = `EMP-${randomHex}`;
+      const date_of_joining = new Date().toISOString().split('T')[0];
+      return query(
+        `INSERT INTO employees (employee_id, full_name, phone, email, address, city, date_of_joining)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [employee_id, data.full_name, data.phone, data.email, data.address, data.city, date_of_joining]
+      );
+    });
+
+    const results = await Promise.allSettled(promises);
+    results.forEach(r => {
+      if (r.status === 'fulfilled') importedCount++;
+      else skippedCount++;
+    });
+
     await logAudit(req, 'employees', null, 'create', `Bulk imported ${importedCount} employees`);
 
     res.json({
@@ -214,10 +237,11 @@ router.post('/import', upload.single('file'), async (req, res) => {
     });
   } catch (error) {
     logger.error('Import error:', error);
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
     res.status(500).json({ success: false, message: 'Failed to process the import file' });
+  } finally {
+    if (filePath && fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
   }
 });
 
@@ -234,10 +258,17 @@ router.post('/', validate(schemas.createEmployee), async (req, res) => {
       return res.status(400).json({ success: false, message: 'Name, phone, and joining date are required' });
     }
 
-    // Generate employee ID using a collision-resistant approach
-    const crypto = require('crypto');
-    const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase();
-    const employee_id = `EMP-${randomHex}`;
+    let employee_id;
+    let collision = true;
+    let attempts = 0;
+    while(collision && attempts < 3) {
+      const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase();
+      employee_id = `EMP-${randomHex}`;
+      const check = await query('SELECT id FROM employees WHERE employee_id = $1', [employee_id]);
+      if (check.rows.length === 0) collision = false;
+      attempts++;
+    }
+    if (collision) return res.status(500).json({ success: false, message: 'Failed to generate unique employee ID' });
 
     const result = await query(
       `INSERT INTO employees (employee_id, full_name, phone, email, date_of_birth, address, city, 
@@ -251,12 +282,11 @@ router.post('/', validate(schemas.createEmployee), async (req, res) => {
         emergency_contact_name, emergency_contact_phone, notes]
     );
 
-    console.log('EMPLOYEES POST RESULT ROWS:', result.rows);
     await logAudit(req, 'employees', result.rows[0].id, 'create', `Created employee: ${full_name} (${employee_id})`);
 
     res.status(201).json({ success: true, data: result.rows[0], message: 'Employee created successfully' });
   } catch (error) {
-    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
+    logError(error, req, { feature: 'employees' });
     logger.error('Create employee error:', error);
     res.status(500).json({ success: false, message: 'Failed to create employee' });
   }
@@ -271,7 +301,7 @@ router.put('/:id', validate(schemas.updateEmployee), async (req, res) => {
       emergency_contact_name, emergency_contact_phone, notes, is_active } = req.body;
 
     // Coerce is_active to boolean (SQLite returns 0/1 which round-trips through the form)
-    const isActiveBool = is_active !== undefined ? Boolean(is_active) : true;
+    const isActiveBool = is_active === true || is_active === 1 || is_active === 'true' || is_active === '1';
 
     const result = await query(
       `UPDATE employees SET full_name=$1, phone=$2, email=$3, date_of_birth=$4, address=$5, city=$6,
@@ -291,14 +321,11 @@ router.put('/:id', validate(schemas.updateEmployee), async (req, res) => {
       return res.status(404).json({ success: false, message: 'Employee not found' });
     }
 
-    // Re-fetch to return complete updated data
-    const updated = await query('SELECT * FROM employees WHERE id = $1', [req.params.id]);
-
     await logAudit(req, 'employees', req.params.id, 'update', `Updated employee: ${full_name}`);
 
-    res.json({ success: true, data: updated.rows[0], message: 'Employee updated successfully' });
+    res.json({ success: true, data: { id: req.params.id, ...req.body, is_active: isActiveBool }, message: 'Employee updated successfully' });
   } catch (error) {
-    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
+    logError(error, req, { feature: 'employees' });
     logger.error('Update employee error:', error);
     res.status(500).json({ success: false, message: 'Failed to update employee' });
   }
@@ -319,21 +346,32 @@ router.delete('/:id', async (req, res) => {
     
     res.json({ success: true, message: 'Employee deactivated successfully' });
   } catch (error) {
-    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
+    logError(error, req, { feature: 'employees' });
     res.status(500).json({ success: false, message: 'Failed to deactivate employee' });
   }
 });
 
 // DELETE /api/employees/:id/hard (hard delete)
 router.delete('/:id/hard', async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ success: false, message: 'Only admins can permanently delete employees' });
+  }
   try {
+    const check = await query(`
+      SELECT 
+        (SELECT COUNT(*) FROM payroll WHERE employee_id = $1) as pc,
+        (SELECT COUNT(*) FROM attendance WHERE employee_id = $1) as ac
+    `, [req.params.id]);
+    if (parseInt(check.rows[0].pc) > 0 || parseInt(check.rows[0].ac) > 0) {
+      return res.status(400).json({ success: false, message: 'Cannot delete employee: linked payroll or attendance records exist. Please delete them first.' });
+    }
     const result = await query('DELETE FROM employees WHERE id = $1', [req.params.id]);
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Employee not found' });
     }
     res.json({ success: true, message: 'Employee permanently deleted' });
   } catch (error) {
-    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
+    logError(error, req, { feature: 'employees' });
     if (error.code === 'ER_ROW_IS_REFERENCED' || error.code === 'ER_ROW_IS_REFERENCED_2' || error.errno === 1451 || error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY' || (error.message && error.message.includes('FOREIGN KEY'))) {
       return res.status(400).json({ success: false, message: 'Cannot delete employee: linked payroll or attendance records exist. Please delete them first.' });
     }
@@ -341,16 +379,7 @@ router.delete('/:id/hard', async (req, res) => {
   }
 });
 
-// GET /api/employees/salary-structures
-router.get('/meta/salary-structures', async (req, res) => {
-  try {
-    const result = await query('SELECT * FROM salary_structures WHERE is_active = 1 ORDER BY base_salary ASC');
-    res.json({ success: true, data: result.rows });
-  } catch (error) {
-    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
-    res.status(500).json({ success: false, message: 'Failed to fetch salary structures' });
-  }
-});
+
 
 // POST /api/employees/:id/upload-doc
 router.post('/:id/upload-doc', upload.single('document'), async (req, res) => {
@@ -361,12 +390,12 @@ router.post('/:id/upload-doc', upload.single('document'), async (req, res) => {
 
     const result = await query(
       'INSERT INTO employee_documents (employee_id, file_name, file_path) VALUES ($1, $2, $3) RETURNING *',
-      [req.params.id, req.file.originalname, req.file.filename]
+      [req.params.id, path.basename(req.file.originalname), req.file.filename]
     );
 
     res.json({ success: true, message: 'Document uploaded successfully', data: result.rows[0] });
   } catch (error) {
-    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
+    logError(error, req, { feature: 'employees' });
     logger.error('Upload document error:', error);
     res.status(500).json({ success: false, message: error.message || 'Failed to upload document' });
   }
@@ -381,8 +410,24 @@ router.get('/:id/docs', async (req, res) => {
     );
     res.json({ success: true, data: result.rows });
   } catch (error) {
-    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
+    logError(error, req, { feature: 'employees' });
     res.status(500).json({ success: false, message: 'Failed to fetch documents' });
+  }
+});
+
+// GET /api/employees/:id/docs/:docId/download
+router.get('/:id/docs/:docId/download', async (req, res) => {
+  try {
+    const result = await query('SELECT file_path, file_name FROM employee_documents WHERE id = $1 AND employee_id = $2', [req.params.docId, req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'Document not found' });
+    
+    const file = path.join(uploadDir, result.rows[0].file_path);
+    if (!fs.existsSync(file)) return res.status(404).json({ success: false, message: 'File missing on disk' });
+    
+    res.download(file, result.rows[0].file_name);
+  } catch(e) {
+    logError(e, req, { feature: 'employees' });
+    res.status(500).json({ success: false, message: 'Failed to download document' });
   }
 });
 

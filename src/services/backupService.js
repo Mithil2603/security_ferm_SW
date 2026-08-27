@@ -57,14 +57,18 @@ async function createBackup() {
         return reject(new Error('mysqldump not found. Make sure MySQL is installed and in PATH.'));
       }
       const [current, ...rest] = paths;
-      const child = execFile(current, args, { maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
+      const child = execFile(current, args, { maxBuffer: 50 * 1024 * 1024 }, async (err, stdout, stderr) => {
         if (err) {
           if (rest.length > 0) return tryNext(rest);
           return reject(new Error(`mysqldump failed: ${stderr || err.message}`));
         }
-        // Write dump to file
-        fs.writeFileSync(dumpPath, stdout, 'utf8');
-        resolve();
+        // Write dump to file asynchronously
+        try {
+          await fs.promises.writeFile(dumpPath, stdout, 'utf8');
+          resolve();
+        } catch (writeErr) {
+          reject(writeErr);
+        }
       });
     }
     tryNext(mysqldumpPaths);
@@ -124,16 +128,19 @@ function cleanOldBackups() {
 /**
  * Gets a list of available backups.
  */
-function getAvailableBackups() {
+async function getAvailableBackups() {
   try {
-    const files = fs.readdirSync(BACKUPS_DIR);
-    return files
-      .filter(f => f.startsWith('backup-') && f.endsWith('.zip'))
-      .map(f => {
-        const stats = fs.statSync(path.join(BACKUPS_DIR, f));
-        return { filename: f, sizeBytes: stats.size, createdAt: stats.mtime };
-      })
-      .sort((a, b) => b.createdAt - a.createdAt);
+    const files = await fs.promises.readdir(BACKUPS_DIR);
+    const backups = [];
+    
+    for (const f of files) {
+      if (f.startsWith('backup-') && f.endsWith('.zip')) {
+        const stats = await fs.promises.stat(path.join(BACKUPS_DIR, f));
+        backups.push({ filename: f, sizeBytes: stats.size, createdAt: stats.mtime });
+      }
+    }
+    
+    return backups.sort((a, b) => b.createdAt - a.createdAt);
   } catch (error) {
     logger.error('Error listing backups:', error);
     return [];

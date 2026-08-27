@@ -20,14 +20,12 @@ router.use(authMiddleware);
 // GST Configuration
 // ═══════════════════════════════════════════════════════════════════════════
 
-router.get('/config', async (req, res) => {
+router.get('/config', requirePermission('manage_tax'), async (req, res) => {
   try {
     const config = await gstService.getConfig();
     res.json({ success: true, data: config });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.GST,
       feature: 'gst-compliance',
@@ -37,17 +35,21 @@ router.get('/config', async (req, res) => {
   }
 });
 
-router.post('/config', requirePermission('manage_settings'), async (req, res) => {
+router.post('/config', requirePermission('manage_tax'), async (req, res) => {
   try {
     const schema = Joi.object({
-      gstin: Joi.string().length(15).required(),
+      gstin: Joi.string().length(15).pattern(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/).required(),
       legal_name: Joi.string().required(),
       trade_name: Joi.string().allow('', null),
       state_code: Joi.string().length(2).required(),
       state_name: Joi.string().required(),
       registration_type: Joi.string().valid('regular', 'composition', 'unregistered').default('regular'),
       default_tax_rate: Joi.number().min(0).max(28).default(18),
-      financial_year: Joi.string().pattern(/^\d{4}-\d{2}$/).required(),
+      financial_year: Joi.string().pattern(/^\d{4}-\d{2}$/).custom((value, helpers) => {
+        const [y1, y2] = value.split('-');
+        if (parseInt(y2, 10) !== (parseInt(y1, 10) + 1) % 100) return helpers.message('Invalid financial year format (e.g. 2025-26)');
+        return value;
+      }).required(),
     });
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
@@ -55,9 +57,7 @@ router.post('/config', requirePermission('manage_settings'), async (req, res) =>
     const result = await gstService.saveConfig(value);
     res.json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.GST,
       feature: 'gst-compliance',
@@ -71,7 +71,7 @@ router.post('/config', requirePermission('manage_settings'), async (req, res) =>
 // HSN/SAC Codes
 // ═══════════════════════════════════════════════════════════════════════════
 
-router.get('/hsn-sac', requirePermission('view_gst_settings'), async (req, res) => {
+router.get('/hsn-sac', requirePermission('manage_tax'), async (req, res) => {
   try {
     if (req.query.search && !/^[a-zA-Z0-9\s\-]*$/.test(req.query.search)) {
       return res.status(400).json({ success: false, message: 'Invalid search format' });
@@ -79,9 +79,7 @@ router.get('/hsn-sac', requirePermission('view_gst_settings'), async (req, res) 
     const codes = await gstService.getHSNSACCodes(req.query);
     res.json({ success: true, data: codes });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.GST,
       feature: 'gst-compliance',
@@ -91,7 +89,7 @@ router.get('/hsn-sac', requirePermission('view_gst_settings'), async (req, res) 
   }
 });
 
-router.post('/hsn-sac', requirePermission('manage_settings'), async (req, res) => {
+router.post('/hsn-sac', requirePermission('manage_tax'), async (req, res) => {
   try {
     const schema = Joi.object({
       code: Joi.string().max(8).required(),
@@ -101,6 +99,16 @@ router.post('/hsn-sac', requirePermission('manage_settings'), async (req, res) =
       cgst_rate: Joi.number().min(0),
       sgst_rate: Joi.number().min(0),
       igst_rate: Joi.number().min(0),
+    }).custom((value, helpers) => {
+      if (value.cgst_rate !== undefined && value.sgst_rate !== undefined) {
+        if (value.cgst_rate + value.sgst_rate !== value.gst_rate) {
+          return helpers.message('cgst_rate + sgst_rate must equal gst_rate');
+        }
+      }
+      if (value.igst_rate !== undefined && value.igst_rate !== value.gst_rate) {
+        return helpers.message('igst_rate must equal gst_rate');
+      }
+      return value;
     });
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
@@ -108,9 +116,7 @@ router.post('/hsn-sac', requirePermission('manage_settings'), async (req, res) =
     const result = await gstService.addHSNSACCode(value);
     res.json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.GST,
       feature: 'gst-compliance',
@@ -141,7 +147,7 @@ router.post('/calculate', async (req, res) => {
       taxable_value: Joi.number().min(0).required(),
       gst_rate: Joi.number().min(0).default(18),
       tax_type: Joi.string().valid('cgst_sgst', 'igst').default('cgst_sgst'),
-      is_rcm: Joi.boolean().optional(),  // accepted but unused
+      is_rcm: Joi.boolean().invalid(true).messages({'any.invalid': 'RCM invoices are not yet supported.'}),
     });
     const normalizedBody = { taxable_value, gst_rate, tax_type: raw_tax_type, is_rcm: req.body.is_rcm };
     const { error, value } = schema.validate(normalizedBody);
@@ -150,9 +156,7 @@ router.post('/calculate', async (req, res) => {
     const result = gstService.calculateGST(value.taxable_value, value.gst_rate, value.tax_type);
     res.json({ success: true, data: { ...result, taxable_value: value.taxable_value, gst_rate: value.gst_rate } });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.GST,
       feature: 'gst-compliance',
@@ -180,9 +184,7 @@ router.post('/classify-supply', async (req, res) => {
 
     res.json({ success: true, data: { supply_type: supplyType, tax_type: taxType } });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.GST,
       feature: 'gst-compliance',
@@ -196,7 +198,7 @@ router.post('/classify-supply', async (req, res) => {
 // GSTR-1 Generation
 // ═══════════════════════════════════════════════════════════════════════════
 
-router.post('/gstr1/generate', requirePermission('manage_settings'), async (req, res) => {
+router.post('/gstr1/generate', requirePermission('manage_tax'), async (req, res) => {
   try {
     const schema = Joi.object({
       return_period: Joi.string().pattern(/^\d{4}-\d{2}$/).required(),
@@ -207,6 +209,10 @@ router.post('/gstr1/generate', requirePermission('manage_settings'), async (req,
     const [y, m] = value.return_period.split('-');
     if (new Date(y, m - 1) > new Date()) throw new Error('Cannot generate return for future period');
 
+    const { query } = require('../database/connection');
+    const existing = await query('SELECT id FROM gst_filings WHERE return_period = $1 AND return_type = $2', [value.return_period, 'GSTR1']);
+    if (existing.rows.length > 0) throw new Error(`GSTR-1 for ${value.return_period} already exists.`);
+
     const result = await gstService.generateGSTR1(value.return_period);
     res.json({ success: true, data: result });
   } catch (err) {
@@ -214,9 +220,7 @@ router.post('/gstr1/generate', requirePermission('manage_settings'), async (req,
       return res.status(400).json({ success: false, message: err.message });
     }
     
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.GST,
       feature: 'gst-compliance',
@@ -230,7 +234,7 @@ router.post('/gstr1/generate', requirePermission('manage_settings'), async (req,
 // GSTR-3B Generation
 // ═══════════════════════════════════════════════════════════════════════════
 
-router.post('/gstr3b/generate', requirePermission('manage_settings'), async (req, res) => {
+router.post('/gstr3b/generate', requirePermission('manage_tax'), async (req, res) => {
   try {
     const schema = Joi.object({
       return_period: Joi.string().pattern(/^\d{4}-\d{2}$/).required(),
@@ -241,12 +245,14 @@ router.post('/gstr3b/generate', requirePermission('manage_settings'), async (req
     const [y, m] = value.return_period.split('-');
     if (new Date(y, m - 1) > new Date()) throw new Error('Cannot generate return for future period');
 
+    const { query } = require('../database/connection');
+    const existing = await query('SELECT id FROM gst_filings WHERE return_period = $1 AND return_type = $2', [value.return_period, 'GSTR3B']);
+    if (existing.rows.length > 0) throw new Error(`GSTR-3B for ${value.return_period} already exists.`);
+
     const result = await gstService.generateGSTR3B(value.return_period);
     res.json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.GST,
       feature: 'gst-compliance',
@@ -260,14 +266,12 @@ router.post('/gstr3b/generate', requirePermission('manage_settings'), async (req
 // Filings Management
 // ═══════════════════════════════════════════════════════════════════════════
 
-router.get('/filings', async (req, res) => {
+router.get('/filings', requirePermission('manage_tax'), async (req, res) => {
   try {
     const filings = await gstService.getFilings(req.query);
     res.json({ success: true, data: filings });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.GST,
       feature: 'gst-compliance',
@@ -277,15 +281,13 @@ router.get('/filings', async (req, res) => {
   }
 });
 
-router.get('/filings/:id', async (req, res) => {
+router.get('/filings/:id', requirePermission('manage_tax'), async (req, res) => {
   try {
     const filing = await gstService.getFiling(parseInt(req.params.id));
     if (!filing) return res.status(404).json({ success: false, message: 'Filing not found' });
     res.json({ success: true, data: filing });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.GST,
       feature: 'gst-compliance',
@@ -295,7 +297,7 @@ router.get('/filings/:id', async (req, res) => {
   }
 });
 
-router.post('/filings/:id/mark-filed', requirePermission('manage_settings'), async (req, res) => {
+router.post('/filings/:id/mark-filed', requirePermission('manage_tax'), async (req, res) => {
   try {
     const schema = Joi.object({ arn_number: Joi.string().pattern(/^\d{10}$/).required() });
     const { error, value } = schema.validate(req.body);
@@ -304,9 +306,7 @@ router.post('/filings/:id/mark-filed', requirePermission('manage_settings'), asy
     const result = await gstService.markFiled(parseInt(req.params.id), value.arn_number);
     res.json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.GST,
       feature: 'gst-compliance',
@@ -320,12 +320,12 @@ router.post('/filings/:id/mark-filed', requirePermission('manage_settings'), asy
 // Download JSON (for GST portal upload)
 // ═══════════════════════════════════════════════════════════════════════════
 
-router.get('/filings/:id/download', async (req, res) => {
+router.get('/filings/:id/download', requirePermission('manage_tax'), async (req, res) => {
   try {
     const filing = await gstService.getFiling(parseInt(req.params.id));
     if (!filing) return res.status(404).json({ success: false, message: 'Filing not found' });
 
-    const filename = `${filing.return_type}_${filing.return_period}_${filing.gstin}.json`;
+    const filename = `${filing.return_type}_${filing.return_period}_${filing.gstin}.json`.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
     
     let jsonData = filing.json_data;
     if (typeof jsonData === 'string') {
@@ -342,9 +342,7 @@ router.get('/filings/:id/download', async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(jsonData);
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.GST,
       feature: 'gst-compliance',

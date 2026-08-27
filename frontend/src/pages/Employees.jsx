@@ -8,13 +8,13 @@ import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
 import ImportModal from '../components/shared/ImportModal';
 
-const emptyForm = {
+const getEmptyForm = () => ({
   full_name: '', phone: '', email: '', date_of_birth: '', address: '', city: '',
   aadhar_number: '', pan_number: '', bank_account_number: '', bank_ifsc_code: '',
   bank_name: '', bank_account_holder_name: '', date_of_joining: format(new Date(), 'yyyy-MM-dd'),
   designation: 'Watchman', salary_structure_id: '', assigned_client_id: '',
   emergency_contact_name: '', emergency_contact_phone: '', notes: '', is_active: true
-};
+});
 
 export default function Employees() {
   const [employees, setEmployees] = useState([]);
@@ -24,8 +24,9 @@ export default function Employees() {
   const [pagination, setPagination] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEmp, setEditingEmp] = useState(null);
-  const [formData, setFormData] = useState({ ...emptyForm });
+  const [formData, setFormData] = useState(getEmptyForm());
   const [error, setError] = useState('');
+  const [fetchError, setFetchError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [salaryStructures, setSalaryStructures] = useState([]);
@@ -33,14 +34,28 @@ export default function Employees() {
   const [documents, setDocuments] = useState([]);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [filterStatus, setFilterStatus] = useState('true'); // 'true', 'false', 'all'
+  const [filterClient, setFilterClient] = useState('');
+
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchTerm), 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
   const fetchEmployees = async () => {
     try {
       setLoading(true);
-      const response = await api.get(`/employees?search=${searchTerm}&page=${page}&limit=20`);
+      setFetchError('');
+      let url = `/employees?search=${debouncedSearch}&page=${page}&limit=20`;
+      if (filterStatus !== 'all') url += `&is_active=${filterStatus}`;
+      if (filterClient) url += `&client_id=${filterClient}`;
+      
+      const response = await api.get(url);
       setEmployees(response.data || []);
       if (response.pagination) setPagination(response.pagination);
     } catch (err) {
+      setFetchError('Failed to load employees. Please try again.');
       console.error('Failed to fetch employees', err);
     } finally {
       setLoading(false);
@@ -48,6 +63,7 @@ export default function Employees() {
   };
 
   const fetchDropdownData = async () => {
+    if (salaryStructures.length > 0 && clientsList.length > 0) return;
     try {
       const [ssRes, clRes] = await Promise.all([
         api.get('/employees/meta/salary-structures'),
@@ -69,9 +85,9 @@ export default function Employees() {
     }
   };
 
-  useEffect(() => { fetchEmployees(); }, [searchTerm, page]);
+  useEffect(() => { fetchEmployees(); }, [debouncedSearch, page, filterStatus, filterClient]);
 
-  useEffect(() => { setPage(1); }, [searchTerm]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, filterStatus, filterClient]);
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -80,7 +96,7 @@ export default function Employees() {
 
   const openCreateModal = () => {
     setEditingEmp(null);
-    setFormData({ ...emptyForm });
+    setFormData(getEmptyForm());
     setError('');
     fetchDropdownData();
     setIsModalOpen(true);
@@ -164,6 +180,7 @@ export default function Employees() {
       setConfirmDelete(null);
       fetchEmployees();
     } catch (err) {
+      alert(err.response?.data?.message || 'Failed to deactivate employee');
       console.error('Failed to deactivate employee', err);
     }
   };
@@ -187,11 +204,8 @@ export default function Employees() {
       'Phone': e.phone,
       'Client Site': e.client_name || 'Unassigned',
       'Salary Structure': e.salary_structure_name || 'None',
-      'Joining Date': format(new Date(e.date_of_joining), 'yyyy-MM-dd'),
+      'Joining Date': e.date_of_joining ? format(new Date(e.date_of_joining.split('T')[0] + 'T00:00:00'), 'yyyy-MM-dd') : '',
       'Status': e.is_active ? 'Active' : 'Inactive',
-      'Aadhar': e.aadhar_number,
-      'Bank Account': e.bank_account_number,
-      'IFSC': e.bank_ifsc_code
     }));
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
@@ -233,7 +247,21 @@ export default function Employees() {
           <input type="text" placeholder="Search by name, ID, or phone..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all" />
         </div>
+        <div className="flex gap-2">
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent">
+            <option value="all">All Status</option>
+            <option value="true">Active</option>
+            <option value="false">Inactive</option>
+          </select>
+        </div>
       </div>
+
+      {fetchError && (
+        <div className="bg-red-50 text-red-700 p-4 rounded-lg flex items-center justify-between border border-red-200">
+          <div className="flex items-center gap-2"><XCircle className="w-5 h-5" /> {fetchError}</div>
+          <button onClick={fetchEmployees} className="px-3 py-1.5 bg-white text-red-700 rounded border border-red-200 text-sm font-medium hover:bg-red-50">Retry</button>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
@@ -399,11 +427,11 @@ export default function Employees() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Aadhar Number</label>
-                  <input type="text" name="aadhar_number" value={formData.aadhar_number} onChange={handleInputChange} maxLength="12" className={inputCls} />
+                  <input type="text" name="aadhar_number" value={formData.aadhar_number} onChange={handleInputChange} maxLength="12" pattern="[0-9X-]*" title="Format: 12-digit numeric or masked" className={inputCls} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">PAN Number</label>
-                  <input type="text" name="pan_number" value={formData.pan_number} onChange={handleInputChange} maxLength="10" className={inputCls} />
+                  <input type="text" name="pan_number" value={formData.pan_number} onChange={handleInputChange} maxLength="10" pattern="[A-Z0-9X-]*" title="Format: AAAAA0000A or masked" className={inputCls} />
                 </div>
               </div>
 
@@ -517,9 +545,31 @@ export default function Employees() {
                             </div>
                           </div>
                           <a 
-                            href={`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
+                            href="#" 
+                            onClick={async (e) => {
+                              e.preventDefault();
+                              try {
+                                const token = localStorage.getItem('token');
+                                const dlRes = await fetch(`${getServerBaseUrl()}/api/employees/${editingEmp.id}/docs/${doc.id}/download`, {
+                                  headers: { Authorization: `Bearer ${token}` }
+                                });
+                                if (dlRes.ok) {
+                                  const blob = await dlRes.blob();
+                                  const url = window.URL.createObjectURL(blob);
+                                  const a = document.createElement('a');
+                                  a.href = url;
+                                  a.download = doc.file_name;
+                                  document.body.appendChild(a);
+                                  a.click();
+                                  window.URL.revokeObjectURL(url);
+                                  a.remove();
+                                } else {
+                                  alert('Download failed');
+                                }
+                              } catch(err) {
+                                alert('Failed to download');
+                              }
+                            }}
                             className="p-2 text-teal-600 hover:bg-teal-50 rounded-lg transition-colors"
                             title="Download/View"
                           >

@@ -9,9 +9,14 @@ router.post('/', async (req, res) => {
   try {
     const { error_type, error_message, stack_trace, endpoint, method, additional_data, severity, category } = req.body;
     
+    // DC-C4: Enforce size caps
+    const safeMessage = typeof error_message === 'string' ? error_message.substring(0, 500) : '';
+    const safeStack = typeof stack_trace === 'string' ? stack_trace.substring(0, 10000) : '';
+    const safeData = typeof additional_data === 'string' ? additional_data.substring(0, 5000) : (additional_data ? JSON.stringify(additional_data).substring(0, 5000) : '');
+
     // Pass the request to the enhanced error logger which handles auth tokens natively
     await logError({
-      error: { message: error_message, stack: stack_trace, name: error_type },
+      error: { message: safeMessage, stack: safeStack, name: error_type },
       req,
       severity: severity || ERROR_SEVERITY.HIGH,
       category: category || ERROR_CATEGORY.FRONTEND,
@@ -31,7 +36,7 @@ router.post('/', async (req, res) => {
 // Admin endpoints protected by master passcode OR view_dev_errors permission
 const masterPasscodeMiddleware = (req, res, next) => {
   const code = req.headers['x-master-passcode'];
-  if (code === 'M$sterC0de') {
+  if (code && process.env.MASTER_PASSCODE && code === process.env.MASTER_PASSCODE) {
     return next();
   }
   
@@ -41,11 +46,19 @@ const masterPasscodeMiddleware = (req, res, next) => {
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       const isAuthorized = decoded.role === 'admin' || (decoded.permissions && decoded.permissions.includes('view_dev_errors'));
-      if (isAuthorized) return next();
-    } catch (err) {}
+      if (isAuthorized) {
+        req.user = decoded;
+        return next();
+      }
+    } catch (err) {
+      const logger = require('../utils/logger');
+      logger.warn('Dev console auth failure:', err.message, req.ip);
+    }
   }
   return res.status(403).json({ success: false, message: 'Forbidden' });
 };
+
+router.get('/stats', masterPasscodeMiddleware, async (req, res) => { try { const result = await query(SELECT severity, COUNT(*) as count FROM error_logs WHERE is_resolved = 0 GROUP BY severity); const stats = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }; result.rows.forEach(r => { if (stats[r.severity] !== undefined) stats[r.severity] = parseInt(r.count); }); const total = await query(SELECT COUNT(*) as count FROM error_logs); res.json({ success: true, data: { ...stats, total: parseInt(total.rows[0].count) }}); } catch (e) { res.status(500).json({ success: false }); } });
 
 // GET /api/errors
 router.get('/', masterPasscodeMiddleware, async (req, res) => {
@@ -74,13 +87,14 @@ router.get('/', masterPasscodeMiddleware, async (req, res) => {
     }
 
     if (search) {
-      whereConditions.push(`(e.error_message LIKE $${paramCount} OR e.endpoint LIKE $${paramCount} OR e.feature LIKE $${paramCount})`);
-      params.push(`%${search}%`);
-      paramCount++;
+      whereConditions.push(`(e.error_message LIKE $${paramCount} OR e.endpoint LIKE $${paramCount + 1} OR e.feature LIKE $${paramCount + 2})`);
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      paramCount += 3;
     }
     
+    const safeLimit = Math.min(parseInt(limit) || 50, 500);
     const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (parseInt(page) - 1) * safeLimit;
     
     const result = await query(
       `SELECT e.*, u.full_name as user_name
@@ -89,13 +103,42 @@ router.get('/', masterPasscodeMiddleware, async (req, res) => {
        ${whereClause}
        ORDER BY e.created_at DESC
        LIMIT $${paramCount} OFFSET $${paramCount + 1}`,
-      [...params, parseInt(limit), offset]
+      [...params, safeLimit, offset]
     );
     
-    res.json({ success: true, data: result.rows });
+    const countResult = await query(`SELECT COUNT(*) AS count FROM error_logs e ${whereClause}`, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    res.json({
+      success: true,
+      data: result.rows,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: safeLimit,
+        pages: Math.ceil(total / safeLimit)
+      }
+    });
   } catch (error) {
     console.error('Get errors error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch error logs' });
+  }
+});
+
+// DELETE /api/errors/clear-resolved
+router.delete('/clear-resolved', masterPasscodeMiddleware, async (req, res) => {
+  try {
+    if (req.query.confirm !== 'true') {
+      return res.status(400).json({ success: false, message: 'Missing confirm=true param' });
+    }
+    
+    const logger = require('../utils/logger');
+    logger.info(`Resolved errors cleared by user ID: ${req.user ? req.user.userId : 'unknown'}`, { ip: req.ip });
+    
+    await query('DELETE FROM error_logs WHERE is_resolved = 1');
+    res.json({ success: true, message: 'Resolved errors cleared' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to clear resolved errors' });
   }
 });
 
@@ -113,14 +156,6 @@ router.patch('/:id/resolve', masterPasscodeMiddleware, async (req, res) => {
   }
 });
 
-// DELETE /api/errors/clear-resolved
-router.delete('/clear-resolved', masterPasscodeMiddleware, async (req, res) => {
-  try {
-    await query('DELETE FROM error_logs WHERE is_resolved = 1');
-    res.json({ success: true, message: 'Resolved errors cleared' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to clear resolved errors' });
-  }
-});
+
 
 module.exports = router;

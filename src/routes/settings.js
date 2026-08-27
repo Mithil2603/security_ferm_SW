@@ -14,16 +14,26 @@ const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => cb(null, `agency_logo_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${path.extname(file.originalname)}`)
 });
-const upload = multer({ storage });
+const upload = multer({ 
+  storage,
+  limits: { fileSize: 2 * 1024 * 1024 }, // S-H5: 2MB limit
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Not an image! Please upload an image.'), false);
+    }
+  }
+});
 router.use(authMiddleware);
-router.use(requirePermission('manage_settings'));
+// S-C3: Removed global requirePermission('manage_settings') from top level
 
 // ═══════════════════════════════════════════════════════════════════
 //  SALARY STRUCTURES CRUD
 // ═══════════════════════════════════════════════════════════════════
 
 // GET /api/settings/salary-structures
-router.get('/salary-structures', async (req, res) => {
+router.get('/salary-structures', requirePermission('manage_payroll', 'manage_settings'), async (req, res) => {
   try {
     const result = await query(
       `SELECT ss.*,
@@ -42,7 +52,7 @@ router.get('/salary-structures', async (req, res) => {
 });
 
 // POST /api/settings/salary-structures
-router.post('/salary-structures', async (req, res) => {
+router.post('/salary-structures', requirePermission('manage_payroll', 'manage_settings'), async (req, res) => {
   try {
     const {
       name, base_salary, dearness_allowance = 0, house_rent_allowance = 0,
@@ -73,7 +83,7 @@ router.post('/salary-structures', async (req, res) => {
 });
 
 // PUT /api/settings/salary-structures/:id
-router.put('/salary-structures/:id', async (req, res) => {
+router.put('/salary-structures/:id', requirePermission('manage_payroll', 'manage_settings'), async (req, res) => {
   try {
     const {
       name, base_salary, dearness_allowance, house_rent_allowance,
@@ -112,14 +122,14 @@ router.put('/salary-structures/:id', async (req, res) => {
 });
 
 // DELETE /api/settings/salary-structures/:id (soft-disable)
-router.delete('/salary-structures/:id', async (req, res) => {
+router.delete('/salary-structures/:id', requirePermission('manage_payroll', 'manage_settings'), async (req, res) => {
   try {
     // Check if any active employees are on this structure
     const check = await query(
       'SELECT COUNT(*) AS cnt FROM employees WHERE salary_structure_id = $1 AND is_active = 1',
       [req.params.id]
     );
-    if (parseInt(check.rows[0].cnt) > 0) {
+    if (parseInt(check.rows[0].cnt, 10) > 0) { // S-M6: explicit cast
       return res.status(400).json({
         success: false,
         message: `Cannot delete: ${check.rows[0].cnt} active guard(s) are on this salary structure. Reassign them first.`
@@ -140,7 +150,7 @@ router.delete('/salary-structures/:id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 
 // PATCH /api/settings/users/:id/toggle — activate/deactivate user
-router.patch('/users/:id/toggle', async (req, res) => {
+router.patch('/users/:id/toggle', requirePermission('manage_settings'), async (req, res) => {
   try {
     // Don't let user deactivate themselves
     if (parseInt(req.params.id) === req.user.userId) {
@@ -178,17 +188,20 @@ router.patch('/users/:id/toggle', async (req, res) => {
 });
 
 // PUT /api/settings/users/:id — update user role/details
-router.put('/users/:id', async (req, res) => {
+router.put('/users/:id', requirePermission('manage_settings'), async (req, res) => {
   try {
     const { full_name, role, phone, permissions } = req.body;
     let updateQuery = `UPDATE users SET full_name = COALESCE($1, full_name), role = COALESCE($2, role), phone = COALESCE($3, phone), updated_at = CURRENT_TIMESTAMP`;
-    const queryParams = [full_name, role, phone, req.params.id];
+    const queryParams = [full_name, role, phone];
 
     if (permissions !== undefined) {
-      updateQuery += `, permissions = $5`;
+      updateQuery += `, permissions = $4`;
       queryParams.push(JSON.stringify(permissions));
     }
-    updateQuery += ` WHERE id = $4`;
+    
+    // S-M3: build WHERE id param last to fix index collision
+    queryParams.push(req.params.id);
+    updateQuery += ` WHERE id = $${queryParams.length}`;
 
     const result = await query(updateQuery, queryParams);
 
@@ -209,8 +222,14 @@ router.put('/users/:id', async (req, res) => {
 });
 
 // POST /api/settings/users/:id/reset-password — admin resets someone's password
-router.post('/users/:id/reset-password', async (req, res) => {
+router.post('/users/:id/reset-password', requirePermission('manage_settings'), async (req, res) => {
   try {
+    // S-H4: Verify admin target
+    const target = await query('SELECT role FROM users WHERE id = $1', [req.params.id]);
+    if (target.rows[0]?.role === 'admin' && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Only admins can reset admin passwords' });
+    }
+
     const { new_password } = req.body;
     if (!new_password || new_password.length < 6) {
       return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
@@ -238,7 +257,7 @@ router.post('/users/:id/reset-password', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 
 // GET /api/settings/system/:key
-router.get('/system/:key', async (req, res) => {
+router.get('/system/:key', requirePermission('manage_settings', 'manage_payroll'), async (req, res) => {
   try {
     const result = await query(
       'SELECT setting_value FROM system_settings WHERE setting_key = $1',
@@ -256,7 +275,7 @@ router.get('/system/:key', async (req, res) => {
 });
 
 // PUT /api/settings/system/:key
-router.put('/system/:key', async (req, res) => {
+router.put('/system/:key', requirePermission('manage_settings'), async (req, res) => {
   try {
     const { value } = req.body;
     if (value === undefined) {
@@ -283,47 +302,14 @@ router.put('/system/:key', async (req, res) => {
   }
 });
 
-// POST /api/settings/system/agency_logo
-router.post('/system/agency_logo', upload.single('logo'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: 'No image uploaded' });
-    }
-    
-    const logoUrl = `/uploads/${req.file.filename}`;
-    
-    await query(
-      `INSERT INTO system_settings (setting_key, setting_value)
-       VALUES ($1, $2)
-       ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP`,
-      ['agency_logo_url', logoUrl]
-    );
-
-    res.json({ success: true, data: { logo_url: logoUrl }, message: 'Logo updated successfully' });
-  } catch (error) {
-    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
-    logger.error('Update logo error:', error);
-    res.status(500).json({ success: false, message: 'Failed to update logo' });
-  }
-});
-
-// DELETE /api/settings/system/agency_logo
-router.delete('/system/agency_logo', async (req, res) => {
-  try {
-    await query(`DELETE FROM system_settings WHERE setting_key = 'agency_logo_url'`);
-    res.json({ success: true, message: 'Logo removed' });
-  } catch (error) {
-    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
-    res.status(500).json({ success: false, message: 'Failed to remove logo' });
-  }
-});
+// (First POST/DELETE /system/agency_logo block removed)
 
 // ═══════════════════════════════════════════════════════════════════
 //  EXPENSE CATEGORIES
 // ═══════════════════════════════════════════════════════════════════
 
-// GET /api/settings/expense-categories (Admins can view all including inactive if needed, but we'll return all)
-router.get('/expense-categories', async (req, res) => {
+// GET /api/settings/expense-categories
+router.get('/expense-categories', requirePermission('manage_expenses', 'manage_settings'), async (req, res) => {
   try {
     const result = await query('SELECT * FROM expense_categories ORDER BY is_active DESC, name ASC');
     res.json({ success: true, data: result.rows });
@@ -335,7 +321,7 @@ router.get('/expense-categories', async (req, res) => {
 });
 
 // POST /api/settings/expense-categories
-router.post('/expense-categories', async (req, res) => {
+router.post('/expense-categories', requirePermission('manage_expenses', 'manage_settings'), async (req, res) => {
   try {
     const { name } = req.body;
     if (!name) return res.status(400).json({ success: false, message: 'Category name is required' });
@@ -356,7 +342,7 @@ router.post('/expense-categories', async (req, res) => {
 });
 
 // PUT /api/settings/expense-categories/:id
-router.put('/expense-categories/:id', async (req, res) => {
+router.put('/expense-categories/:id', requirePermission('manage_expenses', 'manage_settings'), async (req, res) => {
   try {
     const { name, is_active } = req.body;
     const result = await query(
@@ -377,7 +363,7 @@ router.put('/expense-categories/:id', async (req, res) => {
   }
 });
 // POST /api/settings/system/agency_logo
-router.post('/system/agency_logo', upload.single('logo'), async (req, res) => {
+router.post('/system/agency_logo', requirePermission('manage_settings'), upload.single('logo'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No file uploaded' });
@@ -385,49 +371,51 @@ router.post('/system/agency_logo', upload.single('logo'), async (req, res) => {
     const logoUrl = `/uploads/${req.file.filename}`;
     
     // Fetch current agency settings
-    const currentSettingsRes = await query(`SELECT value FROM system_settings WHERE key = 'agency_settings'`);
+    const currentSettingsRes = await query(`SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'`);
     let agencySettings = {};
     if (currentSettingsRes.rows.length > 0) {
       try {
-        agencySettings = JSON.parse(currentSettingsRes.rows[0].value);
+        agencySettings = JSON.parse(currentSettingsRes.rows[0].setting_value);
       } catch(e) {
-    logError(e, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });}
+        logError(e, req, { feature: 'settings' });
+      }
     }
     
     agencySettings.agency_logo_url = logoUrl;
     
     // Update or Insert
     if (currentSettingsRes.rows.length > 0) {
-      await query(`UPDATE system_settings SET value = $1, updated_at = CURRENT_TIMESTAMP WHERE key = 'agency_settings'`, [JSON.stringify(agencySettings)]);
+      await query(`UPDATE system_settings SET setting_value = $1, updated_at = CURRENT_TIMESTAMP WHERE setting_key = 'agency_settings'`, [JSON.stringify(agencySettings)]);
     } else {
-      await query(`INSERT INTO system_settings (key, value) VALUES ('agency_settings', $1)`, [JSON.stringify(agencySettings)]);
+      await query(`INSERT INTO system_settings (setting_key, setting_value) VALUES ('agency_settings', $1)`, [JSON.stringify(agencySettings)]);
     }
     
     res.json({ success: true, message: 'Logo uploaded successfully', logo_url: logoUrl });
   } catch (error) {
-    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
+    logError(error, req, { feature: 'settings' });
     logger.error('Logo upload error:', error);
     res.status(500).json({ success: false, message: 'Failed to upload logo' });
   }
 });
 
 // DELETE /api/settings/system/agency_logo
-router.delete('/system/agency_logo', async (req, res) => {
+router.delete('/system/agency_logo', requirePermission('manage_settings'), async (req, res) => {
   try {
-    const currentSettingsRes = await query(`SELECT value FROM system_settings WHERE key = 'agency_settings'`);
+    const currentSettingsRes = await query(`SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'`);
     if (currentSettingsRes.rows.length > 0) {
       let agencySettings = {};
       try {
-        agencySettings = JSON.parse(currentSettingsRes.rows[0].value);
+        agencySettings = JSON.parse(currentSettingsRes.rows[0].setting_value);
       } catch(e) {
-    logError(e, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });}
+        logError(e, req, { feature: 'settings' });
+      }
       
       agencySettings.agency_logo_url = '';
-      await query(`UPDATE system_settings SET value = $1, updated_at = CURRENT_TIMESTAMP WHERE key = 'agency_settings'`, [JSON.stringify(agencySettings)]);
+      await query(`UPDATE system_settings SET setting_value = $1, updated_at = CURRENT_TIMESTAMP WHERE setting_key = 'agency_settings'`, [JSON.stringify(agencySettings)]);
     }
     res.json({ success: true, message: 'Logo removed successfully' });
   } catch (error) {
-    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
+    logError(error, req, { feature: 'settings' });
     logger.error('Logo remove error:', error);
     res.status(500).json({ success: false, message: 'Failed to remove logo' });
   }

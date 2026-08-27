@@ -18,6 +18,13 @@ const gratuityCalculator = require('../services/payroll/gratuityCalculator');
 router.use(authMiddleware);
 router.use(requirePermission('manage_payroll'));
 
+const requireAdmin = (req, res, next) => {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ success: false, message: 'Admin access required for this operation' });
+  }
+  next();
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // PF: Calculate (pure, no DB)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -25,7 +32,7 @@ router.post('/pf/calculate', async (req, res) => {
   try {
     const schema = Joi.object({
       basic_salary: Joi.number().min(0).required(),
-      cap_at_statutory: Joi.boolean().default(false),
+      cap_at_statutory: Joi.boolean().default(true),
       employee_id: Joi.any().optional(),
       month: Joi.any().optional()
     }).unknown(true);
@@ -35,11 +42,9 @@ router.post('/pf/calculate', async (req, res) => {
     const result = pfCalculator.calculateContribution(value.basic_salary, value.cap_at_statutory);
     res.json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
-      severity: ERROR_SEVERITY?.HIGH,
-      category: ERROR_CATEGORY?.PAYROLL,
+    logError(err, req, {
+      severity: ERROR_SEVERITY.HIGH,
+      category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
       extra: { message: 'PF calculate error:' }
     });
@@ -55,11 +60,9 @@ router.get('/pf/accounts', async (req, res) => {
     const result = await pfCalculator.listAccounts(req.query);
     res.json({ success: true, ...result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
-      severity: ERROR_SEVERITY?.HIGH,
-      category: ERROR_CATEGORY?.PAYROLL,
+    logError(err, req, {
+      severity: ERROR_SEVERITY.HIGH,
+      category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
       extra: { message: 'PF accounts list error:' }
     });
@@ -73,9 +76,7 @@ router.get('/pf/accounts/:empId', async (req, res) => {
     if (!account) return res.status(404).json({ success: false, message: 'PF account not found' });
     res.json({ success: true, data: account });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -99,9 +100,7 @@ router.post('/pf/accounts', async (req, res) => {
     const result = await pfCalculator.createAccount(value.employee_id, value);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -125,9 +124,7 @@ router.put('/pf/accounts/:empId', async (req, res) => {
     const result = await pfCalculator.updateAccount(parseInt(req.params.empId), value);
     res.json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -153,9 +150,7 @@ router.post('/pf/process', async (req, res) => {
     const result = await pfCalculator.processMonthly(value.employee_id, value.payroll_month, value.basic_salary);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -179,9 +174,7 @@ router.post('/pf/batch-process', async (req, res) => {
     const result = await pfCalculator.batchProcess(value.payroll_month);
     res.status(200).json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -196,9 +189,7 @@ router.get('/pf/transactions/:empId', async (req, res) => {
     const result = await pfCalculator.getTransactions(parseInt(req.params.empId), req.query);
     res.json({ success: true, ...result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -213,9 +204,7 @@ router.get('/pf/interest/:empId', async (req, res) => {
     const result = await pfCalculator.calculateInterest(parseInt(req.params.empId), req.query.fy);
     res.json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -244,9 +233,7 @@ router.post('/pf/loans', async (req, res) => {
     const result = await pfCalculator.createLoan(value.employee_id, value);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -256,14 +243,12 @@ router.post('/pf/loans', async (req, res) => {
   }
 });
 
-router.post('/pf/loans/:id/approve', async (req, res) => {
+router.post('/pf/loans/:id/approve', requireAdmin, async (req, res) => {
   try {
-    const result = await pfCalculator.approveLoan(parseInt(req.params.id), req.user.id);
+    const result = await pfCalculator.approveLoan(parseInt(req.params.id), req.user.userId);
     res.json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -278,9 +263,7 @@ router.get('/pf/loans/:empId', async (req, res) => {
     const result = await pfCalculator.getLoans(parseInt(req.params.empId));
     res.json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -307,9 +290,7 @@ router.post('/gratuity/calculate', async (req, res) => {
     const result = gratuityCalculator.calculate(value.basic_salary, value.da, value.years_of_service);
     res.json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -327,9 +308,7 @@ router.get('/gratuity/estimate/:empId', async (req, res) => {
     if (err.message === 'Employee not found') {
       return res.status(404).json({ success: false, message: 'Employee not found' });
     }
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -351,9 +330,7 @@ router.post('/gratuity/accrue', async (req, res) => {
     const result = await gratuityCalculator.processMonthlyAccrual(value.employee_id, value.accrual_month);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -377,9 +354,7 @@ router.post('/gratuity/batch-accrue', async (req, res) => {
     const result = await gratuityCalculator.batchAccrual(value.accrual_month);
     res.status(200).json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -389,7 +364,7 @@ router.post('/gratuity/batch-accrue', async (req, res) => {
   }
 });
 
-router.post('/gratuity/payout', async (req, res) => {
+router.post('/gratuity/payout', requireAdmin, async (req, res) => {
   try {
     const schema = Joi.object({
       employee_id: Joi.number().integer().positive().required(),
@@ -402,9 +377,7 @@ router.post('/gratuity/payout', async (req, res) => {
     const result = await gratuityCalculator.createPayout(value.employee_id, value.separation_date, value.separation_reason);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -415,14 +388,12 @@ router.post('/gratuity/payout', async (req, res) => {
   }
 });
 
-router.post('/gratuity/payout/:id/approve', async (req, res) => {
+router.post('/gratuity/payout/:id/approve', requireAdmin, async (req, res) => {
   try {
-    const result = await gratuityCalculator.approvePayout(parseInt(req.params.id), req.user.id);
+    const result = await gratuityCalculator.approvePayout(parseInt(req.params.id), req.user.userId);
     res.json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -432,14 +403,12 @@ router.post('/gratuity/payout/:id/approve', async (req, res) => {
   }
 });
 
-router.post('/gratuity/payout/:id/pay', async (req, res) => {
+router.post('/gratuity/payout/:id/pay', requireAdmin, async (req, res) => {
   try {
     const result = await gratuityCalculator.markPayoutPaid(parseInt(req.params.id), req.body);
     res.json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -454,9 +423,7 @@ router.get('/gratuity/payouts', async (req, res) => {
     const result = await gratuityCalculator.getPayouts(req.query);
     res.json({ success: true, ...result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',
@@ -471,9 +438,7 @@ router.get('/gratuity/liability-report', requirePermission('view_gratuity_report
     const result = await gratuityCalculator.getLiabilityReport();
     res.json({ success: true, data: result });
   } catch (err) {
-    logError({
-      error: err,
-      req,
+    logError(err, req, {
       severity: ERROR_SEVERITY.HIGH,
       category: ERROR_CATEGORY.PAYROLL,
       feature: 'pf-gratuity',

@@ -2,39 +2,69 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
 import { format } from 'date-fns';
-import { ShieldAlert, Search, Filter, Server, ChevronLeft, ChevronRight, Activity } from 'lucide-react';
+import { ShieldAlert, Filter, Server, ChevronLeft, ChevronRight, Activity, Download } from 'lucide-react';
+import { Link } from 'react-router-dom';
+
+const LIMIT = 50;
+
+const ACTION_COLORS = {
+  create: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  update: 'bg-blue-100 text-blue-700 border-blue-200',
+  delete: 'bg-red-100 text-red-700 border-red-200',
+  login: 'bg-indigo-100 text-indigo-700 border-indigo-200',
+  logout: 'bg-slate-100 text-slate-700 border-slate-200',
+  export: 'bg-purple-100 text-purple-700 border-purple-200',
+  view: 'bg-teal-100 text-teal-700 border-teal-200',
+};
+const getActionColor = (action) => ACTION_COLORS[action] || 'bg-gray-100 text-gray-700 border-gray-200';
 
 export default function AuditLogs() {
   const { user } = useAuth();
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [pagination, setPagination] = useState({ page: 1, limit: 50, total: 0, pages: 0 });
+  const [pagination, setPagination] = useState({ page: 1, limit: LIMIT, total: 0, pages: 0 });
+  const [metaTables, setMetaTables] = useState([]);
+  
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
   
   const [filters, setFilters] = useState({
     action: '',
-    table_name: ''
+    table_name: '',
+    date_from: thirtyDaysAgo.toISOString().split('T')[0],
+    date_to: new Date().toISOString().split('T')[0]
   });
 
-  const fetchLogs = async (page = 1) => {
+  useEffect(() => {
+    api.get('/audit-logs/meta').then(r => {
+      if (r.data.success) setMetaTables(r.data.data);
+    }).catch(() => {});
+  }, []);
+
+  const fetchLogs = async (page = 1, signal) => {
     try {
       setLoading(true);
       setError('');
+      setPagination(p => ({ ...p, page }));
       
       const params = new URLSearchParams({
         page: page,
-        limit: pagination.limit
+        limit: LIMIT
       });
       
       if (filters.action) params.append('action', filters.action);
       if (filters.table_name) params.append('table_name', filters.table_name);
+      if (filters.date_from) params.append('date_from', filters.date_from);
+      if (filters.date_to) params.append('date_to', filters.date_to);
       
-      const res = await api.get(`/audit-logs?${params.toString()}`);
+      const res = await api.get(`/audit-logs?${params.toString()}`, { signal });
       if (res.data.success) {
         setLogs(res.data.data);
         setPagination(res.data.pagination);
       }
     } catch (err) {
+      if (err.name === 'CanceledError' || err.message === 'canceled') return;
       setError(err.response?.data?.message || err.message || 'Failed to fetch audit logs');
     } finally {
       setLoading(false);
@@ -42,7 +72,9 @@ export default function AuditLogs() {
   };
 
   useEffect(() => {
-    fetchLogs(1);
+    const controller = new AbortController();
+    fetchLogs(1, controller.signal);
+    return () => controller.abort();
   }, [filters]);
 
   const handlePageChange = (newPage) => {
@@ -51,14 +83,28 @@ export default function AuditLogs() {
     }
   };
 
-  const getActionColor = (action) => {
-    switch (action) {
-      case 'create': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
-      case 'update': return 'bg-blue-100 text-blue-700 border-blue-200';
-      case 'delete': return 'bg-red-100 text-red-700 border-red-200';
-      case 'login': return 'bg-indigo-100 text-indigo-700 border-indigo-200';
-      case 'logout': return 'bg-slate-100 text-slate-700 border-slate-200';
-      default: return 'bg-gray-100 text-gray-700 border-gray-200';
+  const safeFormat = (d) => {
+    try {
+      if (!d) return 'N/A';
+      return format(new Date(d), 'dd MMM yyyy, HH:mm:ss');
+    } catch {
+      return 'Invalid date';
+    }
+  };
+
+  const handleExport = async () => {
+    try {
+      const params = new URLSearchParams(filters);
+      const res = await api.get(`/audit-logs/export?${params.toString()}`, { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'audit_logs.csv');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (err) {
+      setError('Failed to export logs');
     }
   };
 
@@ -82,6 +128,9 @@ export default function AuditLogs() {
           </h1>
           <p className="text-slate-500 text-sm mt-1">Track all critical actions and changes across the application.</p>
         </div>
+        <button onClick={handleExport} className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm">
+          <Download className="w-4 h-4" /> Export CSV
+        </button>
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
@@ -103,6 +152,8 @@ export default function AuditLogs() {
             <option value="delete">Delete</option>
             <option value="login">Login</option>
             <option value="logout">Logout</option>
+            <option value="export">Export</option>
+            <option value="view">View</option>
           </select>
           
           <select 
@@ -111,12 +162,32 @@ export default function AuditLogs() {
             className="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
           >
             <option value="">All Entities</option>
-            <option value="clients">Clients</option>
-            <option value="employees">Employees</option>
-            <option value="invoices">Invoices</option>
-            <option value="payments">Payments</option>
-            <option value="users">Users</option>
+            {metaTables.length > 0 ? (
+              metaTables.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)
+            ) : (
+              <>
+                <option value="clients">Clients</option>
+                <option value="employees">Employees</option>
+                <option value="invoices">Invoices</option>
+                <option value="payments">Payments</option>
+                <option value="users">Users</option>
+              </>
+            )}
           </select>
+
+          <input 
+            type="date"
+            value={filters.date_from}
+            onChange={(e) => setFilters({...filters, date_from: e.target.value})}
+            className="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+          />
+          <span className="text-slate-400">to</span>
+          <input 
+            type="date"
+            value={filters.date_to}
+            onChange={(e) => setFilters({...filters, date_to: e.target.value})}
+            className="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+          />
         </div>
 
         {/* Error State */}
@@ -162,7 +233,7 @@ export default function AuditLogs() {
                 logs.map(log => (
                   <tr key={log.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-6 py-3 whitespace-nowrap text-xs text-slate-500 font-mono">
-                      {format(new Date(log.created_at), 'dd MMM yyyy, HH:mm:ss')}
+                      {safeFormat(log.created_at)}
                     </td>
                     <td className="px-6 py-3 whitespace-nowrap">
                       <div className="font-medium text-slate-800">{log.user_name || 'System'}</div>
@@ -175,9 +246,15 @@ export default function AuditLogs() {
                     </td>
                     <td className="px-6 py-3 whitespace-nowrap">
                       <div className="font-medium text-slate-700 capitalize">{log.table_name}</div>
-                      <div className="text-[10px] text-slate-400 font-mono">ID: {log.record_id || 'N/A'}</div>
+                      <div className="text-[10px] text-slate-400 font-mono">
+                        {log.record_id ? (
+                          <Link to={`/${log.table_name.replace('_', '-')}/${log.record_id}`} className="hover:text-indigo-500 hover:underline">
+                            ID: {log.record_id}
+                          </Link>
+                        ) : 'ID: N/A'}
+                      </div>
                     </td>
-                    <td className="px-6 py-3">
+                    <td className="px-6 py-3" title={log.description}>
                       <p className="text-slate-600 truncate max-w-md">{log.description}</p>
                     </td>
                     <td className="px-6 py-3 whitespace-nowrap text-xs text-slate-400 font-mono">
@@ -194,7 +271,7 @@ export default function AuditLogs() {
         {!loading && logs.length > 0 && (
           <div className="px-6 py-4 border-t border-slate-200 flex items-center justify-between bg-slate-50">
             <p className="text-sm text-slate-500">
-              Showing <span className="font-medium text-slate-700">{((pagination.page - 1) * pagination.limit) + 1}</span> to <span className="font-medium text-slate-700">{Math.min(pagination.page * pagination.limit, pagination.total)}</span> of <span className="font-medium text-slate-700">{pagination.total}</span> logs
+              Showing <span className="font-medium text-slate-700">{Math.max(1, ((pagination.page - 1) * pagination.limit) + 1)}</span> to <span className="font-medium text-slate-700">{Math.min(pagination.page * pagination.limit, pagination.total)}</span> of <span className="font-medium text-slate-700">{pagination.total}</span> logs
             </p>
             <div className="flex gap-2">
               <button 

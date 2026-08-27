@@ -16,22 +16,41 @@ export default function GSTCompliance() {
 
   // Config form
   const [configForm, setConfigForm] = useState({
-    gstin: '', legal_name: '', trade_name: '', state_code: '24', state_name: 'Gujarat',
-    registration_type: 'regular', default_tax_rate: 18, financial_year: '2025-26',
+    gstin: '', legal_name: '', trade_name: '', state_code: '', state_name: '',
+    registration_type: '', default_tax_rate: '', financial_year: '',
   });
 
+  const prevMonth = new Date(new Date().setMonth(new Date().getMonth() - 1)).toISOString().slice(0, 7);
+
   // Return Period Modal State
-  const [returnModal, setReturnModal] = useState({ open: false, type: 'GSTR1', period: new Date().toISOString().slice(0, 7) });
+  const [returnModal, setReturnModal] = useState({ open: false, type: 'GSTR1', period: prevMonth });
   const [generatingReturn, setGeneratingReturn] = useState(false);
 
-  const fetchFilings = async () => { try { setLoading(true); const r = await api.get('/gst/filings?limit=24'); setFilings(r.data || []); } catch {} finally { setLoading(false); } };
-  const fetchHSN = async () => { try { setLoading(true); const r = await api.get('/gst/hsn-sac'); setHsnCodes(r.data || []); } catch {} finally { setLoading(false); } };
+  // Add HSN Modal State
+  const [isAddHSNOpen, setIsAddHSNOpen] = useState(false);
+  const [hsnForm, setHsnForm] = useState({ code: '', type: 'HSN', description: '', gst_rate: 18, cgst_rate: 9, sgst_rate: 9, igst_rate: 18 });
+  const [submittingHsn, setSubmittingHsn] = useState(false);
+
+  const fetchFilings = async () => { try { setLoading(true); setErrorMsg(null); const r = await api.get('/gst/filings?limit=100'); setFilings(r.data.data || []); } catch { setErrorMsg('Failed to load filings'); setFilings([]); } finally { setLoading(false); } };
+  const fetchHSN = async () => { try { setLoading(true); setErrorMsg(null); const r = await api.get('/gst/hsn-sac'); setHsnCodes(r.data.data || []); } catch { setErrorMsg('Failed to load HSN codes'); setHsnCodes([]); } finally { setLoading(false); } };
   const fetchConfig = async () => { 
     try { 
       setConfigError(null);
       const r = await api.get('/gst/config'); 
-      setConfig(r.data); 
-      if (r.data) setConfigForm(r.data); 
+      setConfig(r.data.data); 
+      if (r.data.data) {
+        setConfigForm({
+          gstin: r.data.data.gstin || '',
+          legal_name: r.data.data.legal_name || '',
+          trade_name: r.data.data.trade_name || '',
+          state_code: r.data.data.state_code || '',
+          state_name: r.data.data.state_name || '',
+          registration_type: r.data.data.registration_type || 'regular',
+          default_tax_rate: r.data.data.default_tax_rate || 18,
+          financial_year: r.data.data.financial_year || ''
+        });
+      }
+
     } catch (err) {
       setConfigError(err.message || 'Failed to load GST config');
     } 
@@ -50,25 +69,47 @@ export default function GSTCompliance() {
 
   // ─── Generate Returns ──────────────────────────────────────────────────────
   const generateReturn = (type) => {
-    setReturnModal({ open: true, type, period: new Date().toISOString().slice(0, 7) });
+    setReturnModal({ open: true, type, period: prevMonth });
   };
 
   const handleReturnSubmit = async (e) => {
     e.preventDefault();
     if (!returnModal.period) return;
+
+    const exists = filings.some(f => f.return_type === returnModal.type && f.return_period === returnModal.period);
+    if (exists && !window.confirm(`A ${returnModal.type} for ${returnModal.period} already exists. Regenerate?`)) {
+      return;
+    }
+
     setGeneratingReturn(true);
     setErrorMsg(null);
     setSuccessMsg(null);
     try {
       const endpoint = returnModal.type === 'GSTR1' ? '/gst/gstr1/generate' : '/gst/gstr3b/generate';
       const res = await api.post(endpoint, { return_period: returnModal.period });
-      setSuccessMsg(`${returnModal.type} generated! ${res.data.summary?.total_invoices || 0} invoices processed.`);
-      setReturnModal({ open: false, type: 'GSTR1', period: new Date().toISOString().slice(0, 7) });
+      setSuccessMsg(`${returnModal.type} generated! ${res.data.data?.summary?.total_invoices || 0} invoices processed.`);
+      setReturnModal({ open: false, type: 'GSTR1', period: prevMonth });
       try { await fetchFilings(); } catch (err) { setErrorMsg('Failed to refresh filings'); }
     } catch (err) {
       setErrorMsg(err.message || 'Generation failed');
     } finally {
       setGeneratingReturn(false);
+    }
+  };
+
+  const handleAddHsn = async (e) => {
+    e.preventDefault();
+    setSubmittingHsn(true);
+    try {
+      await api.post('/gst/hsn-sac', hsnForm);
+      setSuccessMsg('Code added successfully');
+      setIsAddHSNOpen(false);
+      setHsnForm({ code: '', type: 'HSN', description: '', gst_rate: 18, cgst_rate: 9, sgst_rate: 9, igst_rate: 18 });
+      fetchHSN();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to add code');
+    } finally {
+      setSubmittingHsn(false);
     }
   };
 
@@ -87,12 +128,51 @@ export default function GSTCompliance() {
     setErrorMsg(null);
     try {
       const r = await api.get(`/gst/filings/${id}`);
-      setViewFiling(r.data);
+      setViewFiling(r.data.data || r.data);
     } catch { setErrorMsg('Failed to load filing'); }
   };
 
-  const downloadFiling = (id) => {
-    window.open(`/api/gst/filings/${id}/download`, '_blank');
+  const downloadFiling = async (id) => {
+    try {
+      const response = await api.get(`/gst/filings/${id}/download`, { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      const contentDisposition = response.headers['content-disposition'];
+      let filename = `filing_${id}.json`;
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="?([^"]+)"?/);
+        if (match && match[1]) filename = match[1];
+      }
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode.removeChild(link);
+    } catch (err) {
+      setErrorMsg('Failed to download filing');
+    }
+  };
+
+  const markFiled = async (id) => {
+    const arn = prompt("Enter ARN Number provided by GST Portal:");
+    if (!arn) return;
+    try {
+      await api.post(`/gst/filings/${id}/mark-filed`, { arn_number: arn });
+      setSuccessMsg('Filing marked as filed!');
+      setViewFiling(null);
+      fetchFilings();
+    } catch (err) {
+      setErrorMsg(err.response?.data?.message || err.message || 'Failed to mark as filed');
+    }
+  };
+
+  const safeStringify = (jsonData) => {
+    try {
+      const obj = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
+      return JSON.stringify(obj, null, 2);
+    } catch (e) {
+      return 'Invalid JSON Data';
+    }
   };
 
   return (
@@ -117,7 +197,7 @@ export default function GSTCompliance() {
           </h1>
           <p className="text-slate-500 mt-1">GSTR-1, GSTR-3B Returns & HSN/SAC Codes</p>
         </div>
-        {tab === 'returns' && (
+        {tab === 'returns' && config?.registration_type !== 'composition' && (
           <div className="flex gap-2">
             <button onClick={() => generateReturn('GSTR1')} className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm">
               <Zap className="w-4 h-4" /> Generate GSTR-1
@@ -126,6 +206,16 @@ export default function GSTCompliance() {
               <Zap className="w-4 h-4" /> Generate GSTR-3B
             </button>
           </div>
+        )}
+        {tab === 'returns' && config?.registration_type === 'composition' && (
+          <div className="bg-amber-50 text-amber-600 px-4 py-2 rounded-lg text-sm border border-amber-200">
+            Composition scheme returns (GSTR-4) not yet supported.
+          </div>
+        )}
+        {tab === 'hsn' && (
+          <button onClick={() => setIsAddHSNOpen(true)} className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm">
+            <Plus className="w-4 h-4" /> Add Code
+          </button>
         )}
       </div>
 
@@ -169,7 +259,9 @@ export default function GSTCompliance() {
                       {f.return_type}
                     </span>
                   </td>
-                  <td className="p-4 text-slate-900 font-medium">{f.return_period}</td>
+                  <td className="p-4 text-slate-900 font-medium">
+                    {new Date(f.return_period + '-01').toLocaleDateString('en-US', {month: 'short', year: 'numeric'})}
+                  </td>
                   <td className="p-4 text-right text-slate-900">{fmt(f.total_taxable_value)}</td>
                   <td className="p-4 text-right text-slate-700">{fmt(f.total_cgst)}</td>
                   <td className="p-4 text-right text-slate-700">{fmt(f.total_sgst)}</td>
@@ -177,8 +269,8 @@ export default function GSTCompliance() {
                   <td className="p-4 text-center text-slate-900">{f.total_invoices}</td>
                   <td className="p-4 text-center">
                     <span className={`text-xs px-2 py-0.5 rounded ${
-                      f.status === 'filed' ? 'bg-emerald-500/20 text-emerald-600' :
-                      f.status === 'generated' ? 'bg-amber-500/20 text-amber-600' :
+                      f.status?.toLowerCase() === 'filed' ? 'bg-emerald-500/20 text-emerald-600' :
+                      f.status?.toLowerCase() === 'generated' ? 'bg-amber-500/20 text-amber-600' :
                       'bg-slate-100 text-slate-500'
                     }`}>{f.status}</span>
                   </td>
@@ -255,6 +347,15 @@ export default function GSTCompliance() {
               <input type="text" value={configForm.trade_name || ''} onChange={e => setConfigForm({...configForm, trade_name: e.target.value})}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900" />
             </div>
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">Registration Type *</label>
+              <select value={configForm.registration_type} onChange={e => setConfigForm({...configForm, registration_type: e.target.value})} required
+                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900">
+                <option value="regular">Regular</option>
+                <option value="composition">Composition</option>
+                <option value="unregistered">Unregistered</option>
+              </select>
+            </div>
             <div className="grid grid-cols-3 gap-4">
               <div>
                 <label className="block text-xs text-slate-400 mb-1">State Code *</label>
@@ -313,9 +414,9 @@ export default function GSTCompliance() {
               </div>
               {viewFiling.json && (
                 <div>
-                  <h3 className="text-sm font-bold text-slate-700 mb-2">JSON Data</h3>
+                  <h3 className="text-sm font-bold text-slate-700 mb-2">JSON Data (Preview)</h3>
                   <pre className="bg-white border border-slate-200 rounded-lg p-4 text-xs text-slate-700 overflow-auto max-h-64 font-mono">
-                    {JSON.stringify(viewFiling.json, null, 2).replace(/</g, '&lt;').replace(/>/g, '&gt;')}
+                    {safeStringify(viewFiling.json_data || viewFiling.json).replace(/</g, '&lt;').replace(/>/g, '&gt;')}
                   </pre>
                 </div>
               )}
@@ -324,6 +425,11 @@ export default function GSTCompliance() {
               <button onClick={() => downloadFiling(viewFiling.id)} className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">
                 <Download className="w-4 h-4" /> Download JSON
               </button>
+              {viewFiling.status?.toLowerCase() === 'generated' && (
+                <button onClick={() => markFiled(viewFiling.id)} className="px-4 py-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 font-medium">
+                  Mark as Filed
+                </button>
+              )}
               <button onClick={() => setViewFiling(null)} className="px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors font-medium">Close</button>
             </div>
           </div>
@@ -349,11 +455,73 @@ export default function GSTCompliance() {
                   className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
                   autoFocus
                 />
+                <p className="text-xs text-slate-500 mt-2">Ensure all invoices for this period are finalized before generating.</p>
               </div>
               <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-slate-100">
-                <button type="button" onClick={() => setReturnModal({ open: false, type: 'GSTR1', period: new Date().toISOString().slice(0, 7) })} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
+                <button type="button" onClick={() => setReturnModal({ open: false, type: 'GSTR1', period: prevMonth })} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
                 <button type="submit" disabled={generatingReturn} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50">
                   {generatingReturn ? 'Generating...' : `Generate ${returnModal.type}`}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add HSN Modal */}
+      {isAddHSNOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-slide-up">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-teal-50">
+              <h3 className="text-lg font-bold text-teal-800">Add HSN/SAC Code</h3>
+              <button type="button" onClick={() => setIsAddHSNOpen(false)} className="text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+            <form onSubmit={handleAddHsn} className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Code *</label>
+                  <input required type="text" value={hsnForm.code} onChange={e => setHsnForm({...hsnForm, code: e.target.value})} maxLength={8}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 font-mono" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Type *</label>
+                  <select required value={hsnForm.type} onChange={e => setHsnForm({...hsnForm, type: e.target.value})}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500">
+                    <option value="HSN">HSN (Goods)</option>
+                    <option value="SAC">SAC (Services)</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Description *</label>
+                <input required type="text" value={hsnForm.description} onChange={e => setHsnForm({...hsnForm, description: e.target.value})}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500" />
+              </div>
+              <div className="grid grid-cols-4 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">GST %</label>
+                  <input required type="number" step="0.1" value={hsnForm.gst_rate} onChange={e => {
+                    const r = parseFloat(e.target.value) || 0;
+                    setHsnForm({...hsnForm, gst_rate: r, cgst_rate: r/2, sgst_rate: r/2, igst_rate: r});
+                  }} className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-slate-50" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-500 mb-1">CGST %</label>
+                  <input disabled type="number" value={hsnForm.cgst_rate} className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-slate-100" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-500 mb-1">SGST %</label>
+                  <input disabled type="number" value={hsnForm.sgst_rate} className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-slate-100" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-500 mb-1">IGST %</label>
+                  <input disabled type="number" value={hsnForm.igst_rate} className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-slate-100" />
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-slate-100">
+                <button type="button" onClick={() => setIsAddHSNOpen(false)} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
+                <button type="submit" disabled={submittingHsn} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50">
+                  {submittingHsn ? 'Saving...' : 'Save Code'}
                 </button>
               </div>
             </form>
