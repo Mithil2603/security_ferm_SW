@@ -44,6 +44,8 @@ export default function StatementArchive() {
   const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 0 });
   const [domainCounts, setDomainCounts] = useState({});
   const [viewerModal, setViewerModal] = useState({ isOpen: false, statement: null });
+  const [error, setError] = useState(null);
+  const [archiving, setArchiving] = useState(null);
 
   const fetchStatements = async (page = 1) => {
     try {
@@ -61,6 +63,7 @@ export default function StatementArchive() {
       if (res.pagination) setPagination(res.pagination);
     } catch (err) {
       console.error('Failed to fetch statements', err);
+      setError('Failed to load statements. Check server connection.');
       setStatements([]);
     } finally {
       setLoading(false);
@@ -77,16 +80,15 @@ export default function StatementArchive() {
   };
 
   useEffect(() => {
-    fetchStatements();
-    fetchDomainCounts();
-  }, [activeDomain, dateRange.from_date, dateRange.to_date]);
-
-  useEffect(() => {
     const debounce = setTimeout(() => {
       fetchStatements();
-    }, 400);
+    }, 300);
     return () => clearTimeout(debounce);
-  }, [search]);
+  }, [activeDomain, dateRange.from_date, dateRange.to_date, search]);
+
+  useEffect(() => {
+    fetchDomainCounts();
+  }, []);
 
   const handleView = async (stmt) => {
     try {
@@ -94,36 +96,43 @@ export default function StatementArchive() {
       setViewerModal({ isOpen: true, statement: res.data });
     } catch (err) {
       console.error('Failed to fetch statement details', err);
+      setError('Failed to load statement details. Please try again.');
     }
   };
 
   const handleDelete = async (stmt) => {
     if (!window.confirm(`Archive this statement "${stmt.statement_number}"? It will be hidden from the list.`)) return;
     try {
+      setArchiving(stmt.id);
       await api.delete(`/statements/${stmt.id}`);
       fetchStatements(pagination.page);
       fetchDomainCounts();
     } catch (err) {
       alert('Failed to archive statement');
+    } finally {
+      setArchiving(null);
     }
   };
 
   const handleExportAll = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const baseUrl = getApiBaseUrl();
       const params = new URLSearchParams();
       if (activeDomain !== 'all') params.append('domain', activeDomain);
       if (dateRange.from_date) params.append('from_date', dateRange.from_date);
       if (dateRange.to_date) params.append('to_date', dateRange.to_date);
       
-      window.open(`${baseUrl}/statements/export?${params.toString()}&token=${token}`, '_blank');
+      const res = await api.get(`/statements/export?${params.toString()}`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data || res]));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Statement_Archive_${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
     } catch (err) {
       console.error('Export failed', err);
     }
   };
 
-  const totalCount = Object.values(domainCounts).reduce((s, c) => s + c, 0);
+  const totalCount = Object.values(domainCounts).reduce((s, c) => s + parseInt(c || 0), 0);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -141,6 +150,16 @@ export default function StatementArchive() {
           <Download className="w-4 h-4" /> Export All
         </button>
       </div>
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 flex justify-between items-center text-sm">
+          <span>⚠ {error}</span>
+          <div className="flex gap-4">
+            <button onClick={() => { setError(null); fetchStatements(); }} className="font-medium hover:underline">Retry</button>
+            <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600"><X className="w-4 h-4" /></button>
+          </div>
+        </div>
+      )}
 
       {/* Domain Tabs */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-2">
@@ -254,8 +273,8 @@ export default function StatementArchive() {
                           className="p-2 text-slate-500 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition-colors" title="View Statement">
                           <Eye className="w-4 h-4" />
                         </button>
-                        <button onClick={() => handleDelete(stmt)}
-                          className="p-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Archive">
+                        <button onClick={() => handleDelete(stmt)} disabled={archiving === stmt.id}
+                          className="p-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50" title="Archive">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>

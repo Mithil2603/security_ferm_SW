@@ -2,7 +2,7 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requireRole } = require('../middleware/auth');
+const { authMiddleware, requireRole, requirePermission } = require('../middleware/auth');
 const path = require('path');
 const fs = require('fs');
 const { logError } = require('../utils/errorLogger');
@@ -28,7 +28,7 @@ router.get('/', async (req, res) => {
       params.push(from_date);
     }
     if (to_date) {
-      conditions.push(`generated_at <= $${paramIdx++} || ' 23:59:59'`);
+      conditions.push(`DATE(generated_at) <= $${paramIdx++}`);
       params.push(to_date);
     }
     if (party_name) {
@@ -36,9 +36,9 @@ router.get('/', async (req, res) => {
       params.push(`%${party_name}%`);
     }
     if (search) {
-      conditions.push(`(statement_number LIKE $${paramIdx} OR title LIKE $${paramIdx} OR party_name LIKE $${paramIdx})`);
-      params.push(`%${search}%`);
-      paramIdx++;
+      conditions.push(`(statement_number LIKE $${paramIdx} OR title LIKE $${paramIdx+1} OR party_name LIKE $${paramIdx+2})`);
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      paramIdx += 3;
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -79,7 +79,7 @@ router.get('/', async (req, res) => {
 });
 
 // GET /api/statements/export — Export filtered statements as CSV
-router.get('/export', async (req, res) => {
+router.get('/export', requireRole('admin'), async (req, res) => {
   try {
     const { domain, from_date, to_date, party_name } = req.query;
     
@@ -89,7 +89,7 @@ router.get('/export', async (req, res) => {
 
     if (domain) { conditions.push(`domain = $${paramIdx++}`); params.push(domain); }
     if (from_date) { conditions.push(`generated_at >= $${paramIdx++}`); params.push(from_date); }
-    if (to_date) { conditions.push(`generated_at <= $${paramIdx++} || ' 23:59:59'`); params.push(to_date); }
+    if (to_date) { conditions.push(`DATE(generated_at) <= $${paramIdx++}`); params.push(to_date); }
     if (party_name) { conditions.push(`party_name LIKE $${paramIdx++}`); params.push(`%${party_name}%`); }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -130,7 +130,7 @@ router.get('/domain-counts', async (req, res) => {
       `SELECT domain, COUNT(*) as count FROM saved_statements WHERE is_archived = 0 GROUP BY domain`
     );
     const counts = {};
-    result.rows.forEach(r => { counts[r.domain] = r.count; });
+    result.rows.forEach(r => { counts[r.domain] = parseInt(r.count || 0); });
     res.json({ success: true, data: counts });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'statements' });
@@ -140,7 +140,7 @@ router.get('/domain-counts', async (req, res) => {
 });
 
 // GET /api/statements/:id — Get full statement details including JSON snapshot
-router.get('/:id', async (req, res) => {
+router.get('/:id', requirePermission('manage_settings'), async (req, res) => {
   try {
     const result = await query(
       `SELECT * FROM saved_statements WHERE id = $1 AND is_archived = 0`,

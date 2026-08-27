@@ -209,17 +209,43 @@ export default function StatementViewerModal({ isOpen, onClose, statement }) {
   const ViewComponent = viewMap[statement.domain] || InvoiceView;
   const colorClass = domainColors[statement.domain] || domainColors.invoice;
 
-  const handlePrint = () => window.print();
+  const handlePrint = () => {
+    const content = document.getElementById('statement-modal-content');
+    if (!content) return;
+    const w = window.open('', '_blank');
+    w.document.write(`<html><head><title>Print Statement</title><style>
+      body { font-family: sans-serif; padding: 20px; }
+      h4 { margin-top: 15px; margin-bottom: 5px; color: #64748b; font-size: 12px; text-transform: uppercase; }
+      .flex { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #e2e8f0; }
+      .font-bold { font-weight: bold; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    </style></head><body><h2>${statement.title}</h2><p>${statement.statement_number} • ${formatDate(statement.generated_at)}</p><hr/>${content.outerHTML}</body></html>`);
+    w.document.close();
+    w.onload = () => {
+      w.print();
+      setTimeout(() => w.close(), 500);
+    };
+  };
 
   const handleExport = () => {
     const wb = XLSX.utils.book_new();
     const wsData = [[statement.title], [`Date: ${formatDate(statement.generated_at)}`], []];
     
     // Flatten data into rows
-    Object.entries(data).forEach(([key, val]) => {
-      if (typeof val !== 'object') {
-        wsData.push([key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()), val]);
-      }
+    const flatten = (obj, prefix = '') => {
+      let flat = {};
+      Object.entries(obj).forEach(([key, val]) => {
+        if (typeof val === 'object' && val !== null) {
+          Object.assign(flat, flatten(val, `${prefix}${key} - `));
+        } else {
+          flat[`${prefix}${key}`] = val;
+        }
+      });
+      return flat;
+    };
+    
+    Object.entries(flatten(data)).forEach(([key, val]) => {
+      wsData.push([key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()), val]);
     });
 
     const ws = XLSX.utils.aoa_to_sheet(wsData);
@@ -261,7 +287,7 @@ export default function StatementViewerModal({ isOpen, onClose, statement }) {
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-auto p-6 print:overflow-visible">
+        <div id="statement-modal-content" className="flex-1 overflow-auto p-6 print:overflow-visible">
           <ViewComponent data={data} />
         </div>
       </div>
