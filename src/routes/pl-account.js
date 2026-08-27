@@ -5,6 +5,7 @@ const { query } = require('../database/connection');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { saveStatement } = require('../utils/statementSaver');
 const { logError } = require('../utils/errorLogger');
+const Decimal = require('decimal.js');
 
 router.use(authMiddleware);
 router.use(requirePermission('view_pl_account'));
@@ -25,6 +26,13 @@ router.get('/', async (req, res) => {
     const fromDate = from_date || fyStart;
     const toDate = to_date || now.toISOString().split('T')[0];
 
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+      return res.status(400).json({ success: false, message: 'Invalid date format' });
+    }
+    if (new Date(fromDate) > new Date(toDate)) {
+      return res.status(400).json({ success: false, message: 'from_date must be <= to_date' });
+    }
+
     const currentPeriod = await buildPeriodData(fromDate, toDate);
 
     let previousPeriod = null;
@@ -35,9 +43,10 @@ router.get('/', async (req, res) => {
       previousPeriod = await buildPeriodData(prevFrom, prevTo);
     }
 
-    // Monthly trend for 12 months of the year containing fromDate
-    const trendYear = parseInt(fromDate.substring(0, 4));
-    const monthlyTrend = await buildMonthlyTrend(trendYear, trendYear + 1);
+    // Monthly trend for the requested date range
+    const startYear = parseInt(fromDate.substring(0, 4));
+    const endYear = parseInt(toDate.substring(0, 4)) || startYear + 1;
+    const monthlyTrend = await buildMonthlyTrend(fromDate, toDate);
 
     res.json({
       success: true,
@@ -67,6 +76,13 @@ router.post('/generate', async (req, res) => {
 
     const fromDate = from_date || fyStart;
     const toDate = to_date || now.toISOString().split('T')[0];
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+      return res.status(400).json({ success: false, message: 'Invalid date format' });
+    }
+    if (new Date(fromDate) > new Date(toDate)) {
+      return res.status(400).json({ success: false, message: 'from_date must be <= to_date' });
+    }
 
     const periodData = await buildPeriodData(fromDate, toDate);
 
@@ -114,6 +130,7 @@ function formatDateShort(dateStr) {
 }
 
 async function buildPeriodData(fromDate, toDate) {
+  try {
   // ── 1. INCOME ──────────────────────────────────────────────────────────────
   const revenueTotal = await query(
     `SELECT COALESCE(SUM(payment_received), 0) as total_collected,
@@ -150,7 +167,7 @@ async function buildPeriodData(fromDate, toDate) {
             COUNT(DISTINCT employee_id) as employee_count
      FROM payroll
      WHERE date(payroll_month, 'start of month') <= date($2)
-       AND (date(payroll_month, 'start of month', '+1 month', '-1 day')) >= date($1)`,
+       AND date(payroll_month, 'start of month', '+1 month', '-1 day') >= date($1)`,
     [fromDate, toDate]
   );
 
@@ -162,7 +179,7 @@ async function buildPeriodData(fromDate, toDate) {
      FROM payroll p
      JOIN employees e ON p.employee_id = e.id
      WHERE date(p.payroll_month, 'start of month') <= date($2)
-       AND (date(p.payroll_month, 'start of month', '+1 month', '-1 day')) >= date($1)
+       AND date(p.payroll_month, 'start of month', '+1 month', '-1 day') >= date($1)
      GROUP BY e.full_name, e.employee_id
      ORDER BY net_salary DESC`,
     [fromDate, toDate]
@@ -226,14 +243,21 @@ async function buildPeriodData(fromDate, toDate) {
   );
 
   // ── CALCULATIONS ───────────────────────────────────────────────────────────
-  const totalIncome = parseFloat(revenueTotal.rows[0].total_collected);
-  const totalBilled = parseFloat(revenueTotal.rows[0].total_billed);
-  const totalPayroll = parseFloat(payrollTotal.rows[0].total_gross);
-  const totalExpenses = parseFloat(expenseTotal.rows[0].total_expenses);
-  const grossProfit = totalIncome - totalPayroll;
-  const grossMargin = totalIncome > 0 ? parseFloat((grossProfit / totalIncome * 100).toFixed(2)) : 0;
-  const netProfit = grossProfit - totalExpenses;
-  const netMargin = totalIncome > 0 ? parseFloat((netProfit / totalIncome * 100).toFixed(2)) : 0;
+  const totalIncome = parseFloat(revenueTotal.rows[0].total_collected) || 0;
+  if (isNaN(totalIncome)) throw new Error('Invalid revenue data');
+  
+  const totalBilled = parseFloat(revenueTotal.rows[0].total_billed) || 0;
+  const totalPayroll = parseFloat(payrollTotal.rows[0].total_gross) || 0;
+  const totalExpenses = parseFloat(expenseTotal.rows[0].total_expenses) || 0;
+  
+  const grossProfit = new Decimal(totalIncome).minus(totalPayroll).toNumber();
+  const grossMargin = totalIncome > 0 ? parseFloat(new Decimal(grossProfit).dividedBy(totalIncome).times(100).toFixed(2)) : 0;
+  const netProfit = new Decimal(grossProfit).minus(totalExpenses).toNumber();
+  const netMargin = totalIncome > 0 ? parseFloat(new Decimal(netProfit).dividedBy(totalIncome).times(100).toFixed(2)) : 0;
+
+  if (grossProfit < 0) logger.warn('Gross profit is negative', { period: fromDate });
+  if (payrollByEmployee.rows.length === 0) logger.warn('No payroll data', { period: fromDate });
+
 
   return {
     period: { from: fromDate, to: toDate },
@@ -289,12 +313,15 @@ async function buildPeriodData(fromDate, toDate) {
       tds_deducted: parseFloat(tdsData.rows[0].total_tds)
     }
   };
+  } catch (err) {
+    throw new Error('Query failed in buildPeriodData: ' + err.message);
+  }
 }
 
-async function buildMonthlyTrend(startYear, endYear) {
-  const months = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
-  const startMonthStr = `${startYear}-04`;
-  const endMonthStr = `${endYear}-03`;
+async function buildMonthlyTrend(fromDate, toDate) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const startMonthStr = fromDate.substring(0, 7);
+  const endMonthStr = toDate.substring(0, 7);
 
   // Bulk query 1: Revenue & Billed by month
   const revRes = await query(
@@ -336,10 +363,13 @@ async function buildMonthlyTrend(startYear, endYear) {
   const expMap = new Map(expRes.rows.map(r => [r.ym, parseFloat(r.expenses)]));
 
   const trend = [];
-  for (let i = 0; i < 12; i++) {
-    const monthIdx = (i + 3) % 12; // April=3 → March=2
-    const year = monthIdx >= 3 ? startYear : endYear;
-    const monthNum = monthIdx + 1;
+  
+  let currentD = new Date(`${startMonthStr}-01`);
+  const endD = new Date(`${endMonthStr}-01`);
+  
+  while (currentD <= endD) {
+    const year = currentD.getFullYear();
+    const monthNum = currentD.getMonth() + 1;
     const ym = `${year}-${String(monthNum).padStart(2, '0')}`;
 
     const revRow = revMap.get(ym);
@@ -348,11 +378,11 @@ async function buildMonthlyTrend(startYear, endYear) {
     const payroll = payMap.get(ym) || 0;
     const expenses = expMap.get(ym) || 0;
 
-    const totalCosts = payroll + expenses;
-    const profit = revenue - totalCosts;
+    const totalCosts = new Decimal(payroll).plus(expenses).toNumber();
+    const profit = new Decimal(revenue).minus(totalCosts).toNumber();
 
     trend.push({
-      month: months[i],
+      month: months[monthNum - 1],
       month_num: monthNum,
       year,
       revenue,
@@ -362,6 +392,8 @@ async function buildMonthlyTrend(startYear, endYear) {
       total_costs: totalCosts,
       profit
     });
+    
+    currentD.setMonth(currentD.getMonth() + 1);
   }
 
   return trend;

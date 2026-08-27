@@ -105,9 +105,13 @@ export default function PLAccount() {
   const [loading, setLoading] = useState(true);
   const [compare, setCompare] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [saveStatus, setSaveStatus] = useState(null);
   const printRef = useRef();
+  const abortRef = useRef(null);
 
   const now = new Date();
+  // FY starts April 1. If month >= 3 (April, 0-indexed), FY is current year; else previous year
   const fyStart = now.getMonth() >= 3 ? `${now.getFullYear()}-04-01` : `${now.getFullYear() - 1}-04-01`;
   const [dateRange, setDateRange] = useState({
     from_date: fyStart,
@@ -117,15 +121,21 @@ export default function PLAccount() {
   const fetchData = async () => {
     try {
       setLoading(true);
+      setError(null);
+      abortRef.current?.abort();
+      abortRef.current = new AbortController();
+      
       const params = new URLSearchParams({
         from_date: dateRange.from_date,
         to_date: dateRange.to_date,
         compare: compare.toString()
       });
-      const res = await api.get(`/pl-account?${params.toString()}`);
-      setData(res.data);
+      const res = await api.get(`/pl-account?${params.toString()}`, { signal: abortRef.current.signal });
+      setData(res.data?.data || res.data); // Adjust for the correct response structure
     } catch (err) {
+      if (err.name === 'CanceledError' || err.name === 'AbortError') return;
       console.error('Failed to fetch P&L', err);
+      setError(err.response?.data?.message || 'Failed to load P&L data');
     } finally {
       setLoading(false);
     }
@@ -136,13 +146,16 @@ export default function PLAccount() {
   const handleSaveArchive = async () => {
     try {
       setSaving(true);
+      setSaveStatus(null);
       await api.post('/pl-account/generate', {
         from_date: dateRange.from_date,
         to_date: dateRange.to_date
       });
-      alert('P&L statement saved to Statement Archive!');
+      setSaveStatus({ type: 'success', msg: 'P&L statement saved to Statement Archive!' });
+      setTimeout(() => setSaveStatus(null), 3000);
     } catch (err) {
-      alert('Failed to save P&L statement');
+      setSaveStatus({ type: 'error', msg: 'Failed to save P&L statement' });
+      setTimeout(() => setSaveStatus(null), 3000);
     } finally {
       setSaving(false);
     }
@@ -190,7 +203,8 @@ export default function PLAccount() {
       XLSX.utils.book_append_sheet(wb, ws2, 'Monthly Trend');
     }
 
-    XLSX.writeFile(wb, `PL_Account_${dateRange.from_date}_to_${dateRange.to_date}.xlsx`);
+    const filename = `PL_Account_${dateRange.from_date.replace(/[^0-9-]/g, '_')}_to_${dateRange.to_date.replace(/[^0-9-]/g, '_')}.xlsx`;
+    XLSX.writeFile(wb, filename);
   };
 
   const cp = data?.current_period;
@@ -212,6 +226,29 @@ export default function PLAccount() {
 
   return (
     <div className="space-y-6 animate-fade-in pb-12" ref={printRef}>
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+          body { background-color: white !important; }
+          * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+          .animate-fade-in { animation: none !important; }
+          .pb-12 { padding-bottom: 0 !important; }
+        }
+      `}</style>
+      
+      {/* ── Error & Success States ──────────────────────────────────────── */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 flex justify-between items-center text-sm no-print">
+          <span>⚠ {error}</span>
+          <button onClick={() => fetchData()} className="font-medium hover:underline">Retry</button>
+        </div>
+      )}
+      {saveStatus && (
+        <div className={`border rounded-xl px-4 py-3 text-sm no-print ${saveStatus.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+          {saveStatus.msg}
+        </div>
+      )}
+
       {/* ── Header ──────────────────────────────────────────────────────── */}
       <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 no-print">
         <div>
@@ -421,7 +458,11 @@ export default function PLAccount() {
                     <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }}
                       tickFormatter={v => v >= 100000 ? `${(v/100000).toFixed(1)}L` : v >= 1000 ? `${(v/1000).toFixed(0)}K` : v} />
                     <Tooltip contentStyle={tooltipStyle}
-                      formatter={(val, name) => [fmt(val), name === 'revenue' ? 'Revenue' : name === 'total_costs' ? 'Total Costs' : 'Profit']} />
+                      formatter={(val, name) => {
+                        const label = name === 'revenue' ? 'Revenue' : name === 'total_costs' ? 'Total Costs' : 'Profit';
+                        const displayVal = val >= 10000000 ? `${(val/10000000).toFixed(2)}Cr` : val >= 100000 ? `${(val/100000).toFixed(2)}L` : fmt(val);
+                        return [displayVal, label];
+                      }} />
                     <Legend formatter={v => v === 'revenue' ? 'Revenue' : v === 'total_costs' ? 'Total Costs' : 'Net Profit'} />
                     <ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="3 3" />
                     <Bar dataKey="revenue" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={20} opacity={0.7} />
