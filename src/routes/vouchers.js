@@ -1,13 +1,12 @@
 const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
-const { query } = require('../database/connection');
+const { pool, query } = require('../database/connection');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const Joi = require('joi');
 const { logError } = require('../utils/errorLogger');
 
 router.use(authMiddleware);
-router.use(requirePermission('manage_vouchers'));
 
 // ─── Voucher Type Prefixes ──────────────────────────────────────────────────
 const VOUCHER_PREFIXES = {
@@ -71,41 +70,42 @@ function getFinancialYear(dateStr) {
 }
 
 // ─── Helper: Generate next voucher number ───────────────────────────────────
-async function getNextVoucherNumber(voucherType, voucherDate) {
+async function getNextVoucherNumber(conn, voucherType, voucherDate) {
   const fy = getFinancialYear(voucherDate);
   const prefix = VOUCHER_PREFIXES[voucherType];
 
-  // Upsert the counter
-  await query(`
+  await conn.query(`
     INSERT INTO voucher_counters (voucher_type, financial_year, last_number)
-    VALUES ($1, $2, 0)
-    ON CONFLICT DO NOTHING
+    VALUES (?, ?, 0)
+    ON DUPLICATE KEY UPDATE last_number = last_number
   `, [voucherType, fy]);
 
-  // Increment
-  await query(`
+  await conn.query(`
     UPDATE voucher_counters
     SET last_number = last_number + 1
-    WHERE voucher_type = $1 AND financial_year = $2
+    WHERE voucher_type = ? AND financial_year = ?
   `, [voucherType, fy]);
 
-  // Return
-  const result = await query(`
+  const [result] = await conn.query(`
     SELECT last_number
     FROM voucher_counters
-    WHERE voucher_type = $1 AND financial_year = $2
+    WHERE voucher_type = ? AND financial_year = ?
   `, [voucherType, fy]);
 
-  const num = result.rows[0].last_number;
+  const num = result[0].last_number;
   return `${prefix}/${fy}/${String(num).padStart(4, '0')}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/vouchers — List vouchers with filters
 // ─────────────────────────────────────────────────────────────────────────────
-router.get('/', async (req, res) => {
+router.get('/', requirePermission('view_vouchers', 'manage_vouchers'), async (req, res) => {
   try {
     const { voucher_type, status, from_date, to_date, party_type, party_id, search, limit = 100, offset = 0 } = req.query;
+
+    if (from_date && to_date && new Date(from_date) > new Date(to_date)) {
+      return res.status(400).json({ success: false, message: 'from_date must be <= to_date' });
+    }
 
     let conditions = [];
     let params = [];
@@ -185,13 +185,17 @@ router.get('/', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/vouchers/summary — Dashboard summary
 // ─────────────────────────────────────────────────────────────────────────────
-router.get('/summary', async (req, res) => {
+router.get('/summary', requirePermission('view_vouchers', 'manage_vouchers'), async (req, res) => {
   try {
     const { from_date, to_date } = req.query;
     const now = new Date();
     const fyStart = now.getMonth() >= 3 ? `${now.getFullYear()}-04-01` : `${now.getFullYear() - 1}-04-01`;
     const fromDate = from_date || fyStart;
     const toDate = to_date || now.toISOString().split('T')[0];
+
+    if (new Date(fromDate) > new Date(toDate)) {
+      return res.status(400).json({ success: false, message: 'from_date must be <= to_date' });
+    }
 
     const result = await query(`
       SELECT voucher_type,
@@ -204,7 +208,7 @@ router.get('/summary', async (req, res) => {
       WHERE voucher_date >= $1 AND voucher_date <= $2
         AND status != 'cancelled'
       GROUP BY voucher_type
-      ORDER BY voucher_type
+      ORDER BY voucher_type ASC
     `, [fromDate, toDate]);
 
     // Pending approval count for badge
@@ -213,11 +217,20 @@ router.get('/summary', async (req, res) => {
       FROM vouchers
       WHERE status = 'pending_approval'
     `);
+    
+    // Parse numeric strings from aggregation
+    const parsedData = result.rows.map(r => ({
+      ...r,
+      total_amount: parseFloat(r.total_amount || 0) || 0,
+      posted_amount: parseFloat(r.posted_amount || 0) || 0,
+      pending_amount: parseFloat(r.pending_amount || 0) || 0,
+      draft_amount: parseFloat(r.draft_amount || 0) || 0
+    }));
 
     res.json({
       success: true,
       data: {
-        by_type: result.rows,
+        by_type: parsedData,
         pending_approval_count: pendingResult.rows[0].pending_count,
         period: { from: fromDate, to: toDate }
       },
@@ -232,7 +245,7 @@ router.get('/summary', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/vouchers/next-number/:type — Preview next voucher number
 // ─────────────────────────────────────────────────────────────────────────────
-router.get('/next-number/:type', async (req, res) => {
+router.get('/next-number/:type', requirePermission('create_vouchers', 'manage_vouchers'), async (req, res) => {
   try {
     const { type } = req.params;
     const { date } = req.query;
@@ -263,18 +276,18 @@ router.get('/next-number/:type', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/vouchers/aging — Get aging report for vendors
 // ─────────────────────────────────────────────────────────────────────────────
-router.get('/aging', async (req, res, next) => {
+router.get('/aging', requirePermission('view_vouchers', 'manage_vouchers'), async (req, res, next) => {
   try {
     const result = await query(`
       SELECT 
         v.id, v.voucher_number, v.voucher_date, v.amount, v.due_date,
         v.party_id, v.party_name,
-        CAST(julianday('now') - julianday(v.due_date) AS INTEGER) as days_overdue
+        DATEDIFF(CURDATE(), v.due_date) as days_overdue
       FROM vouchers v
       WHERE v.party_type = 'vendor' 
         AND v.status = 'posted'
         AND v.due_date IS NOT NULL
-        AND v.due_date < date('now')
+        AND v.due_date < CURDATE()
       ORDER BY days_overdue DESC
     `);
     
@@ -304,7 +317,7 @@ router.get('/aging', async (req, res, next) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/vouchers/:id — Get single voucher
 // ─────────────────────────────────────────────────────────────────────────────
-router.get('/:id', async (req, res) => {
+router.get('/:id', requirePermission('view_vouchers', 'manage_vouchers'), async (req, res) => {
   try {
     const { id } = req.params;
     const result = await query(`
@@ -335,7 +348,8 @@ router.get('/:id', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/vouchers — Create a new voucher
 // ─────────────────────────────────────────────────────────────────────────────
-router.post('/', async (req, res) => {
+router.post('/', requirePermission('create_vouchers', 'manage_vouchers'), async (req, res) => {
+  let conn;
   try {
     const { error, value } = voucherSchema.validate(req.body);
     if (error) {
@@ -366,10 +380,25 @@ router.post('/', async (req, res) => {
       if (ca.rows.length === 0) {
         return res.status(400).json({ success: false, message: 'Credit account not found or inactive' });
       }
+    if (debit_account_id && credit_account_id && debit_account_id === credit_account_id) {
+      return res.status(400).json({ success: false, message: 'Debit and credit accounts must be different' });
+    }
+    
+    if (['journal', 'contra'].includes(voucher_type)) {
+      if (!debit_account_id || !credit_account_id) {
+        return res.status(400).json({ success: false, message: 'Both debit and credit accounts are required for double-entry vouchers' });
+      }
+    }
+    
+    if (!debit_account_id && !credit_account_id) {
+      return res.status(400).json({ success: false, message: 'At least one account must be provided' });
     }
 
-    // Generate voucher number
-    const voucher_number = await getNextVoucherNumber(voucher_type, voucher_date);
+    conn = await pool.getConnection();
+    await conn.query('START TRANSACTION');
+
+    // Generate voucher number transactionally
+    const voucher_number = await getNextVoucherNumber(conn, voucher_type, voucher_date);
 
     // Initial status: pending_approval (approval workflow enabled)
     const initialStatus = 'pending_approval';
@@ -385,7 +414,7 @@ router.post('/', async (req, res) => {
       }
     }
 
-    const result = await query(`
+    const [result] = await conn.query(`
       INSERT INTO vouchers (
         voucher_number, voucher_type, voucher_date, amount,
         debit_account_id, credit_account_id,
@@ -393,8 +422,7 @@ router.post('/', async (req, res) => {
         reference_type, reference_id,
         narration, cheque_number, cheque_date, transaction_ref,
         status, created_by, category, due_date
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-      RETURNING *
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       voucher_number, voucher_type, voucher_date, amount,
       debit_account_id || null, credit_account_id || null,
@@ -404,22 +432,28 @@ router.post('/', async (req, res) => {
       initialStatus, req.user.userId, category || null, due_date
     ]);
 
+    const [newVoucher] = await conn.query('SELECT * FROM vouchers WHERE id = ?', [result.insertId]);
+    await conn.query('COMMIT');
+
     res.status(201).json({
       success: true,
-      data: result.rows[0],
+      data: newVoucher[0],
       message: `${VOUCHER_TYPE_LABELS[voucher_type]} ${voucher_number} created — pending approval`
     });
   } catch (error) {
+    if (conn) await conn.query('ROLLBACK');
     logError(error, req, { feature: 'vouchers' });
     logger.error('Create voucher error:', error);
     res.status(500).json({ success: false, message: 'Failed to create voucher: ' + error.message });
+  } finally {
+    if (conn) conn.release();
   }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PUT /api/vouchers/:id — Edit a draft/pending voucher
 // ─────────────────────────────────────────────────────────────────────────────
-router.put('/:id', async (req, res) => {
+router.put('/:id', requirePermission('edit_vouchers', 'manage_vouchers'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -474,7 +508,7 @@ router.put('/:id', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/vouchers/:id/approve — Approve and post a voucher
 // ─────────────────────────────────────────────────────────────────────────────
-router.post('/:id/approve', async (req, res) => {
+router.post('/:id/approve', requirePermission('approve_vouchers', 'manage_vouchers'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -484,6 +518,9 @@ router.post('/:id/approve', async (req, res) => {
     }
     if (existing.rows[0].status !== 'pending_approval') {
       return res.status(400).json({ success: false, message: 'Only pending approval vouchers can be approved' });
+    }
+    if (req.user.userId === existing.rows[0].created_by && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Cannot approve own vouchers' });
     }
 
     const result = await query(`
@@ -510,7 +547,7 @@ router.post('/:id/approve', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/vouchers/:id/cancel — Cancel a voucher
 // ─────────────────────────────────────────────────────────────────────────────
-router.post('/:id/cancel', async (req, res) => {
+router.post('/:id/cancel', requirePermission('delete_vouchers', 'manage_vouchers'), async (req, res) => {
   try {
     const { id } = req.params;
     const { reason } = req.body;
@@ -525,6 +562,9 @@ router.post('/:id/cancel', async (req, res) => {
     }
     if (existing.rows[0].status === 'cancelled') {
       return res.status(400).json({ success: false, message: 'Voucher is already cancelled' });
+    }
+    if (existing.rows[0].status === 'posted') {
+      return res.status(400).json({ success: false, message: 'Cannot cancel a posted voucher directly' });
     }
 
     const result = await query(`
@@ -552,7 +592,7 @@ router.post('/:id/cancel', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/vouchers/bulk-approve — Approve multiple vouchers
 // ─────────────────────────────────────────────────────────────────────────────
-router.post('/bulk-approve', async (req, res) => {
+router.post('/bulk-approve', requirePermission('approve_vouchers', 'manage_vouchers'), async (req, res) => {
   try {
     const { voucher_ids } = req.body;
     if (!Array.isArray(voucher_ids) || voucher_ids.length === 0) {
@@ -582,7 +622,7 @@ router.post('/bulk-approve', async (req, res) => {
 });
 
 // Make Voucher Recurring
-router.post('/:id/recurring', async (req, res, next) => {
+router.post('/:id/recurring', requirePermission('create_vouchers', 'manage_vouchers'), async (req, res, next) => {
   try {
     const { frequency, next_run_date } = req.body;
     if (!frequency || !next_run_date) {

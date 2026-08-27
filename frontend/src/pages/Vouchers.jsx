@@ -31,11 +31,11 @@ export default function Vouchers() {
   // Permission checks
   const userPerms = typeof user?.permissions === 'string' ? JSON.parse(user?.permissions || '[]') : (user?.permissions || []);
   const isAdmin = user?.role === 'admin';
-  const canView = isAdmin || userPerms.includes('view_vouchers') || user?.role === 'accountant';
-  const canCreate = isAdmin || userPerms.includes('create_vouchers');
-  const canEdit = isAdmin || userPerms.includes('edit_vouchers');
-  const canDelete = isAdmin || userPerms.includes('delete_vouchers');
-  const canApprove = isAdmin || userPerms.includes('approve_vouchers');
+  const canView = isAdmin || userPerms.includes('view_vouchers') || userPerms.includes('manage_vouchers') || user?.role === 'accountant';
+  const canCreate = isAdmin || userPerms.includes('create_vouchers') || userPerms.includes('manage_vouchers');
+  const canEdit = isAdmin || userPerms.includes('edit_vouchers') || userPerms.includes('manage_vouchers');
+  const canDelete = isAdmin || userPerms.includes('delete_vouchers') || userPerms.includes('manage_vouchers');
+  const canApprove = isAdmin || userPerms.includes('approve_vouchers') || userPerms.includes('manage_vouchers');
 
   const [vouchers, setVouchers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -61,6 +61,12 @@ export default function Vouchers() {
   const [clients, setClients] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [vendors, setVendors] = useState([]);
+  const [loadingParties, setLoadingParties] = useState(false);
+
+  // Pagination
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const limit = 50;
 
   // Form state
   const [form, setForm] = useState({
@@ -86,7 +92,8 @@ export default function Vouchers() {
   // Cancel modal
   const [cancelModal, setCancelModal] = useState(null);
   const [cancelReason, setCancelReason] = useState('');
-
+  
+  const [submitting, setSubmitting] = useState(false);
   
   const fetchVouchers = useCallback(async () => {
     setLoading(true);
@@ -97,54 +104,71 @@ export default function Vouchers() {
       if (fromDate) params.append('from_date', fromDate);
       if (toDate) params.append('to_date', toDate);
       if (searchTerm) params.append('search', searchTerm);
-      params.append('limit', '200');
+      params.append('limit', limit);
+      params.append('offset', page * limit);
 
       const res = await api.get(`/vouchers?${params}`);
-      const data = res;
-      if (data.success) setVouchers(data.data);
-      else setError(data.message);
+      const data = res.data || res;
+      if (data.success) {
+        setVouchers(data.data);
+        setTotal(data.total || 0);
+      } else {
+        setError(data.message);
+      }
     } catch (e) {
-      setError('Failed to fetch vouchers');
+      console.error('Fetch error:', e);
+      setError(e.response?.data?.message || 'Failed to fetch vouchers');
     }
     setLoading(false);
-  }, [activeType, statusFilter, fromDate, toDate, searchTerm]);
+  }, [activeType, statusFilter, fromDate, toDate, searchTerm, page]);
 
   const fetchBankAccounts = async () => {
     try {
       const res = await api.get(`/bank-accounts?active_only=true`);
-      const data = res;
+      const data = res.data || res;
       if (data.success) setBankAccounts(data.data);
-    } catch (e) { /* ignore */ }
+    } catch (e) { 
+      console.error('Fetch bank accounts error:', e);
+    }
   };
 
   const fetchPartyLists = async () => {
+    setLoadingParties(true);
     try {
       const [cRes, eRes, vRes] = await Promise.all([
         api.get(`/clients`),
         api.get(`/employees`),
         api.get(`/vendors`)
       ]);
-      const [cData, eData, vData] = [cRes, eRes, vRes];
+      const [cData, eData, vData] = [cRes.data || cRes, eRes.data || eRes, vRes.data || vRes];
       if (cData.success) setClients(cData.data || []);
       if (eData.success) setEmployees(eData.data || []);
       if (vData.success) setVendors(vData.data || []);
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      console.error('Fetch party lists error:', e);
+    } finally {
+      setLoadingParties(false);
+    }
   };
 
   const fetchSummary = async () => {
     try {
       const res = await api.get(`/vouchers/summary`);
-      const data = res;
+      const data = res.data || res;
       if (data.success) setSummary(data.data);
-    } catch (e) { /* ignore */ }
+    } catch (e) { 
+      console.error('Fetch summary error:', e);
+    }
   };
 
   const fetchNextNumber = async (type, date) => {
     try {
       const res = await api.get(`/vouchers/next-number/${type}?date=${date}`);
-      const data = res;
+      const data = res.data || res;
       if (data.success) setNextNumber(data.data.next_number);
-    } catch (e) { /* ignore */ }
+    } catch (e) { 
+      console.error('Fetch next number error:', e);
+    }
   };
 
   useEffect(() => { fetchVouchers(); }, [fetchVouchers]);
@@ -189,8 +213,16 @@ export default function Vouchers() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (submitting) return;
     setError(''); setSuccess('');
+    
+    if (form.debit_account_id && form.credit_account_id && form.debit_account_id === form.credit_account_id) {
+      setError('Debit and credit accounts cannot be the same');
+      return;
+    }
+    
     try {
+      setSubmitting(true);
       const url = editingVoucher ? `/vouchers/${editingVoucher.id}` : `/vouchers`;
       const method = editingVoucher ? 'PUT' : 'POST';
       const body = {
@@ -202,7 +234,7 @@ export default function Vouchers() {
         reference_id: form.reference_id ? parseInt(form.reference_id) : null,
       };
       const res = await api.request({ url, method, data: body });
-      const data = res;
+      const data = res.data || res;
       if (data.success) {
         setSuccess(data.message);
         setShowModal(false);
@@ -213,27 +245,31 @@ export default function Vouchers() {
         setError(data.message);
       }
     } catch (e) {
-      setError('Failed to save voucher');
+      setError(e.response?.data?.message || 'Failed to save voucher');
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleApprove = async (id) => {
     try {
       const res = await api.post(`/vouchers/${id}/approve`);
-      const data = res;
+      const data = res.data || res;
       if (data.success) {
         setSuccess(data.message);
         fetchVouchers();
         fetchSummary();
       } else setError(data.message);
-    } catch (e) { setError('Failed to approve'); }
+    } catch (e) { 
+      setError(e.response?.data?.message || 'Failed to approve voucher');
+    }
   };
 
   const handleCancel = async () => {
     if (!cancelReason.trim()) { setError('Cancellation reason is required'); return; }
     try {
       const res = await api.post(`/vouchers/${cancelModal.id}/cancel`, { reason: cancelReason });
-      const data = res;
+      const data = res.data || res;
       if (data.success) {
         setSuccess(data.message);
         setCancelModal(null);
@@ -241,7 +277,9 @@ export default function Vouchers() {
         fetchVouchers();
         fetchSummary();
       } else setError(data.message);
-    } catch (e) { setError('Failed to cancel'); }
+    } catch (e) { 
+      setError(e.response?.data?.message || 'Failed to cancel voucher');
+    }
   };
 
   const handleBulkApprove = async () => {
@@ -249,10 +287,12 @@ export default function Vouchers() {
     if (pendingIds.length === 0) return;
     try {
       const res = await api.post(`/vouchers/bulk-approve`, { voucher_ids: pendingIds });
-      const data = res;
+      const data = res.data || res;
       if (data.success) { setSuccess(data.message); fetchVouchers(); fetchSummary(); }
       else setError(data.message);
-    } catch (e) { setError('Failed to bulk approve'); }
+    } catch (e) { 
+      setError(e.response?.data?.message || 'Failed to bulk approve');
+    }
   };
 
   const getPartyList = () => {
@@ -270,7 +310,13 @@ export default function Vouchers() {
     setForm(f => ({ ...f, party_id: partyId, party_name: party?.name || '' }));
   };
 
-  const fmt = (n) => Number(n || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+  const fmt = (n) => {
+    const num = Number(n || 0);
+    if (isNaN(num)) return '₹0';
+    return num < 0 
+      ? `(₹${Math.abs(num).toLocaleString('en-IN', { maximumFractionDigits: 0 })})` 
+      : `₹${num.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+  };
 
   const pendingCount = summary?.pending_approval_count || 0;
 
@@ -322,7 +368,8 @@ export default function Vouchers() {
           {VOUCHER_TYPES.map(vt => {
             const data = summary.by_type?.find(s => s.voucher_type === vt.key);
             return (
-              <div key={vt.key} onClick={() => setActiveType(activeType === vt.key ? '' : vt.key)}
+              <div key={vt.key} onClick={() => { setActiveType(activeType === vt.key ? '' : vt.key); setPage(0); }}
+                title={`Total amount for all ${vt.label}s`}
                 style={{
                   padding: '14px', borderRadius: '10px', cursor: 'pointer',
                   background: activeType === vt.key ? vt.color : '#fff',
@@ -345,21 +392,25 @@ export default function Vouchers() {
       <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ position: 'relative', flex: '1', minWidth: '200px' }}>
           <Search size={16} style={{ position: 'absolute', left: '10px', top: '10px', color: '#94a3b8' }} />
-          <input type="text" placeholder="Search vouchers..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+          <input type="text" placeholder="Search vouchers..." value={searchTerm} onChange={e => {
+            if (e.target.value.length > 100) return;
+            setSearchTerm(e.target.value);
+            setPage(0);
+          }}
             style={{ width: '100%', padding: '8px 8px 8px 34px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '13px' }} />
         </div>
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+        <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(0); }}
           style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '13px', minWidth: '140px' }}>
           <option value="">All Status</option>
           <option value="pending_approval">Pending Approval</option>
           <option value="posted">Posted</option>
           <option value="cancelled">Cancelled</option>
         </select>
-        <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)}
+        <input type="date" value={fromDate} onChange={e => { setFromDate(e.target.value); setPage(0); }}
           style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '13px' }} />
-        <input type="date" value={toDate} onChange={e => setToDate(e.target.value)}
+        <input type="date" value={toDate} onChange={e => { setToDate(e.target.value); setPage(0); }}
           style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '13px' }} />
-        <button onClick={() => { setActiveType(''); setStatusFilter(''); setFromDate(''); setToDate(''); setSearchTerm(''); }}
+        <button onClick={() => { setActiveType(''); setStatusFilter(''); setFromDate(''); setToDate(''); setSearchTerm(''); setPage(0); }}
           style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#f8fafc', cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '4px' }}>
           <RefreshCw size={14} /> Reset
         </button>
@@ -371,14 +422,14 @@ export default function Vouchers() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
             <thead>
               <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
-                <th style={thStyle}>Voucher #</th>
-                <th style={thStyle}>Type</th>
-                <th style={thStyle}>Date</th>
-                <th style={thStyle}>Party</th>
-                <th style={{ ...thStyle, textAlign: 'right' }}>Amount</th>
-                <th style={thStyle}>Narration</th>
-                <th style={thStyle}>Status</th>
-                {canView && <th style={{ ...thStyle, textAlign: 'center' }}>Actions</th>}
+                <th style={{ ...thStyle, width: '120px' }}>Voucher #</th>
+                <th style={{ ...thStyle, width: '120px' }}>Type</th>
+                <th style={{ ...thStyle, width: '100px' }}>Date</th>
+                <th style={{ ...thStyle, minWidth: '150px' }}>Party</th>
+                <th style={{ ...thStyle, textAlign: 'right', width: '100px' }}>Amount</th>
+                <th style={{ ...thStyle, maxWidth: '200px' }}>Narration</th>
+                <th style={{ ...thStyle, width: '100px' }}>Status</th>
+                {canView && <th style={{ ...thStyle, textAlign: 'center', width: '100px' }}>Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -446,6 +497,18 @@ export default function Vouchers() {
             </tbody>
           </table>
         </div>
+        {/* Pagination controls */}
+        {total > limit && (
+          <div style={{ padding: '12px 16px', background: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px', color: '#64748b' }}>
+            <span>Showing {page * limit + 1} to {Math.min((page + 1) * limit, total)} of {total} entries</span>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}
+                style={{ padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: '6px', background: page === 0 ? '#f1f5f9' : '#fff', cursor: page === 0 ? 'not-allowed' : 'pointer', color: '#475569' }}>Previous</button>
+              <button onClick={() => setPage(p => p + 1)} disabled={(page + 1) * limit >= total}
+                style={{ padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: '6px', background: (page + 1) * limit >= total ? '#f1f5f9' : '#fff', cursor: (page + 1) * limit >= total ? 'not-allowed' : 'pointer', color: '#475569' }}>Next</button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Create/Edit Modal ────────────────────────────────────────────── */}
@@ -460,7 +523,7 @@ export default function Vouchers() {
                 <div>
                   <label style={labelStyle}>Voucher Type</label>
                   <select value={form.voucher_type} onChange={e => setForm(f => ({ ...f, voucher_type: e.target.value }))}
-                    disabled={!!editingVoucher} style={inputStyle}>
+                    disabled={!!editingVoucher} title={editingVoucher ? "Voucher type cannot be changed after creation" : ""} style={inputStyle}>
                     {VOUCHER_TYPES.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
                   </select>
                 </div>
@@ -510,7 +573,7 @@ export default function Vouchers() {
                   <div>
                     <label style={labelStyle}>Select Party</label>
                     <select value={form.party_id} onChange={e => handlePartyChange(e.target.value)} style={inputStyle}>
-                      <option value="">— Select —</option>
+                      <option value="">{loadingParties ? 'Loading...' : '— Select —'}</option>
                       {getPartyList().map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
                   </div>
@@ -562,10 +625,11 @@ export default function Vouchers() {
                 </button>
                 <button 
                   type="submit" 
-                  className="px-5 py-2 rounded-lg border-none cursor-pointer bg-teal-600 hover:bg-teal-700 text-white font-semibold transition-colors text-sm"
+                  disabled={submitting}
+                  className={`px-5 py-2 rounded-lg border-none ${submitting ? 'bg-teal-400 cursor-wait' : 'cursor-pointer bg-teal-600 hover:bg-teal-700'} text-white font-semibold transition-colors text-sm`}
                 >
                   <Send size={14} style={{ verticalAlign: 'middle', marginRight: '6px' }} />
-                  {editingVoucher ? 'Update' : 'Submit for Approval'}
+                  {submitting ? 'Submitting...' : editingVoucher ? 'Update' : 'Submit for Approval'}
                 </button>
               </div>
             </form>
