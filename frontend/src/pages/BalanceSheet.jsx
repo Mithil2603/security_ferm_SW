@@ -12,18 +12,56 @@ export default function BalanceSheet() {
   const [success, setSuccess] = useState('');
   const [asOnDate, setAsOnDate] = useState(new Date().toISOString().split('T')[0]);
   const [compare, setCompare] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+
+  const fmt = (n) => {
+    const num = parseFloat(n || 0);
+    if (isNaN(num)) return '₹0';
+    return num.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+  };
+
+  const formatFinancialYear = (fy) => {
+    if (!fy) return '';
+    const startYear = new Date(fy.start).getFullYear();
+    const endYear = new Date(fy.end).getFullYear().toString().slice(2);
+    return `${startYear}-${endYear}`;
+  };
 
 
 
   const fetchBalanceSheet = async () => {
     setLoading(true); setError('');
+    
+    // M8: Date validation
+    if (new Date(asOnDate) > new Date()) {
+      setError('Future date not allowed');
+      setLoading(false);
+      return;
+    }
+    if (new Date(asOnDate) < new Date('2020-01-01')) {
+      setError('Date before company founding not allowed (Min: 2020-01-01)');
+      setLoading(false);
+      return;
+    }
+
     try {
       const params = new URLSearchParams({ as_on_date: asOnDate });
       if (compare) params.append('compare', 'true');
       const res = await api.get(`/balance-sheet?${params}`);
-      if (res.success) setData(res.data);
-      else setError(res.message);
+      
+      // H7: Error boundary
+      if (res.success) {
+        setData(res.data);
+        // M4: Compare toggle validation
+        if (compare && !res.data.previous) {
+          setError('Previous year data not available for comparison');
+          setCompare(false);
+        }
+      } else {
+        setError(res.message || 'Failed to fetch balance sheet');
+      }
     } catch (e) {
+      console.error('Fetch error:', e);
       setError(e.message || 'Failed to fetch balance sheet');
     }
     setLoading(false);
@@ -32,26 +70,35 @@ export default function BalanceSheet() {
   useEffect(() => { fetchBalanceSheet(); }, [asOnDate, compare]);
 
   const handleGenerate = async () => {
+    setArchiving(true);
+    setError('');
     try {
       const res = await api.post('/balance-sheet/generate', { as_on_date: asOnDate });
       if (res.success) setSuccess('Balance sheet archived successfully!');
       else setError(res.message);
     } catch (e) { 
       setError(e.message || 'Failed to generate'); 
+    } finally {
+      setArchiving(false);
     }
     setTimeout(() => setSuccess(''), 3000);
   };
-
-  const fmt = (n) => Number(n || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
-  const fmtNum = (n) => Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 
   const bs = data?.current;
   const prev = data?.previous;
 
   return (
     <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto' }}>
+      {/* L3: Print CSS */}
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+          body { background: white; }
+        }
+      `}</style>
+      
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+      <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h1 style={{ fontSize: '24px', fontWeight: 700, color: '#1e293b', margin: 0 }}>
             <BarChart3 size={24} style={{ verticalAlign: 'middle', marginRight: '8px' }} />
@@ -80,9 +127,19 @@ export default function BalanceSheet() {
           </button>
           <button 
             onClick={handleGenerate} 
-            className="px-4 py-2 rounded-lg border-none cursor-pointer bg-teal-600 hover:bg-teal-700 text-white font-semibold flex items-center gap-2 transition-colors text-sm"
+            disabled={archiving}
+            className={`px-4 py-2 rounded-lg border-none cursor-pointer font-semibold flex items-center gap-2 transition-colors text-sm ${
+              archiving ? 'bg-teal-400 text-teal-100 cursor-not-allowed' : 'bg-teal-600 hover:bg-teal-700 text-white'
+            }`}
           >
-            <Download size={14} /> Archive
+            {archiving ? <RefreshCw size={14} className="animate-spin" /> : <Download size={14} />} 
+            {archiving ? 'Archiving...' : 'Archive'}
+          </button>
+          <button 
+            onClick={() => window.print()}
+            className="px-4 py-2 rounded-lg border-none cursor-pointer bg-slate-600 hover:bg-slate-700 text-white font-semibold flex items-center gap-2 transition-colors text-sm"
+          >
+            <BarChart3 size={14} /> Print
           </button>
         </div>
       </div>
@@ -98,7 +155,7 @@ export default function BalanceSheet() {
       ) : (
         <>
           {/* Balance Check Banner */}
-          <div style={{
+          <div className="no-print" style={{
             padding: '14px 20px', borderRadius: '12px', marginBottom: '20px',
             background: bs.totals.is_balanced ? 'linear-gradient(135deg, #ecfdf5, #d1fae5)' : 'linear-gradient(135deg, #fef2f2, #fecaca)',
             border: `1px solid ${bs.totals.is_balanced ? '#86efac' : '#fca5a5'}`,
@@ -106,10 +163,10 @@ export default function BalanceSheet() {
           }}>
             <div>
               <span style={{ fontWeight: 700, color: bs.totals.is_balanced ? '#16a34a' : '#dc2626' }}>
-                {bs.totals.is_balanced ? '✅ Balance Sheet is Balanced' : '⚠️ Balance Sheet Mismatch'}
+                {bs.totals.is_balanced ? '✅ Balance Sheet is Balanced' : `⚠️ Balance Sheet Mismatch (Difference: ${fmt(bs.totals.difference)})`}
               </span>
               <span style={{ marginLeft: '12px', fontSize: '13px', color: '#64748b' }}>
-                FY: {bs.financial_year?.start} to {bs.financial_year?.end}
+                FY {formatFinancialYear(bs.financial_year)}
               </span>
             </div>
             <div style={{ fontWeight: 700, fontSize: '18px', color: '#1e293b' }}>
@@ -168,9 +225,6 @@ export default function BalanceSheet() {
                 <LineItem label="TDS Payable" amount={bs.liabilities.current_liabilities.tds_payable} />
                 <LineItem label="GST Payable" amount={bs.liabilities.current_liabilities.gst_payable} />
                 <LineItem label="Expense Payable" amount={bs.liabilities.current_liabilities.expense_payable} />
-                {bs.liabilities.current_liabilities.credit_notes > 0 && (
-                  <LineItem label="Credit Notes" amount={bs.liabilities.current_liabilities.credit_notes} />
-                )}
                 <div style={{ borderTop: '1px solid #e2e8f0', margin: '12px 0' }} />
 
                 {/* Capital */}
@@ -193,8 +247,14 @@ export default function BalanceSheet() {
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 function SectionHeader({ title, total, prev, compare }) {
-  const fmt = (n) => Number(n || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+  const fmt = (n) => {
+    const num = parseFloat(n || 0);
+    if (isNaN(num)) return '₹0';
+    return num.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+  };
   const change = compare && prev != null ? total - prev : null;
+  const pctChange = compare && prev != null && prev !== 0 ? ((total - prev) / Math.abs(prev) * 100).toFixed(1) : null;
+  
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '8px', marginTop: '8px' }}>
       <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: '#334155' }}>{title}</h3>
@@ -202,7 +262,7 @@ function SectionHeader({ title, total, prev, compare }) {
         <span style={{ fontWeight: 600, fontSize: '14px', fontFamily: 'monospace', color: '#1e293b' }}>{fmt(total)}</span>
         {change != null && (
           <div style={{ fontSize: '11px', color: change >= 0 ? '#16a34a' : '#dc2626' }}>
-            {change >= 0 ? '▲' : '▼'} {fmt(Math.abs(change))}
+            {change >= 0 ? '▲' : '▼'} {fmt(Math.abs(change))} {pctChange ? `(${pctChange}%)` : ''}
           </div>
         )}
       </div>
@@ -211,7 +271,11 @@ function SectionHeader({ title, total, prev, compare }) {
 }
 
 function LineItem({ label, amount, sub }) {
-  const fmt = (n) => Number(n || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+  const fmt = (n) => {
+    const num = parseFloat(n || 0);
+    if (isNaN(num)) return '₹0';
+    return num.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+  };
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0 4px 16px', fontSize: '13px' }}>
       <div>

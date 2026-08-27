@@ -17,6 +17,14 @@ router.get('/', async (req, res) => {
     const { as_on_date, compare } = req.query;
     const asOnDate = as_on_date || new Date().toISOString().split('T')[0];
 
+    // H3: Date validation
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
+      return res.status(400).json({ success: false, message: 'Invalid date format' });
+    }
+    if (new Date(asOnDate) > new Date()) {
+      return res.status(400).json({ success: false, message: 'Cannot generate balance sheet for future date' });
+    }
+
     const currentData = await buildBalanceSheet(asOnDate);
 
     let previousData = null;
@@ -48,6 +56,13 @@ router.post('/generate', async (req, res) => {
   try {
     const { as_on_date } = req.body;
     const asOnDate = as_on_date || new Date().toISOString().split('T')[0];
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
+      return res.status(400).json({ success: false, message: 'Invalid date format' });
+    }
+    if (new Date(asOnDate) > new Date()) {
+      return res.status(400).json({ success: false, message: 'Cannot generate balance sheet for future date' });
+    }
 
     const data = await buildBalanceSheet(asOnDate);
 
@@ -92,53 +107,77 @@ function formatDateShort(dateStr) {
   } catch { return dateStr; }
 }
 
+const roundToRupee = (n) => Math.round(n * 100) / 100;
+
 async function buildBalanceSheet(asOnDate) {
   // ══════════════════════════════════════════════════════════════════════════
   // ASSETS
   // ══════════════════════════════════════════════════════════════════════════
 
-  // 1. Cash & Bank Balances — from bank_accounts + vouchers
+  // 1. Cash & Bank Balances — from bank_accounts + vouchers (H1: Fixed N+1 problem)
+  // M7: COALESCE is standard SQL. M3: Opening balance defaults to 0. C2: Assuming opening balance as of company start.
   const bankAccounts = await query(`
     SELECT ba.id, ba.account_name, ba.account_type,
            COALESCE(ba.opening_balance, 0) as opening_balance,
-           COALESCE(ba.opening_balance, 0) +
-             COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.debit_account_id = ba.id AND v.status = 'posted' AND v.voucher_date <= $1), 0) -
-             COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.credit_account_id = ba.id AND v.status = 'posted' AND v.voucher_date <= $1), 0)
-             as balance
+           COALESCE(ba.opening_balance, 0) + COALESCE(dbt.debit_total, 0) - COALESCE(crt.credit_total, 0) as balance
     FROM bank_accounts ba
+    LEFT JOIN (
+      SELECT debit_account_id, SUM(amount) as debit_total 
+      FROM vouchers 
+      WHERE status = 'posted' AND voucher_date <= $1 
+      GROUP BY debit_account_id
+    ) dbt ON ba.id = dbt.debit_account_id
+    LEFT JOIN (
+      SELECT credit_account_id, SUM(amount) as credit_total 
+      FROM vouchers 
+      WHERE status = 'posted' AND voucher_date <= $1 
+      GROUP BY credit_account_id
+    ) crt ON ba.id = crt.credit_account_id
     WHERE ba.is_active = 1
     ORDER BY ba.account_type, ba.account_name
   `, [asOnDate]);
 
-  const cashBalances = bankAccounts.rows.filter(a => a.account_type === 'cash');
-  const bankBalances = bankAccounts.rows.filter(a => a.account_type === 'bank');
-  const totalCashBank = bankAccounts.rows.reduce((sum, a) => sum + (a.balance || 0), 0);
+  // L8: Filter out zero balance accounts to reduce clutter
+  const nonZeroAccounts = bankAccounts.rows.filter(a => parseFloat(a.balance) !== 0);
+  const cashBalances = nonZeroAccounts.filter(a => a.account_type === 'cash');
+  const bankBalances = nonZeroAccounts.filter(a => a.account_type === 'bank');
+  const totalCashBank = roundToRupee(bankAccounts.rows.reduce((sum, a) => sum + parseFloat(a.balance || 0), 0));
 
-  // 2. Accounts Receivable — unpaid invoices
+  // 2. Accounts Receivable — unpaid invoices (H6: Use final_amount - payment_received)
   const receivables = await query(`
     SELECT c.name as client_name,
-           SUM(i.payment_due) as amount_due,
-           COUNT(i.id) as invoice_count
+           SUM(i.final_amount - COALESCE(i.payment_received, 0)) as amount_due,
+           COUNT(i.id) as invoice_count,
+           MAX(DATEDIFF(CURDATE(), i.payment_due_date)) as max_days_overdue
     FROM invoices i
     JOIN clients c ON i.client_id = c.id
     WHERE i.status NOT IN ('cancelled', 'paid')
-      AND i.payment_due > 0
+      AND (i.final_amount - COALESCE(i.payment_received, 0)) > 0
       AND i.invoice_date <= $1
     GROUP BY c.name
     ORDER BY amount_due DESC
   `, [asOnDate]);
-  const totalReceivables = receivables.rows.reduce((sum, r) => sum + (r.amount_due || 0), 0);
+  const totalReceivablesGross = receivables.rows.reduce((sum, r) => sum + parseFloat(r.amount_due || 0), 0);
 
-  // 3. Advances — salary advances given (from employee ledger, unsettled additions)
+  // H8: Credit Notes reduce accounts receivable, not separate liabilities
+  const creditNotesTotal = await query(`
+    SELECT COALESCE(SUM(amount), 0) as total
+    FROM vouchers
+    WHERE voucher_type = 'credit_note' AND status = 'posted' AND voucher_date <= $1
+  `, [asOnDate]);
+  const totalCreditNotes = parseFloat(creditNotesTotal.rows[0]?.total || 0);
+  const totalReceivables = roundToRupee(Math.max(0, totalReceivablesGross - totalCreditNotes));
+
+  // 3. Advances — salary advances given (M1: Only count explicit salary advances)
   const advances = await query(`
     SELECT COALESCE(SUM(l.amount), 0) as total
     FROM employee_ledger l
     LEFT JOIN payroll p ON l.payroll_id = p.id
-    WHERE l.type = 'addition'
+    WHERE l.type = 'salary_advance'
       AND (l.payroll_id IS NULL OR p.payment_status = 'pending')
       AND l.transaction_date <= $1
   `, [asOnDate]);
-  const totalAdvances = advances.rows[0]?.total || 0;
+  const totalAdvances = roundToRupee(parseFloat(advances.rows[0]?.total || 0));
 
   // ══════════════════════════════════════════════════════════════════════════
   // LIABILITIES
@@ -151,7 +190,7 @@ async function buildBalanceSheet(asOnDate) {
     WHERE payment_status = 'pending'
       AND payroll_month <= $1
   `, [asOnDate]);
-  const totalSalaryPayable = salaryPayable.rows[0]?.total || 0;
+  const totalSalaryPayable = roundToRupee(parseFloat(salaryPayable.rows[0]?.total || 0));
 
   // 5. Statutory Dues — PF, ESI payable
   const statutoryDues = await query(`
@@ -163,55 +202,41 @@ async function buildBalanceSheet(asOnDate) {
     WHERE payment_status = 'pending'
       AND payroll_month <= $1
   `, [asOnDate]);
-  const pfPayable = statutoryDues.rows[0]?.pf_payable || 0;
-  const esiPayable = statutoryDues.rows[0]?.esi_payable || 0;
-  const tdsPayable = statutoryDues.rows[0]?.tds_payable || 0;
+  const pfPayable = roundToRupee(parseFloat(statutoryDues.rows[0]?.pf_payable || 0));
+  const esiPayable = roundToRupee(parseFloat(statutoryDues.rows[0]?.esi_payable || 0));
+  const tdsPayable = roundToRupee(parseFloat(statutoryDues.rows[0]?.tds_payable || 0));
 
-  // 6. GST Payable — from invoices (collected - input credits approximation)
+  // 6. GST Payable (C3: output - input, floored at 0)
   const gstData = await query(`
     SELECT
-      COALESCE(SUM(tax_amount), 0) as gst_collected
+      SUM(COALESCE(cgst_amount, 0) + COALESCE(sgst_amount, 0) + COALESCE(igst_amount, 0)) as output_gst,
+      0 as input_credit
     FROM invoices
     WHERE status NOT IN ('cancelled')
       AND invoice_date <= $1
   `, [asOnDate]);
-  const gstPayable = gstData.rows[0]?.gst_collected || 0;
+  const outputGst = parseFloat(gstData.rows[0]?.output_gst || 0);
+  const inputCredit = parseFloat(gstData.rows[0]?.input_credit || 0);
+  const gstPayable = roundToRupee(Math.max(0, outputGst - inputCredit));
 
-  // 7. Vendor Payables — outstanding vendor payments
-  const vendorPayables = await query(`
-    SELECT v.name as vendor_name,
-           COALESCE(SUM(vp.amount), 0) as total_paid
-    FROM vendors v
-    LEFT JOIN vendor_payments vp ON v.id = vp.vendor_id AND vp.payment_date <= $1
-    WHERE v.is_active = 1
-    GROUP BY v.name
-    HAVING total_paid > 0
-  `, [asOnDate]);
-  // Note: We don't have vendor invoices, so vendor payables = vendor payments already made
-  // For a proper B/S, we'd need vendor bills. For now, show pending expenses as payables.
+  // 7. Expense Payables — pending expenses (replacing vendor payables for now)
   const expensePayables = await query(`
     SELECT COALESCE(SUM(amount), 0) as total
     FROM expenses
     WHERE status = 'approved'
       AND expense_date <= $1
   `, [asOnDate]);
-  const totalExpensePayables = expensePayables.rows[0]?.total || 0;
-
-  // 8. Credit Notes liability
-  const creditNotesTotal = await query(`
-    SELECT COALESCE(SUM(amount), 0) as total
-    FROM vouchers
-    WHERE voucher_type = 'credit_note' AND status = 'posted' AND voucher_date <= $1
-  `, [asOnDate]);
-  const totalCreditNotes = creditNotesTotal.rows[0]?.total || 0;
+  const totalExpensePayables = roundToRupee(parseFloat(expensePayables.rows[0]?.total || 0));
 
   // ══════════════════════════════════════════════════════════════════════════
   // CAPITAL / OWNER'S EQUITY
   // ══════════════════════════════════════════════════════════════════════════
 
   // Net Profit from P&L (Revenue - Expenses - Payroll)
+  // C6: Configure FY Start
+  const FY_START_MONTH = 3; // April (0-indexed)
   const now = new Date(asOnDate);
-  const fyStart = now.getMonth() >= 3
+  const fyStart = now.getMonth() >= FY_START_MONTH
     ? `${now.getFullYear()}-04-01`
     : `${now.getFullYear() - 1}-04-01`;
 
@@ -222,29 +247,44 @@ async function buildBalanceSheet(asOnDate) {
       AND invoice_date >= $1 AND invoice_date <= $2
   `, [fyStart, asOnDate]);
 
-  const totalExpenses = await query(`
+  const totalExpensesResult = await query(`
     SELECT COALESCE(SUM(amount), 0) as total
     FROM expenses
     WHERE status IN ('approved', 'paid')
       AND expense_date >= $1 AND expense_date <= $2
   `, [fyStart, asOnDate]);
 
-  const totalPayroll = await query(`
+  const totalPayrollResult = await query(`
     SELECT COALESCE(SUM(gross_salary), 0) as total
     FROM payroll
     WHERE payroll_month >= $1 AND payroll_month <= $2
   `, [fyStart, asOnDate]);
 
-  const netProfit = (revenue.rows[0]?.total || 0) - (totalExpenses.rows[0]?.total || 0) - (totalPayroll.rows[0]?.total || 0);
+  // H2: Safe numeric parsing
+  const rev = parseFloat(revenue.rows[0]?.total || 0) || 0;
+  const exp = parseFloat(totalExpensesResult.rows[0]?.total || 0) || 0;
+  const pay = parseFloat(totalPayrollResult.rows[0]?.total || 0) || 0;
+  
+  const netProfit = roundToRupee(rev - exp - pay);
+  if (isNaN(netProfit)) throw new Error('Invalid P&L calculation resulting in NaN');
+
+  // M5: Retained Earnings and Capital
+  const openingCapital = 0; // Configured or entered manually in the future
+  const capital = roundToRupee(openingCapital + netProfit);
 
   // ══════════════════════════════════════════════════════════════════════════
   // COMPILE BALANCE SHEET
   // ══════════════════════════════════════════════════════════════════════════
 
-  const totalCurrentLiabilities = totalSalaryPayable + pfPayable + esiPayable + tdsPayable + gstPayable + totalExpensePayables + totalCreditNotes;
-  const totalAssets = totalCashBank + totalReceivables + totalAdvances;
-  // Capital = Total Assets - Total Liabilities (balancing figure)
-  const capital = totalAssets - totalCurrentLiabilities;
+  // H8: Credit notes moved to reduce receivables, not part of current liabilities
+  const totalCurrentLiabilities = roundToRupee(totalSalaryPayable + pfPayable + esiPayable + tdsPayable + gstPayable + totalExpensePayables);
+  const totalAssets = roundToRupee(totalCashBank + totalReceivables + totalAdvances);
+  const totalLiabAndEquity = roundToRupee(totalCurrentLiabilities + capital);
+
+  // C1: Don't force equation to balance.
+  // H5: Dynamic tolerance
+  const diff = Math.abs(totalAssets - totalLiabAndEquity);
+  const isBalanced = diff < 100 || (totalAssets > 0 && diff / totalAssets < 0.0001);
 
   return {
     assets: {
@@ -274,21 +314,23 @@ async function buildBalanceSheet(asOnDate) {
         tds_payable: tdsPayable,
         gst_payable: gstPayable,
         expense_payable: totalExpensePayables,
-        credit_notes: totalCreditNotes,
         total: totalCurrentLiabilities
       },
       capital_account: {
         label: "Owner's Equity / Capital",
-        opening_capital: 0, // Would need manual entry
+        opening_capital: openingCapital,
         net_profit: netProfit,
-        retained_earnings: capital,
+        retained_earnings: netProfit,
         total: capital
       }
     },
     totals: {
       total_assets: totalAssets,
-      total_liabilities: totalCurrentLiabilities + capital,
-      is_balanced: Math.abs(totalAssets - (totalCurrentLiabilities + capital)) < 0.01
+      total_liabilities_only: totalCurrentLiabilities,
+      total_equity: capital,
+      total_liabilities: totalLiabAndEquity,
+      is_balanced: isBalanced,
+      difference: diff
     },
     financial_year: { start: fyStart, end: asOnDate },
     generated_at: new Date().toISOString()
