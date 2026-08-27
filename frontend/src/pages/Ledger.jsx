@@ -7,45 +7,56 @@ export default function Ledger() {
   const [employees, setEmployees] = useState([]);
   const [balances, setBalances] = useState({});
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(''); // C6
   const [search, setSearch] = useState('');
+
+  // Add Transaction Modal
+  const [catError, setCatError] = useState(''); // H5
 
   // Selected Employee Ledger View
   const [selectedEmp, setSelectedEmp] = useState(null);
   const [ledgerEntries, setLedgerEntries] = useState([]);
   const [loadingLedger, setLoadingLedger] = useState(false);
 
-  // Add Transaction Modal
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [categories, setCategories] = useState([]);
   const [submitting, setSubmitting] = useState(false);
-  const [form, setForm] = useState({
+  const [deleteId, setDeleteId] = useState(null); // H7, L6
+  
+  const getInitialForm = () => ({ // M5: Full form reset helper
     transaction_date: format(new Date(), 'yyyy-MM-dd'),
     type: '',
     category: '',
     amount: '',
     description: ''
   });
+  const [form, setForm] = useState(getInitialForm());
 
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [empRes, ledgerRes] = await Promise.all([
-        api.get('/employees?status=1&limit=1000'),
-        api.get('/ledger?status=unsettled')
+      setError('');
+      const [empRes, balRes] = await Promise.all([
+        api.get('/employees?status=1&limit=5000'), // L2: Increased limit
+        api.get('/ledger/balances') // C1: Use separate balances endpoint
       ]);
       setEmployees(empRes.data || []);
       
       const balMap = {};
-      (ledgerRes.balances || []).forEach(b => {
+      (balRes.balances || []).forEach(b => {
+        // C3: Safe parsing
+        const additions = parseFloat(b.total_additions) || 0;
+        const deductions = parseFloat(b.total_deductions) || 0;
         balMap[b.employee_id] = {
-          additions: parseFloat(b.total_additions),
-          deductions: parseFloat(b.total_deductions),
-          net: parseFloat(b.total_additions) - parseFloat(b.total_deductions)
+          additions,
+          deductions,
+          net: additions - deductions
         };
       });
       setBalances(balMap);
     } catch (err) {
       console.error(err);
+      setError(err.message || 'Failed to fetch ledger data'); // C6
     } finally {
       setLoading(false);
     }
@@ -53,9 +64,11 @@ export default function Ledger() {
 
   const fetchCategories = async () => {
     try {
+      setCatError('');
       const res = await api.get('/settings/system/payroll_adjustment_categories');
       setCategories(JSON.parse(res.data || '[]'));
     } catch (err) {
+      setCatError('Failed to load categories'); // H5
       setCategories([]);
     }
   };
@@ -79,11 +92,11 @@ export default function Ledger() {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Delete this unsettled transaction?')) return;
     try {
       await api.delete(`/ledger/${id}`);
       setLedgerEntries(ledgerEntries.filter(e => e.id !== id));
       fetchData(); // refresh balances
+      setDeleteId(null);
     } catch (err) {
       alert(err.response?.data?.message || 'Failed to delete');
     }
@@ -91,19 +104,35 @@ export default function Ledger() {
 
   const handleAddSubmit = async (e) => {
     e.preventDefault();
+    
+    // M3: Validate amount
+    const amt = parseFloat(form.amount);
+    if (!amt || amt < 1) {
+      alert('Amount must be at least ₹1');
+      return;
+    }
+
+    // C4: Safe JSON parse
+    let cat;
+    try {
+      cat = JSON.parse(form.category);
+    } catch (err) {
+      alert('Invalid category format');
+      return;
+    }
+
     setSubmitting(true);
     try {
-      const cat = JSON.parse(form.category);
       await api.post('/ledger', {
         employee_id: selectedEmp.id,
         transaction_date: form.transaction_date,
         type: cat.type,
         category: cat.name,
-        amount: parseFloat(form.amount),
+        amount: amt,
         description: form.description
       });
       setIsAddModalOpen(false);
-      setForm({ ...form, category: '', amount: '', description: '' });
+      setForm(getInitialForm()); // M5: Full reset
       openLedger(selectedEmp);
       fetchData();
     } catch (err) {
@@ -111,6 +140,22 @@ export default function Ledger() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  // M8: Export CSV
+  const handleExport = () => {
+    if (!selectedEmp || ledgerEntries.length === 0) return;
+    let csv = 'Date,Type,Category,Amount,Status,Description\n';
+    ledgerEntries.forEach(e => {
+      const status = e.payroll_id ? 'Settled (Pending)' : 'Unsettled';
+      csv += `"${format(new Date(e.transaction_date), 'yyyy-MM-dd')}","${e.type}","${e.category}",${e.amount},"${status}","${e.description || ''}"\n`;
+    });
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${selectedEmp.full_name}_Ledger.csv`;
+    a.click();
   };
 
   const filteredEmployees = employees.filter(e => 
@@ -142,6 +187,7 @@ export default function Ledger() {
                 className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
               />
             </div>
+            {error && <div className="mt-2 text-xs text-red-600 bg-red-50 p-2 rounded border border-red-100">{error}</div>}
           </div>
           <div className="flex-1 overflow-y-auto p-2 min-h-0">
             {loading ? (
@@ -165,8 +211,9 @@ export default function Ledger() {
                         <div className="font-medium text-slate-800 text-sm">{emp.full_name}</div>
                         <div className="text-xs text-slate-500">{emp.employee_id}</div>
                       </div>
+                      {/* L8: Standardized currency format */}
                       <div className={`text-sm font-bold ${bal.net > 0 ? 'text-emerald-600' : bal.net < 0 ? 'text-red-600' : 'text-slate-400'}`}>
-                        {bal.net > 0 ? '+' : ''}{bal.net !== 0 ? `₹${Math.abs(bal.net)}` : '-'}
+                        {bal.net > 0 ? '+' : (bal.net < 0 ? '-' : '')}₹{Math.abs(bal.net).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                       </div>
                     </button>
                   );
@@ -180,17 +227,33 @@ export default function Ledger() {
         <div className="w-full lg:w-2/3 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col h-[calc(100vh-200px)]">
           {selectedEmp ? (
             <>
-              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <div className="p-6 border-b border-slate-100 flex flex-wrap gap-4 justify-between items-center bg-slate-50">
                 <div>
                   <h2 className="text-lg font-bold text-slate-800">{selectedEmp.full_name}</h2>
                   <p className="text-sm text-slate-500">Unsettled Ledger Balance</p>
                 </div>
-                <button 
-                  onClick={() => setIsAddModalOpen(true)}
-                  className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 shadow-sm"
-                >
-                  <Plus className="w-4 h-4" /> Add Transaction
-                </button>
+                
+                {/* L3: Unsettled Balance Summary */}
+                {balances[selectedEmp.id]?.net !== 0 && (
+                  <div className={`px-4 py-2 rounded-lg border ${balances[selectedEmp.id]?.net > 0 ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+                    <div className="text-xs font-bold uppercase">Total Unsettled</div>
+                    <div className="text-lg font-bold">
+                      {balances[selectedEmp.id]?.net > 0 ? '+' : '-'}₹{Math.abs(balances[selectedEmp.id]?.net || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                    </div>
+                  </div>
+                )}
+                
+                <div className="flex gap-2">
+                  <button onClick={handleExport} className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm">
+                    Export CSV
+                  </button>
+                  <button 
+                    onClick={() => setIsAddModalOpen(true)}
+                    className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 shadow-sm"
+                  >
+                    <Plus className="w-4 h-4" /> Add Transaction
+                  </button>
+                </div>
               </div>
               <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50 min-h-0">
                 {loadingLedger ? (
@@ -219,12 +282,15 @@ export default function Ledger() {
                         </div>
                         <div className="flex items-center gap-4">
                           <div className={`font-bold ${entry.type === 'addition' ? 'text-emerald-600' : 'text-red-600'}`}>
-                            {entry.type === 'addition' ? '+' : '-'}₹{parseFloat(entry.amount).toLocaleString('en-IN')}
+                            {entry.type === 'addition' ? '+' : '-'}₹{parseFloat(entry.amount).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                           </div>
                           {entry.payroll_id ? (
-                            <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-700 px-2 py-1 rounded">Pending in {format(new Date(entry.payroll_month), 'MMM yyyy')}</span>
+                            // M7: Safe date parsing for payroll_month
+                            <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-700 px-2 py-1 rounded">
+                              Pending in {format(new Date(entry.payroll_month + (entry.payroll_month.length === 7 ? '-01' : '')), 'MMM yyyy')}
+                            </span>
                           ) : (
-                            <button onClick={() => handleDelete(entry.id)} className="text-slate-400 hover:text-red-500 p-2 rounded-lg hover:bg-red-50 transition-colors">
+                            <button onClick={() => setDeleteId(entry.id)} className="text-slate-400 hover:text-red-500 p-2 rounded-lg hover:bg-red-50 transition-colors">
                               <Trash2 className="w-4 h-4" />
                             </button>
                           )}
@@ -260,6 +326,9 @@ export default function Ledger() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Category</label>
+                {catError ? (
+                  <div className="text-xs text-red-600 mb-2">{catError}</div>
+                ) : null}
                 <select value={form.category} onChange={e => setForm({...form, category: e.target.value})} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent" required>
                   <option value="">Select category...</option>
                   {categories.map((c, i) => (
@@ -282,6 +351,19 @@ export default function Ledger() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* L2: Confirm Delete Modal */}
+      {deleteId && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6 text-center animate-slide-up">
+            <h3 className="text-lg font-bold text-slate-800 mb-2">Delete Transaction?</h3>
+            <p className="text-sm text-slate-500 mb-6">Are you sure you want to delete this ledger entry? This action cannot be undone.</p>
+            <div className="flex justify-center gap-3">
+              <button onClick={() => setDeleteId(null)} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200">Cancel</button>
+              <button onClick={() => handleDelete(deleteId)} className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700">Delete</button>
+            </div>
           </div>
         </div>
       )}
