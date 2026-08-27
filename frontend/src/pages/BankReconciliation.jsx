@@ -11,12 +11,15 @@ export default function BankReconciliation() {
   const [entries, setEntries] = useState([]);
   const [summary, setSummary] = useState(null);
   const [brs, setBrs] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loadingEntries, setLoadingEntries] = useState(false); // L8: Separate loading states
+  const [loadingBRS, setLoadingBRS] = useState(false);
+  const [reconciling, setReconciling] = useState(false); // H7, M8: Loading state for reconciliation
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [showReconciled, setShowReconciled] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('all'); // L2: Drill down from summary
   const [selectedEntries, setSelectedEntries] = useState(new Set());
   const [activeTab, setActiveTab] = useState('reconcile'); // 'reconcile' | 'brs'
 
@@ -31,13 +34,14 @@ export default function BankReconciliation() {
   const fetchAccounts = async () => {
     try {
       const res = await api.get(`/bank-accounts?active_only=true`);
-      const data = res;
-      if (data.success) {
-        setAccounts(data.data);
-        if (!selectedAccount && data.data.length > 0) {
+      if (res.success) {
+        // M4: Filter inactive accounts
+        const activeAccounts = res.data.filter(a => a.is_active !== 0 && a.is_active !== false);
+        setAccounts(activeAccounts);
+        if (!selectedAccount && activeAccounts.length > 0) {
           // Select first bank-type account by default
-          const bankAcc = data.data.find(a => a.account_type === 'bank');
-          setSelectedAccount(bankAcc?.id || data.data[0].id);
+          const bankAcc = activeAccounts.find(a => a.account_type === 'bank');
+          setSelectedAccount(bankAcc?.id || activeAccounts[0].id);
         }
       }
     } catch (e) { setError('Failed to fetch bank accounts'); }
@@ -45,34 +49,42 @@ export default function BankReconciliation() {
 
   const fetchEntries = async () => {
     if (!selectedAccount) return;
-    setLoading(true); setError('');
+    setLoadingEntries(true); setError('');
     try {
       const params = new URLSearchParams();
       if (fromDate) params.append('from_date', fromDate);
       if (toDate) params.append('to_date', toDate);
       if (showReconciled) params.append('show_reconciled', 'true');
       const res = await api.get(`/bank-reconciliation/${selectedAccount}?${params}`);
-      const data = res;
-      if (data.success) {
-        setEntries(data.data.entries);
-        setSummary(data.data.summary);
-      } else setError(data.message);
-    } catch (e) { setError('Failed to fetch entries'); }
-    setLoading(false);
+      
+      if (res.success) {
+        setEntries(res.data.entries);
+        setSummary(res.data.summary);
+      } else {
+        setError(res.message);
+      }
+    } catch (e) { 
+      // H3: Better error handling
+      console.error('Fetch entries error:', e);
+      setError(e.response?.data?.message || e.message || 'Failed to fetch entries'); 
+    }
+    setLoadingEntries(false);
   };
 
   const fetchBRS = async () => {
     if (!selectedAccount) return;
-    setLoading(true); setError('');
+    setLoadingBRS(true); setError('');
     try {
       const params = new URLSearchParams();
       if (toDate) params.append('as_on_date', toDate);
       const res = await api.get(`/bank-reconciliation/statement/${selectedAccount}?${params}`);
-      const data = res;
-      if (data.success) setBrs(data.data);
-      else setError(data.message);
-    } catch (e) { setError('Failed to fetch BRS'); }
-    setLoading(false);
+      if (res.success) setBrs(res.data);
+      else setError(res.message);
+    } catch (e) { 
+      console.error('Fetch BRS error:', e);
+      setError(e.message || 'Failed to fetch BRS'); 
+    }
+    setLoadingBRS(false);
   };
 
   useEffect(() => { fetchAccounts(); }, []);
@@ -103,20 +115,29 @@ export default function BankReconciliation() {
 
   const handleReconcile = async () => {
     if (selectedEntries.size === 0) { setError('Select entries to reconcile'); return; }
+    // C4, H5: Validate bank statement date (using toDate as proxy)
+    if (!toDate) { setError('Bank statement date (To Date) is required to reconcile'); return; }
+    
+    setReconciling(true); // H7
     try {
       const entriesToReconcile = Array.from(selectedEntries).map(vid => ({
         voucher_id: vid,
         bank_account_id: parseInt(selectedAccount),
-        bank_statement_date: toDate || new Date().toISOString().split('T')[0],
+        bank_statement_date: toDate,
       }));
       const res = await api.post(`/bank-reconciliation/reconcile`, { entries: entriesToReconcile });
-      const data = res;
-      if (data.success) {
-        setSuccess(data.message);
+      
+      if (res.success) {
+        setSuccess(res.message);
         setSelectedEntries(new Set());
         fetchEntries();
-      } else setError(data.message);
-    } catch (e) { setError('Failed to reconcile'); }
+      } else setError(res.message);
+    } catch (e) { 
+      console.error(e);
+      setError(e.message || 'Failed to reconcile'); 
+    } finally {
+      setReconciling(false);
+    }
     setTimeout(() => setSuccess(''), 3000);
   };
 
@@ -134,29 +155,68 @@ export default function BankReconciliation() {
 
   const handleAddAccount = async (e) => {
     e.preventDefault();
+    
+    // C6: Modal validation
+    if (accountForm.opening_balance && !accountForm.opening_balance_date) {
+      setError('Opening balance date required when opening balance is specified');
+      return;
+    }
+    if (accountForm.opening_balance_date && new Date(accountForm.opening_balance_date) > new Date()) {
+      setError('Opening date cannot be in the future');
+      return;
+    }
+    
+    // L6: IFSC validation
+    if (accountForm.account_type === 'bank' && accountForm.ifsc_code && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(accountForm.ifsc_code)) {
+      setError('Invalid IFSC format (e.g. HDFC0001234)');
+      return;
+    }
+
     try {
       const res = await api.post(`/bank-accounts`, {
         ...accountForm,
         opening_balance: parseFloat(accountForm.opening_balance) || 0
       });
-      const data = res;
-      if (data.success) {
+      if (res.success) {
         setSuccess('Bank account added');
         setShowAddAccount(false);
         setAccountForm({ account_name: '', account_type: 'bank', account_number: '', bank_name: '', ifsc_code: '', branch: '', opening_balance: 0, opening_balance_date: '' });
         fetchAccounts();
-      } else setError(data.message);
+      } else setError(res.message);
     } catch (e) { setError('Failed to add account'); }
     setTimeout(() => setSuccess(''), 3000);
   };
 
-  const fmt = (n) => Number(n || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+  // M2: Handle NaN in fmt
+  const fmt = (n) => {
+    const num = parseFloat(n || 0);
+    if (isNaN(num)) return '₹0';
+    if (num >= 10000000) return `₹${(num / 10000000).toFixed(2)}Cr`;
+    return num.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+  };
+  
   const currentAccount = accounts.find(a => a.id === parseInt(selectedAccount));
+
+  // Filter entries based on statusFilter (L2)
+  const filteredEntries = entries.filter(e => {
+    if (statusFilter === 'reconciled') return e.is_reconciled;
+    if (statusFilter === 'unreconciled') return !e.is_reconciled;
+    return true;
+  });
 
   return (
     <div style={{ padding: '24px', maxWidth: '1400px', margin: '0 auto' }}>
+      {/* L4: Print CSS */}
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+          body { background: white; }
+          .print-container { max-width: 100% !important; margin: 0 !important; padding: 0 !important; }
+        }
+      `}</style>
+      
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+      <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h1 style={{ fontSize: '24px', fontWeight: 700, color: '#1e293b', margin: 0 }}>
             <Landmark size={24} style={{ verticalAlign: 'middle', marginRight: '8px' }} />
@@ -175,12 +235,14 @@ export default function BankReconciliation() {
       </div>
 
       {/* Alerts */}
-      {error && <div style={{ padding: '10px 16px', background: '#fef2f2', color: '#dc2626', borderRadius: '8px', marginBottom: '12px' }}>{error}
-        <button onClick={() => setError('')} style={{ float: 'right', background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }}>✕</button></div>}
-      {success && <div style={{ padding: '10px 16px', background: '#f0fdf4', color: '#16a34a', borderRadius: '8px', marginBottom: '12px' }}>{success}</div>}
+      <div className="no-print">
+        {error && <div style={{ padding: '10px 16px', background: '#fef2f2', color: '#dc2626', borderRadius: '8px', marginBottom: '12px' }}>{error}
+          <button onClick={() => setError('')} style={{ float: 'right', background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }}>✕</button></div>}
+        {success && <div style={{ padding: '10px 16px', background: '#f0fdf4', color: '#16a34a', borderRadius: '8px', marginBottom: '12px' }}>{success}</div>}
+      </div>
 
       {/* Account Selector + Filters */}
-      <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+      <div className="no-print" style={{ display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
         <select value={selectedAccount} onChange={e => setSelectedAccount(e.target.value)}
           style={{ padding: '10px 14px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '13px', minWidth: '250px', fontWeight: 600 }}>
           <option value="">Select Bank Account</option>
@@ -220,14 +282,15 @@ export default function BankReconciliation() {
       {summary && activeTab === 'reconcile' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '12px', marginBottom: '16px' }}>
           {[
-            { label: 'Book Balance', value: fmt(summary.book_balance), color: '#0f3460' },
-            { label: 'Total Entries', value: summary.total_entries, color: '#6366f1' },
-            { label: 'Reconciled', value: summary.reconciled_count, color: '#22c55e' },
-            { label: 'Unreconciled', value: summary.unreconciled_count, color: '#f59e0b' },
+            { label: 'Book Balance', value: fmt(summary.book_balance), color: '#0f3460', filter: 'all' },
+            { label: 'Total Entries', value: summary.total_entries, color: '#6366f1', filter: 'all' },
+            { label: 'Reconciled', value: summary.reconciled_count, color: '#22c55e', filter: 'reconciled' },
+            { label: 'Unreconciled', value: summary.unreconciled_count, color: '#f59e0b', filter: 'unreconciled' },
           ].map((c, i) => (
-            <div key={i} style={{
-              padding: '14px', borderRadius: '10px', background: '#fff',
-              border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
+            <div key={i} onClick={() => setStatusFilter(c.filter)} style={{ // L2: drill-down
+              padding: '14px', borderRadius: '10px', background: statusFilter === c.filter ? '#f8fafc' : '#fff',
+              border: `1px solid ${statusFilter === c.filter ? c.color : '#e2e8f0'}`, boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+              cursor: 'pointer', transition: 'all 0.2s'
             }}>
               <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>{c.label}</div>
               <div style={{ fontSize: '20px', fontWeight: 700, color: c.color, marginTop: '4px' }}>{c.value}</div>
@@ -245,13 +308,19 @@ export default function BankReconciliation() {
               display: 'flex', justifyContent: 'space-between', alignItems: 'center'
             }}>
               <span style={{ fontWeight: 600, color: '#6366f1' }}>{selectedEntries.size} entries selected</span>
-              <button 
-                onClick={handleReconcile} 
-                className="px-5 py-2 rounded-lg border-none cursor-pointer bg-teal-600 hover:bg-teal-700 text-white font-semibold transition-colors text-sm"
-              >
-                <CheckCircle size={14} style={{ verticalAlign: 'middle', marginRight: '6px' }} />
-                Reconcile Selected
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                {!toDate && <span style={{ fontSize: '12px', color: '#dc2626' }}>Select 'To Date' first</span>}
+                <button 
+                  onClick={handleReconcile} 
+                  disabled={reconciling || !toDate}
+                  className={`px-5 py-2 rounded-lg border-none font-semibold transition-colors text-sm flex items-center ${
+                    reconciling || !toDate ? 'bg-teal-300 text-teal-50 cursor-not-allowed' : 'bg-teal-600 hover:bg-teal-700 text-white cursor-pointer'
+                  }`}
+                >
+                  {reconciling ? <RefreshCw size={14} className="animate-spin" style={{ marginRight: '6px' }} /> : <CheckCircle size={14} style={{ verticalAlign: 'middle', marginRight: '6px' }} />}
+                  {reconciling ? 'Reconciling...' : 'Reconcile Selected'}
+                </button>
+              </div>
             </div>
           )}
 
@@ -276,13 +345,13 @@ export default function BankReconciliation() {
                   </tr>
                 </thead>
                 <tbody>
-                  {loading ? (
-                    <tr><td colSpan="10" style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>Loading...</td></tr>
-                  ) : entries.length === 0 ? (
+                  {loadingEntries ? (
+                    <tr><td colSpan="10" style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>Loading entries...</td></tr>
+                  ) : filteredEntries.length === 0 ? (
                     <tr><td colSpan="10" style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>
-                      {!selectedAccount ? 'Select a bank account to begin' : 'No entries found'}
+                      {!selectedAccount ? 'Select a bank account to begin' : 'No entries found matching filters'}
                     </td></tr>
-                  ) : entries.map(entry => (
+                  ) : filteredEntries.map(entry => (
                     <tr key={entry.id} style={{ borderBottom: '1px solid #f1f5f9', background: entry.is_reconciled ? '#f0fdf4' : 'transparent' }}>
                       <td style={tdStyle}>
                         {!entry.is_reconciled && (
@@ -327,13 +396,24 @@ export default function BankReconciliation() {
       )}
 
       {/* BRS Statement Tab */}
-      {activeTab === 'brs' && brs && (
-        <div style={{ background: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-          <div style={{ padding: '20px', background: 'linear-gradient(135deg, #0f3460, #16213e)', color: '#fff' }}>
-            <h2 style={{ margin: 0, fontSize: '18px' }}>Bank Reconciliation Statement</h2>
-            <p style={{ margin: '4px 0 0', opacity: 0.8, fontSize: '13px' }}>
-              {brs.account.account_name} — As on {new Date(brs.as_on_date).toLocaleDateString('en-IN')}
-            </p>
+      {activeTab === 'brs' && (
+        loadingBRS ? (
+          <div style={{ textAlign: 'center', padding: '60px', color: '#94a3b8' }}>Loading BRS statement...</div>
+        ) : brs && (
+        <div className="print-container" style={{ background: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+          <div style={{ padding: '20px', background: 'linear-gradient(135deg, #0f3460, #16213e)', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <h2 style={{ margin: 0, fontSize: '18px' }}>Bank Reconciliation Statement</h2>
+              <p style={{ margin: '4px 0 0', opacity: 0.8, fontSize: '13px' }}>
+                {brs.account.account_name} — As on {new Date(brs.as_on_date).toLocaleDateString('en-IN')}
+              </p>
+            </div>
+            <button 
+              onClick={() => window.print()}
+              className="no-print px-3 py-1.5 rounded-lg border-none cursor-pointer bg-white/20 hover:bg-white/30 text-white font-semibold transition-colors text-xs flex items-center gap-1"
+            >
+              Print BRS
+            </button>
           </div>
           <div style={{ padding: '24px' }}>
             {/* Summary table */}
@@ -347,7 +427,7 @@ export default function BankReconciliation() {
                 </tr>
                 <tr style={{ borderBottom: '1px solid #e2e8f0', background: '#f0fdf4' }}>
                   <td style={{ padding: '12px 16px' }}>
-                    <strong style={{ color: '#16a34a' }}>Add:</strong> Cheques issued but not yet presented
+                    <strong style={{ color: '#16a34a' }}>Add:</strong> Cheques Issued (Expenses) Not Yet Presented
                     <span style={{ color: '#64748b', fontSize: '12px', marginLeft: '6px' }}>({brs.cheques_not_presented.items.length} items)</span>
                   </td>
                   <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'monospace', color: '#16a34a' }}>
@@ -356,7 +436,7 @@ export default function BankReconciliation() {
                 </tr>
                 <tr style={{ borderBottom: '1px solid #e2e8f0', background: '#fef2f2' }}>
                   <td style={{ padding: '12px 16px' }}>
-                    <strong style={{ color: '#dc2626' }}>Less:</strong> Deposits in transit / not yet credited
+                    <strong style={{ color: '#dc2626' }}>Less:</strong> Deposits Received (Income) Not Yet Cleared
                     <span style={{ color: '#64748b', fontSize: '12px', marginLeft: '6px' }}>({brs.deposits_not_cleared.items.length} items)</span>
                   </td>
                   <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'monospace', color: '#dc2626' }}>
@@ -377,7 +457,7 @@ export default function BankReconciliation() {
             {/* Detail sections */}
             {brs.cheques_not_presented.items.length > 0 && (
               <div style={{ marginTop: '24px' }}>
-                <h3 style={{ fontSize: '14px', color: '#16a34a', marginBottom: '8px' }}>Cheques Not Yet Presented</h3>
+                <h3 style={{ fontSize: '14px', color: '#16a34a', marginBottom: '8px' }}>Cheques Issued (Expenses) Not Yet Presented</h3>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
                   <thead>
                     <tr style={{ background: '#f8fafc' }}>
@@ -402,7 +482,7 @@ export default function BankReconciliation() {
 
             {brs.deposits_not_cleared.items.length > 0 && (
               <div style={{ marginTop: '24px' }}>
-                <h3 style={{ fontSize: '14px', color: '#dc2626', marginBottom: '8px' }}>Deposits Not Yet Cleared</h3>
+                <h3 style={{ fontSize: '14px', color: '#dc2626', marginBottom: '8px' }}>Deposits Received (Income) Not Yet Cleared</h3>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
                   <thead>
                     <tr style={{ background: '#f8fafc' }}>
@@ -426,6 +506,7 @@ export default function BankReconciliation() {
             )}
           </div>
         </div>
+        )
       )}
 
       {/* Add Bank Account Modal */}
