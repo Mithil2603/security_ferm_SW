@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Target, TrendingUp, AlertTriangle, Plus, Trash2 } from 'lucide-react';
+import { Target, TrendingUp, AlertTriangle, Plus, Trash2, CheckCircle } from 'lucide-react';
 import api from '../services/api';
 
 export default function Budgets() {
@@ -7,6 +7,9 @@ export default function Budgets() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(''); // M2, H3: Error state
+  const [success, setSuccess] = useState(''); // L5: Success toast
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null); // L2: Modal-based confirm
   
   const currentYear = new Date().getFullYear();
   const [form, setForm] = useState({
@@ -28,16 +31,19 @@ export default function Budgets() {
   const fetchData = async () => {
     try {
       setLoading(true);
+      setError('');
       const [budRes, cliRes, venRes] = await Promise.all([
         api.get('/budgets/vs-actual'),
         api.get('/clients'),
         api.get('/vendors')
       ]);
       setBudgets(budRes.data || []);
-      setClients(cliRes.data || []);
-      setVendors(venRes.data || []);
+      // L7: Filter active entities
+      setClients((cliRes.data || []).filter(c => c.is_active !== 0 && c.is_active !== false));
+      setVendors((venRes.data || []).filter(v => v.is_active !== 0 && v.is_active !== false));
     } catch (err) {
       console.error(err);
+      setError(err.response?.data?.message || err.message || 'Failed to load budgets'); // M2
     } finally {
       setLoading(false);
     }
@@ -45,29 +51,47 @@ export default function Budgets() {
 
   const handleSave = async (e) => {
     e.preventDefault();
+    setError('');
+    
+    // C4: Validate dates
+    if (new Date(form.period_start) > new Date(form.period_end)) {
+      setError('Start date must be before end date');
+      return;
+    }
+    
     setSaving(true);
     try {
       await api.post('/budgets', form);
-      setShowModal(false);
-      setForm({
-        entity_type: 'client', entity_id: '', budget_category: '', amount: '',
-        period_start: `${currentYear}-04-01`, period_end: `${currentYear + 1}-03-31`
-      });
+      setSuccess('Budget created successfully!'); // L5
+      setTimeout(() => setSuccess(''), 3000);
+      handleCloseModal();
       fetchData();
     } catch (err) {
-      alert(err.message || 'Failed to save budget');
+      setError(err.response?.data?.message || err.message || 'Failed to save budget'); // H3
     } finally {
       setSaving(false);
     }
   };
 
-  const handleDelete = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this budget?')) return;
+  const handleCloseModal = () => { // H8: Reset state on close
+    setShowModal(false);
+    setForm({
+      entity_type: 'client', entity_id: '', budget_category: '', amount: '',
+      period_start: `${currentYear}-04-01`, period_end: `${currentYear + 1}-03-31`
+    });
+    setError('');
+  };
+
+  const handleDelete = async (id) => { // L2: Modal-based confirm handler
     try {
       await api.delete(`/budgets/${id}`);
+      setSuccess('Budget deleted successfully');
+      setTimeout(() => setSuccess(''), 3000);
       fetchData();
     } catch (err) {
-      alert('Failed to delete');
+      setError(err.response?.data?.message || 'Failed to delete');
+    } finally {
+      setConfirmDeleteId(null);
     }
   };
 
@@ -95,6 +119,14 @@ export default function Budgets() {
           <Plus className="w-4 h-4" /> Set Budget
         </button>
       </div>
+      
+      {/* Alerts */}
+      {error && <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg border border-red-200 flex justify-between">
+        <span>{error}</span><button onClick={() => setError('')} className="text-red-700 font-bold">&times;</button>
+      </div>}
+      {success && <div className="mb-4 p-3 bg-green-50 text-green-700 rounded-lg border border-green-200">
+        {success}
+      </div>}
 
       {loading ? (
         <div className="flex justify-center py-20"><div className="animate-spin h-8 w-8 border-b-2 border-teal-500 rounded-full"></div></div>
@@ -107,44 +139,54 @@ export default function Budgets() {
               <button onClick={() => setShowModal(true)} className="text-teal-600 font-medium mt-2 hover:underline">Create your first budget</button>
             </div>
           )}
-          {budgets.map(b => (
-            <div key={b.id} className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-              <div className="flex justify-between items-start mb-4">
-                <div>
-                  <span className="text-xs font-bold uppercase tracking-wider text-teal-600 bg-teal-50 px-2 py-1 rounded-md">{b.entity_type}</span>
-                  <h3 className="font-bold text-slate-800 mt-2 text-lg">{getEntityName(b.entity_type, b.entity_id)}</h3>
-                  <p className="text-xs text-slate-500 mt-1">{b.budget_category || 'All Categories'} • {b.period_start} to {b.period_end}</p>
-                </div>
-                <button onClick={() => handleDelete(b.id)} className="text-slate-400 hover:text-red-500 transition-colors">
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
+          {budgets.map(b => {
+            // H4: Safe parsing
+            const budgetAmt = parseFloat(b.amount) || 0;
+            const actualAmt = parseFloat(b.actual_amount) || 0;
+            const variance = parseFloat(b.variance) || 0;
+            const isExceeded = b.percentage > 100;
 
-              <div className="flex justify-between items-end mb-2 mt-6">
-                <div>
-                  <p className="text-xs text-slate-500 font-medium mb-1">Budget</p>
-                  <p className="text-lg font-bold text-slate-800">₹ {parseFloat(b.amount).toLocaleString()}</p>
+            return (
+              <div key={b.id} className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+                <div className="flex justify-between items-start mb-4">
+                  <div>
+                    <span className="text-xs font-bold uppercase tracking-wider text-teal-600 bg-teal-50 px-2 py-1 rounded-md">{b.entity_type}</span>
+                    <h3 className="font-bold text-slate-800 mt-2 text-lg">{getEntityName(b.entity_type, b.entity_id)}</h3>
+                    <p className="text-xs text-slate-500 mt-1">{b.budget_category || 'All Categories'} • {b.period_start} to {b.period_end}</p>
+                  </div>
+                  <button onClick={() => setConfirmDeleteId(b.id)} className="text-slate-400 hover:text-red-500 transition-colors">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
-                <div className="text-right">
-                  <p className="text-xs text-slate-500 font-medium mb-1">Actual</p>
-                  <p className={`text-lg font-bold ${b.percentage > 100 ? 'text-red-600' : 'text-emerald-600'}`}>₹ {parseFloat(b.actual_amount).toLocaleString()}</p>
-                </div>
-              </div>
 
-              <div className="w-full bg-slate-100 rounded-full h-2.5 mt-2 overflow-hidden">
-                <div className={`h-2.5 rounded-full ${b.percentage > 100 ? 'bg-red-500' : b.percentage > 85 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${Math.min(b.percentage, 100)}%` }}></div>
+                <div className="flex justify-between items-end mb-2 mt-6">
+                  <div>
+                    <p className="text-xs text-slate-500 font-medium mb-1">Budget</p>
+                    <p className="text-lg font-bold text-slate-800">₹ {budgetAmt.toLocaleString()}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-slate-500 font-medium mb-1">Actual</p>
+                    <p className={`text-lg font-bold ${isExceeded ? 'text-red-600' : 'text-emerald-600'}`}>₹ {actualAmt.toLocaleString()}</p>
+                  </div>
+                </div>
+
+                {/* L3: Allow visual bar to span logically by capping the CSS width, not the data */}
+                <div className="w-full bg-slate-100 rounded-full h-2.5 mt-2 overflow-hidden flex">
+                  <div className={`h-2.5 rounded-full ${isExceeded ? 'bg-red-500' : b.percentage > 85 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${Math.min(b.percentage, 100)}%` }}></div>
+                </div>
+                
+                <div className="flex justify-between mt-2">
+                  <span className="text-xs font-medium text-slate-500">{b.percentage.toFixed(1)}% Used</span>
+                  {/* M4: Standardized variance direction display */}
+                  {isExceeded ? (
+                    <span className="text-xs font-medium text-red-600 flex items-center gap-1"><AlertTriangle className="w-3 h-3"/> Exceeded by ₹{Math.abs(variance).toLocaleString()}</span>
+                  ) : (
+                    <span className="text-xs font-medium text-emerald-600 flex items-center gap-1"><CheckCircle className="w-3 h-3"/> ₹{variance.toLocaleString()} Remaining</span>
+                  )}
+                </div>
               </div>
-              <div className="flex justify-between mt-2">
-                <span className="text-xs font-medium text-slate-500">{b.percentage.toFixed(1)}% Used</span>
-                {b.percentage > 100 && (
-                  <span className="text-xs font-medium text-red-600 flex items-center gap-1"><AlertTriangle className="w-3 h-3"/> Exceeded by ₹{Math.abs(b.variance).toLocaleString()}</span>
-                )}
-                {b.percentage <= 100 && (
-                  <span className="text-xs font-medium text-emerald-600">₹{b.variance.toLocaleString()} Remaining</span>
-                )}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -153,13 +195,13 @@ export default function Budgets() {
           <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-xl">
             <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
               <h2 className="text-lg font-bold text-slate-800">Set Budget</h2>
-              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600 text-xl font-medium">&times;</button>
+              <button onClick={handleCloseModal} className="text-slate-400 hover:text-slate-600 text-xl font-medium">&times;</button>
             </div>
             <form onSubmit={handleSave} className="p-6 space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Entity Type</label>
-                  <select value={form.entity_type} onChange={e => setForm({...form, entity_type: e.target.value})} className="w-full text-sm border-slate-200 rounded-lg p-2.5 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-slate-50" required>
+                  <select value={form.entity_type} onChange={e => setForm({...form, entity_type: e.target.value, entity_id: ''})} className="w-full text-sm border-slate-200 rounded-lg p-2.5 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-slate-50" required>
                     <option value="client">Client</option>
                     <option value="vendor">Vendor</option>
                     <option value="internal">Internal / General</option>
@@ -197,12 +239,27 @@ export default function Budgets() {
               </div>
 
               <div className="pt-4 flex gap-3">
-                <button type="button" onClick={() => setShowModal(false)} className="flex-1 px-4 py-2 text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg font-medium transition-colors text-sm">Cancel</button>
+                <button type="button" onClick={handleCloseModal} className="flex-1 px-4 py-2 text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg font-medium transition-colors text-sm">Cancel</button>
                 <button type="submit" disabled={saving} className="flex-1 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition-colors text-sm disabled:opacity-50">
                   {saving ? 'Saving...' : 'Save Budget'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* L2: Confirm Delete Modal */}
+      {confirmDeleteId && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-sm overflow-hidden shadow-xl p-6 text-center">
+            <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+            <h3 className="text-lg font-bold text-slate-800 mb-2">Delete Budget?</h3>
+            <p className="text-slate-500 text-sm mb-6">Are you sure you want to delete this budget? This action cannot be undone.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setConfirmDeleteId(null)} className="flex-1 px-4 py-2 text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg font-medium transition-colors text-sm">Cancel</button>
+              <button onClick={() => handleDelete(confirmDeleteId)} className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors text-sm">Delete</button>
+            </div>
           </div>
         </div>
       )}
