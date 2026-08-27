@@ -383,6 +383,7 @@ router.post('/', requirePermission('create_vouchers', 'manage_vouchers'), async 
     if (debit_account_id && credit_account_id && debit_account_id === credit_account_id) {
       return res.status(400).json({ success: false, message: 'Debit and credit accounts must be different' });
     }
+    }
     
     if (['journal', 'contra'].includes(voucher_type)) {
       if (!debit_account_id || !credit_account_id) {
