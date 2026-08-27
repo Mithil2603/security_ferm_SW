@@ -58,7 +58,22 @@ const masterPasscodeMiddleware = (req, res, next) => {
   return res.status(403).json({ success: false, message: 'Forbidden' });
 };
 
-router.get('/stats', masterPasscodeMiddleware, async (req, res) => { try { const result = await query(SELECT severity, COUNT(*) as count FROM error_logs WHERE is_resolved = 0 GROUP BY severity); const stats = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }; result.rows.forEach(r => { if (stats[r.severity] !== undefined) stats[r.severity] = parseInt(r.count); }); const total = await query(SELECT COUNT(*) as count FROM error_logs); res.json({ success: true, data: { ...stats, total: parseInt(total.rows[0].count) }}); } catch (e) { res.status(500).json({ success: false }); } });
+router.get('/stats', masterPasscodeMiddleware, async (req, res) => {
+  try {
+    const result = await query(
+      `SELECT severity, COUNT(*) as count FROM error_logs WHERE is_resolved = 0 GROUP BY severity`
+    );
+    const stats = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+    result.rows.forEach(r => {
+      if (stats[r.severity] !== undefined) stats[r.severity] = parseInt(r.count);
+    });
+    const total = await query(`SELECT COUNT(*) as count FROM error_logs WHERE is_resolved = 0`);
+    res.json({ success: true, data: { ...stats, total: parseInt(total.rows[0].count) } });
+  } catch (e) {
+    logger.error('Failed to fetch error stats:', e);
+    res.status(500).json({ success: false, message: 'Failed to fetch stats' });
+  }
+});
 
 // GET /api/errors
 router.get('/', masterPasscodeMiddleware, async (req, res) => {
