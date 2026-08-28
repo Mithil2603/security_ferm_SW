@@ -4,6 +4,7 @@ const router = express.Router();
 const { query } = require('../database/connection');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { logError } = require('../utils/errorLogger');
+const { validateIdParam } = require('../middleware/validators');
 
 router.use(authMiddleware);
 router.use(requirePermission('manage_expenses'));
@@ -52,7 +53,7 @@ router.post('/', async (req, res) => {
 });
 
 // PUT /api/recurring-expenses/:id/toggle
-router.put('/:id/toggle', async (req, res) => {
+router.put('/:id/toggle', validateIdParam('id'), async (req, res) => {
   try {
     const check = await query('SELECT is_active FROM recurring_expenses WHERE id = $1', [req.params.id]);
     if (check.rows.length === 0) return res.status(404).json({ success: false, message: 'Not found' });
@@ -68,9 +69,12 @@ router.put('/:id/toggle', async (req, res) => {
 });
 
 // DELETE /api/recurring-expenses/:id
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', validateIdParam('id'), async (req, res) => {
   try {
-    await query('DELETE FROM recurring_expenses WHERE id = $1', [req.params.id]);
+    const result = await query('DELETE FROM recurring_expenses WHERE id = $1', [req.params.id]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'Recurring expense not found' });
+    }
     res.json({ success: true, message: 'Deleted successfully' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'recurring_expenses' });

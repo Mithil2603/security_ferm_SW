@@ -88,14 +88,15 @@ export default function Expenses() {
     }
   };
 
-  const fetchExpenses = async () => {
+  const fetchExpenses = async (controllerSignal) => {
     try {
       setLoading(true);
       const url = statusFilter ? `/expenses?status=${statusFilter}&page=${page}&limit=20` : `/expenses?page=${page}&limit=20`;
-      const response = await api.get(url);
+      const response = await api.get(url, { signal: controllerSignal });
       setExpenses(response.data || []);
       if (response.pagination) setPagination(response.pagination);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.message === 'canceled') return;
       console.error('Failed to fetch expenses', err);
     } finally {
       setLoading(false);
@@ -103,15 +104,19 @@ export default function Expenses() {
   };
 
   useEffect(() => { 
-    fetchExpenses(); 
     fetchCategories();
     fetchVendors();
-  }, [statusFilter, page]);
+  }, []); // Only fetch static data once on mount
 
   useEffect(() => { 
     setPage(1); 
-    setLoading(true);
-  }, [statusFilter]);
+  }, [statusFilter]); // Reset page when filter changes
+
+  useEffect(() => { 
+    const controller = new AbortController();
+    fetchExpenses(controller.signal);
+    return () => controller.abort();
+  }, [statusFilter, page]); // Fetch when filter or page changes, aborting stale requests
 
   const handleInputChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -298,7 +303,7 @@ export default function Expenses() {
                     </td>
                     <td className="px-6 py-4">
                       <span className="px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 text-slate-700 uppercase tracking-wide">
-                        {expense.category.replace('_', ' ')}
+                        {expense.category.replace(/_/g, ' ')}
                       </span>
                     </td>
                     <td className="px-6 py-4">
@@ -401,7 +406,7 @@ export default function Expenses() {
                     {categoryError && <p className="text-xs text-rose-500 mb-1">Failed to load categories</p>}
                     <select required name="category" value={formData.category} onChange={handleInputChange} className={inputCls}>
                       <option value="">-- Select Category --</option>
-                      {categories.map(c => <option key={c.id} value={c.name}>{c.name.replace('_', ' ').toUpperCase()}</option>)}
+                      {categories.map(c => <option key={c.id} value={c.name}>{c.name.replace(/_/g, ' ').toUpperCase()}</option>)}
                     </select>
                   </div>
                 </div>

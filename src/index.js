@@ -88,7 +88,13 @@ const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
-app.use('/uploads', express.static(uploadDir));
+// Serve uploads securely as attachments to prevent XSS
+app.use('/uploads', express.static(uploadDir, {
+  setHeaders: (res, path, stat) => {
+    res.set('Content-Disposition', 'attachment');
+    res.set('X-Content-Type-Options', 'nosniff');
+  }
+}));
 
 // Body parsing
 app.use(express.json({ limit: '10mb' }));

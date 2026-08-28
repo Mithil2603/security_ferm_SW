@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
-const { validate, schemas } = require('../middleware/validators');
+const { validate, schemas, validateIdParam } = require('../middleware/validators');
 const { saveStatement } = require('../utils/statementSaver');
 const multer = require('multer');
 const path = require('path');
@@ -14,7 +14,17 @@ const { logAudit } = require('../middleware/audit');
 const uploadDir = process.env.UPLOAD_DIR || path.join(__dirname, '../../uploads');
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => cb(null, `expense_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${path.extname(file.originalname)}`)
+  filename: (req, file, cb) => {
+    const mimeToExt = {
+      'application/pdf': '.pdf',
+      'image/jpeg': '.jpg',
+      'image/png': '.png',
+      'image/webp': '.webp',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx'
+    };
+    const ext = mimeToExt[file.mimetype] || '.bin';
+    cb(null, `expense_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${ext}`);
+  }
 });
 const upload = multer({
   storage,
@@ -108,7 +118,7 @@ router.post('/categories', async (req, res) => {
 });
 
 // DELETE /api/expenses/categories/:id
-router.delete('/categories/:id', requirePermission('manage_expenses'), async (req, res) => {
+router.delete('/categories/:id', requirePermission('manage_expenses'), validateIdParam('id'), async (req, res) => {
   try {
     const result = await query('UPDATE expense_categories SET is_active = 0 WHERE id = $1', [req.params.id]);
     if (result.rowCount === 0) return res.status(404).json({ success: false, message: 'Category not found' });
@@ -122,7 +132,7 @@ router.delete('/categories/:id', requirePermission('manage_expenses'), async (re
 });
 
 // GET /api/expenses/:id
-router.get('/:id', async (req, res) => {
+router.get('/:id', validateIdParam('id'), async (req, res) => {
   try {
     const result = await query(
       `SELECT e.*, u.full_name as created_by_name, a.full_name as approver_name, v.name as vendor_name
@@ -176,7 +186,7 @@ router.post('/', upload.single('receipt_file'), validate(schemas.createExpense),
 });
 
 // PUT /api/expenses/:id
-router.put('/:id', upload.single('receipt_file'), async (req, res) => {
+router.put('/:id', validateIdParam('id'), upload.single('receipt_file'), validate(schemas.createExpense), async (req, res) => {
   try {
     const { expense_date, description, amount, payment_method, receipt_number, notes } = req.body;
     let { category } = req.body;
@@ -212,17 +222,22 @@ router.put('/:id', upload.single('receipt_file'), async (req, res) => {
 });
 
 // PUT /api/expenses/:id/approve
-router.put('/:id/approve', async (req, res) => {
+router.put('/:id/approve', validateIdParam('id'), async (req, res) => {
   try {
     const { approval_notes } = req.body;
+    
+    // Finding 2: Prevent self-approval
+    const check = await query('SELECT created_by FROM expenses WHERE id = $1 AND status = \'pending\'', [req.params.id]);
+    if (check.rows.length === 0) return res.status(404).json({ success: false, message: 'Expense not found or already processed' });
+    if (check.rows[0].created_by === req.user.userId && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Cannot approve your own expense' });
+    }
+
     const result = await query(
       `UPDATE expenses SET status='approved', approver_id=$1, approval_date=CURRENT_TIMESTAMP, approval_notes=$2
        WHERE id=$3 AND status='pending'`,
       [req.user.userId, approval_notes, req.params.id]
     );
-    if (result.rowCount === 0) {
-      return res.status(404).json({ success: false, message: 'Expense not found or already processed' });
-    }
     const updated = await query(
       `SELECT e.*, v.name as vendor_name FROM expenses e LEFT JOIN vendors v ON e.vendor_id = v.id WHERE e.id = $1`,
       [req.params.id]
@@ -251,17 +266,22 @@ router.put('/:id/approve', async (req, res) => {
 });
 
 // PUT /api/expenses/:id/reject
-router.put('/:id/reject', async (req, res) => {
+router.put('/:id/reject', validateIdParam('id'), async (req, res) => {
   try {
     const { approval_notes } = req.body;
+
+    // Finding 2: Prevent self-rejection (for consistency, though self-approval is the main risk)
+    const check = await query('SELECT created_by FROM expenses WHERE id = $1 AND status = \'pending\'', [req.params.id]);
+    if (check.rows.length === 0) return res.status(404).json({ success: false, message: 'Expense not found or already processed' });
+    if (check.rows[0].created_by === req.user.userId && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Cannot reject your own expense' });
+    }
+
     const result = await query(
       `UPDATE expenses SET status='rejected', approver_id=$1, approval_date=CURRENT_TIMESTAMP, approval_notes=$2
        WHERE id=$3 AND status='pending'`,
       [req.user.userId, approval_notes, req.params.id]
     );
-    if (result.rowCount === 0) {
-      return res.status(404).json({ success: false, message: 'Expense not found or already processed' });
-    }
     const updated = await query('SELECT * FROM expenses WHERE id = $1', [req.params.id]);
     res.json({ success: true, data: updated.rows[0], message: 'Expense rejected' });
   } catch (error) {
@@ -271,7 +291,7 @@ router.put('/:id/reject', async (req, res) => {
 });
 
 // DELETE /api/expenses/:id
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', validateIdParam('id'), async (req, res) => {
   try {
     const result = await query(
       "DELETE FROM expenses WHERE id = $1 AND status = 'pending'",
@@ -288,7 +308,7 @@ router.delete('/:id', async (req, res) => {
 });
 
 // POST /api/expenses/:id/pay
-router.post('/:id/pay', async (req, res) => {
+router.post('/:id/pay', validateIdParam('id'), async (req, res) => {
   try {
     const { amount, payment_method, payment_date, reference_number, notes } = req.body;
     const paymentAmount = parseFloat(amount);
