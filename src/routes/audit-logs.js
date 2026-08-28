@@ -72,7 +72,7 @@ router.delete('/archive', async (req, res) => {
     const { days = 90 } = req.body;
     if (isNaN(parseInt(days))) return res.status(400).json({ success: false, message: 'Invalid days parameter' });
     
-    await query(`DELETE FROM audit_logs WHERE created_at < datetime('now', '-${parseInt(days)} days')`);
+    await query(`DELETE FROM audit_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL ? DAY)`, [parseInt(days)]);
     res.json({ success: true, message: `Logs older than ${days} days deleted.` });
   } catch (error) {
     logError(error, req, { severity: ERROR_SEVERITY.HIGH, category: ERROR_CATEGORY.SECURITY, feature: 'audit-logs-archive' });

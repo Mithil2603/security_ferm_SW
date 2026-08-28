@@ -3,6 +3,7 @@ const router = express.Router();
 const { query } = require('../database/connection');
 const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/enhancedErrorLogger');
 const jwt = require('jsonwebtoken');
+const logger = require('../utils/logger');
 
 // POST /api/errors (Used by Frontend Error Interceptor)
 router.post('/', async (req, res) => {

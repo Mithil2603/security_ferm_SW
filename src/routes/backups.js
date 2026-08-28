@@ -6,6 +6,7 @@ const { authMiddleware, requirePermission } = require('../middleware/auth');
 const backupService = require('../services/backupService');
 const logger = require('../utils/logger');
 const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/errorLogger');
+const { query } = require('../database/connection');
 
 router.use(authMiddleware);
 router.use(requirePermission('manage_backups')); // BK-L5: Requires manage_backups permission (not exclusively admin, but restricted by default)

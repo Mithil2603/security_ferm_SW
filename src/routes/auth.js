@@ -120,14 +120,14 @@ router.post('/login', loginLimiter, async (req, res) => {
     // Set cookies
     res.cookie('token', token, {
       httpOnly: true,
-      secure: false,
+      secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
       maxAge: 8 * 60 * 60 * 1000 // 8 hours
     });
     
     res.cookie('refreshToken', refreshToken, {
       httpOnly: true,
-      secure: false,
+      secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
       maxAge: 7 * 24 * 60 * 60 * 1000
     });
@@ -263,14 +263,14 @@ router.post('/refresh', async (req, res) => {
 
     res.cookie('token', token, {
       httpOnly: true,
-      secure: false,
+      secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
       maxAge: 8 * 60 * 60 * 1000 // 8 hours
     });
 
     res.cookie('refreshToken', newRefreshToken, {
       httpOnly: true,
-      secure: false,
+      secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
       maxAge: 7 * 24 * 60 * 60 * 1000
     });

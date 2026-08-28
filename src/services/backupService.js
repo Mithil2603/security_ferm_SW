@@ -42,7 +42,6 @@ async function createBackup() {
       `--host=${host}`,
       `--port=${port}`,
       `--user=${user}`,
-      password ? `--password=${password}` : '--password=',
       '--single-transaction',     // Non-locking backup for InnoDB
       '--routines',
       '--triggers',
@@ -57,7 +56,7 @@ async function createBackup() {
         return reject(new Error('mysqldump not found. Make sure MySQL is installed and in PATH.'));
       }
       const [current, ...rest] = paths;
-      const child = execFile(current, args, { maxBuffer: 50 * 1024 * 1024 }, async (err, stdout, stderr) => {
+      const child = execFile(current, args, { maxBuffer: 50 * 1024 * 1024, env: { ...process.env, MYSQL_PWD: password } }, async (err, stdout, stderr) => {
         if (err) {
           if (rest.length > 0) return tryNext(rest);
           return reject(new Error(`mysqldump failed: ${stderr || err.message}`));

@@ -795,14 +795,12 @@ function DatabaseBackups() {
   const downloadBackup = async (filename) => {
     setDownloading(filename);
     try {
-      const token = localStorage.getItem('token');
       // S-H3 & BK-C2 & BK-L6: Secure download without exposing token in URL, works in all environments
-      const apiUrl = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:3000';
-      const dlRes = await fetch(`${apiUrl}/api/backups/download/${filename}`, {
-        headers: { Authorization: `Bearer ${token}` }
+      const dlRes = await api.get(`/backups/download/${filename}`, {
+        responseType: 'blob'
       });
-      if (dlRes.ok) {
-        const blob = await dlRes.blob();
+      if (dlRes.status === 200) {
+        const blob = dlRes.data;
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;

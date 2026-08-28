@@ -380,11 +380,11 @@ router.post('/', requirePermission('create_vouchers', 'manage_vouchers'), async 
       if (ca.rows.length === 0) {
         return res.status(400).json({ success: false, message: 'Credit account not found or inactive' });
       }
+    }
+
     if (debit_account_id && credit_account_id && debit_account_id === credit_account_id) {
       return res.status(400).json({ success: false, message: 'Debit and credit accounts must be different' });
     }
-    }
-    
     if (['journal', 'contra'].includes(voucher_type)) {
       if (!debit_account_id || !credit_account_id) {
         return res.status(400).json({ success: false, message: 'Both debit and credit accounts are required for double-entry vouchers' });

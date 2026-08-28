@@ -26,16 +26,7 @@ const DeveloperConsole = () => {
   const [pagination, setPagination] = useState({ page: 1, limit: 50, total: 0, pages: 0 });
   const [resolvingId, setResolvingId] = useState(null);
 
-  // DC-L3: Access guard
-  if (!user || (user.role !== 'admin' && !(user.permissions && user.permissions.includes('view_dev_errors')))) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20 text-center animate-fade-in">
-        <ShieldAlert className="w-16 h-16 text-red-500 mb-4" />
-        <h2 className="text-2xl font-bold text-slate-800">Access Denied</h2>
-        <p className="text-slate-500 mt-2">You do not have permission to view the developer console.</p>
-      </div>
-    );
-  }
+
 
   const fetchStats = async () => {
     try {
@@ -179,6 +170,17 @@ const DeveloperConsole = () => {
       return data;
     }
   };
+
+  // DC-L3: Access guard
+  if (!user || (user.role !== 'admin' && !(user.permissions && user.permissions.includes('view_dev_errors')))) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center animate-fade-in">
+        <ShieldAlert className="w-16 h-16 text-red-500 mb-4" />
+        <h2 className="text-2xl font-bold text-slate-800">Access Denied</h2>
+        <p className="text-slate-500 mt-2">You do not have permission to view the developer console.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-fade-in font-mono">

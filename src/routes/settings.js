@@ -259,6 +259,11 @@ router.post('/users/:id/reset-password', requirePermission('manage_settings'), a
 // GET /api/settings/system/:key
 router.get('/system/:key', requirePermission('manage_settings', 'manage_payroll'), async (req, res) => {
   try {
+    // S-H5: Secure SMTP settings from 'manage_payroll' users
+    if (req.params.key === 'smtp_settings' && !req.user.permissions.includes('manage_settings') && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Forbidden: requires manage_settings permission' });
+    }
+
     const result = await query(
       'SELECT setting_value FROM system_settings WHERE setting_key = $1',
       [req.params.key]
@@ -266,7 +271,22 @@ router.get('/system/:key', requirePermission('manage_settings', 'manage_payroll'
     if (result.rows.length === 0) {
       return res.json({ success: true, data: null });
     }
-    res.json({ success: true, data: result.rows[0].setting_value });
+    
+    // Mask SMTP password
+    let data = result.rows[0].setting_value;
+    if (req.params.key === 'smtp_settings') {
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed.password) {
+          parsed.password = '********'; // Mask password
+          data = JSON.stringify(parsed);
+        }
+      } catch (e) {
+        // ignore parse error
+      }
+    }
+    
+    res.json({ success: true, data });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
     logger.error('Fetch system setting error:', error);
