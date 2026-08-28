@@ -88,15 +88,15 @@ export default function Expenses() {
     }
   };
 
-  const fetchExpenses = async (controllerSignal) => {
+  const fetchExpenses = async (status, pageNum, signal) => {
     try {
       setLoading(true);
-      const url = statusFilter ? `/expenses?status=${statusFilter}&page=${page}&limit=20` : `/expenses?page=${page}&limit=20`;
-      const response = await api.get(url, { signal: controllerSignal });
+      const url = status ? `/expenses?status=${status}&page=${pageNum}&limit=20` : `/expenses?page=${pageNum}&limit=20`;
+      const response = await api.get(url, { signal });
       setExpenses(response.data || []);
       if (response.pagination) setPagination(response.pagination);
     } catch (err) {
-      if (err.name === 'CanceledError' || err.message === 'canceled') return;
+      if (err.name === 'CanceledError' || err.name === 'AbortError' || err.message === 'canceled') return;
       console.error('Failed to fetch expenses', err);
     } finally {
       setLoading(false);
@@ -108,15 +108,13 @@ export default function Expenses() {
     fetchVendors();
   }, []); // Only fetch static data once on mount
 
-  useEffect(() => { 
-    setPage(1); 
-  }, [statusFilter]); // Reset page when filter changes
-
-  useEffect(() => { 
+  useEffect(() => {
+    // When filter changes, always fetch page 1.
+    // When page changes (via pagination), fetch that page with the current filter.
     const controller = new AbortController();
-    fetchExpenses(controller.signal);
+    fetchExpenses(statusFilter, page, controller.signal);
     return () => controller.abort();
-  }, [statusFilter, page]); // Fetch when filter or page changes, aborting stale requests
+  }, [statusFilter, page]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleInputChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -262,7 +260,7 @@ export default function Expenses() {
         <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row gap-4">
           <div className="flex gap-2 flex-wrap">
             {['', 'pending', 'approved', 'rejected'].map(s => (
-              <button key={s} onClick={() => setStatusFilter(s)}
+              <button key={s} onClick={() => { setStatusFilter(s); setPage(1); }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${statusFilter === s ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
                 {s ? s.charAt(0).toUpperCase() + s.slice(1) : 'All'}
               </button>
