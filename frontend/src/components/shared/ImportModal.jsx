@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Upload, X, FileSpreadsheet, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Upload, X, FileSpreadsheet, CheckCircle2, AlertCircle, Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import api from '../../services/api';
 
 export default function ImportModal({ isOpen, onClose, entityName, endpoint, onImportSuccess }) {
@@ -9,6 +10,60 @@ export default function ImportModal({ isOpen, onClose, entityName, endpoint, onI
   const [result, setResult] = useState(null);
 
   if (!isOpen) return null;
+
+  const handleDownloadSample = () => {
+    let sampleData = [];
+    let fileName = `Sample_${entityName || 'Import'}_Template.xlsx`;
+
+    if (entityName?.toLowerCase().includes('client')) {
+      fileName = 'Sample_Clients_Import_Template.xlsx';
+      sampleData = [
+        {
+          "Name": "Royal Residency Ltd",
+          "Address": "123 SG Highway",
+          "City": "Ahmedabad",
+          "Phone": "9876543210",
+          "Email": "contact@royalresidency.com",
+          "Monthly Rate": 55000
+        },
+        {
+          "Name": "Green Heights Complex",
+          "Address": "45 CG Road",
+          "City": "Ahmedabad",
+          "Phone": "9876543211",
+          "Email": "info@greenheights.com",
+          "Monthly Rate": 48000
+        }
+      ];
+    } else if (entityName?.toLowerCase().includes('employee')) {
+      fileName = 'Sample_Employees_Import_Template.xlsx';
+      sampleData = [
+        {
+          "Full Name": "Rajesh Kumar",
+          "Phone": "9876500001",
+          "Email": "rajesh.kumar@example.com",
+          "Address": "12 Station Road",
+          "City": "Ahmedabad"
+        },
+        {
+          "Full Name": "Vikram Singh",
+          "Phone": "9876500002",
+          "Email": "vikram.singh@example.com",
+          "Address": "45 Green Park",
+          "City": "Ahmedabad"
+        }
+      ];
+    } else {
+      sampleData = [
+        { "Name": "Sample Name", "Phone": "9876543210", "Email": "sample@example.com", "Address": "Sample Address", "City": "Sample City" }
+      ];
+    }
+
+    const worksheet = XLSX.utils.json_to_sheet(sampleData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, entityName || "Template");
+    XLSX.writeFile(workbook, fileName);
+  };
 
   const handleFileChange = (e) => {
     const selected = e.target.files[0];
@@ -73,10 +128,24 @@ export default function ImportModal({ isOpen, onClose, entityName, endpoint, onI
         <div className="p-6 overflow-y-auto">
           {!result ? (
             <>
-              <p className="text-sm text-slate-600 mb-6">
+              <p className="text-sm text-slate-600 mb-4">
                 Upload an Excel file (.xlsx) or CSV containing {entityName.toLowerCase()} data. 
                 Ensure the first row contains headers.
               </p>
+
+              <div className="flex items-center justify-between mb-5 p-3.5 bg-indigo-50/70 border border-indigo-100 rounded-xl">
+                <div className="text-xs text-indigo-900 font-medium">
+                  Need a pre-formatted template?
+                </div>
+                <button
+                  type="button"
+                  onClick={handleDownloadSample}
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-sm shrink-0"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Download Sample
+                </button>
+              </div>
 
               <div className="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center bg-slate-50 hover:bg-slate-100 transition-colors">
                 <input 

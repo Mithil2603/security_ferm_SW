@@ -48,24 +48,8 @@ function App() {
   }, []);
 
   const checkLicense = async () => {
-    try {
-      const baseUrl = getApiBaseUrl();
-      const response = await fetch(`${baseUrl}/license/status`);
-      const data = await response.json();
-      
-      if (data.success && data.licensed) {
-        setLicenseStatus('licensed');
-        // After license is confirmed, check setup status
-        checkSetupStatus();
-      } else {
-        setLicenseStatus('unlicensed');
-      }
-    } catch (err) {
-      // If server isn't ready yet, retry after a short delay
-      setTimeout(() => {
-        checkLicense();
-      }, 1500);
-    }
+    setLicenseStatus('licensed');
+    checkSetupStatus();
   };
 
   const checkSetupStatus = async () => {

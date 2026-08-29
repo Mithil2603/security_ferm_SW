@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { UserSquare2, Plus, Search, Edit2, Trash2, CheckCircle2, XCircle, ShieldCheck, X, Upload, FileText, Download } from 'lucide-react';
+import { UserSquare2, Plus, Search, Edit2, Trash2, CheckCircle2, XCircle, ShieldCheck, X, Upload, FileText, Download, FileSpreadsheet } from 'lucide-react';
 import api from '../services/api';
 import { getServerBaseUrl } from '../utils/apiUrl';
 import { format } from 'date-fns';
@@ -199,6 +199,29 @@ export default function Employees() {
     XLSX.writeFile(wb, `Watchmen_Export_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
   };
 
+  const handleDownloadSampleTemplate = () => {
+    const sampleData = [
+      {
+        "Full Name": "Rajesh Kumar",
+        "Phone": "9876500001",
+        "Email": "rajesh.kumar@example.com",
+        "Address": "12 Station Road",
+        "City": "Ahmedabad"
+      },
+      {
+        "Full Name": "Vikram Singh",
+        "Phone": "9876500002",
+        "Email": "vikram.singh@example.com",
+        "Address": "45 Green Park",
+        "City": "Ahmedabad"
+      }
+    ];
+    const worksheet = XLSX.utils.json_to_sheet(sampleData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Employees");
+    XLSX.writeFile(workbook, "Sample_Employees_Import_Template.xlsx");
+  };
+
   const inputCls = "w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm";
 
   return (
@@ -212,6 +235,14 @@ export default function Employees() {
           <p className="text-slate-500 text-sm mt-1">Manage personnel, deployments, and salary structures.</p>
         </div>
         <div className="flex gap-2 flex-wrap justify-end">
+          <button
+            onClick={handleDownloadSampleTemplate}
+            className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2 border border-indigo-200"
+            title="Download pre-formatted Excel template for importing"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-indigo-600" />
+            Sample Template
+          </button>
           <button onClick={() => setIsImportModalOpen(true)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2 border border-slate-300">
             <Upload className="w-4 h-4" />
             Import Excel

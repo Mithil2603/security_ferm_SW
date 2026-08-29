@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Building2, Plus, Search, MapPin, Mail, Phone, Edit2, Trash2, CheckCircle2, XCircle, X, CalendarDays, AlertCircle, FileEdit, FileText, Download, Upload } from 'lucide-react';
+import { Building2, Plus, Search, MapPin, Mail, Phone, Edit2, Trash2, CheckCircle2, XCircle, X, CalendarDays, AlertCircle, FileEdit, FileText, Download, Upload, FileSpreadsheet } from 'lucide-react';
 import api from '../services/api';
 import { format } from 'date-fns';
 import * as XLSX from 'xlsx';
@@ -239,6 +239,31 @@ export default function Clients() {
     }
   };
 
+  const handleDownloadSampleTemplate = () => {
+    const sampleData = [
+      {
+        "Name": "Royal Residency Ltd",
+        "Address": "123 SG Highway",
+        "City": "Ahmedabad",
+        "Phone": "9876543210",
+        "Email": "contact@royalresidency.com",
+        "Monthly Rate": 55000
+      },
+      {
+        "Name": "Green Heights Complex",
+        "Address": "45 CG Road",
+        "City": "Ahmedabad",
+        "Phone": "9876543211",
+        "Email": "info@greenheights.com",
+        "Monthly Rate": 48000
+      }
+    ];
+    const worksheet = XLSX.utils.json_to_sheet(sampleData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Clients");
+    XLSX.writeFile(workbook, "Sample_Clients_Import_Template.xlsx");
+  };
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
@@ -250,6 +275,14 @@ export default function Clients() {
           <p className="text-slate-500 text-sm mt-1">Manage society contracts and contact details.</p>
         </div>
         <div className="flex gap-2 flex-wrap justify-end">
+          <button
+            onClick={handleDownloadSampleTemplate}
+            className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2 border border-indigo-200"
+            title="Download pre-formatted Excel template for importing"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-indigo-600" />
+            Sample Template
+          </button>
           <button
             onClick={() => setIsImportModalOpen(true)}
             className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2 border border-slate-300"

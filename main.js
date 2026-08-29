@@ -325,8 +325,13 @@ function createWindow() {
     return { action: 'deny' };
   });
 
-  // Load the frontend immediately from the local filesystem
-  mainWindow.loadFile(path.join(__dirname, 'frontend-dist', 'index.html'));
+  // Load the frontend: load built frontend-dist if present, or fallback to dev server
+  const distPath = path.join(__dirname, 'frontend-dist', 'index.html');
+  if (fs.existsSync(distPath)) {
+    mainWindow.loadFile(distPath);
+  } else {
+    mainWindow.loadURL('http://localhost:5173');
+  }
 
   mainWindow.on('closed', function () {
     mainWindow = null;
