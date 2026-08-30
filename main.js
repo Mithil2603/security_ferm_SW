@@ -14,6 +14,14 @@ if (!gotTheLock) {
 // Ensure userData directory exists for the database and uploads
 const userDataPath = app.getPath('userData');
 
+// Load .env from userData directory if present
+const userEnvPath = path.join(userDataPath, '.env');
+if (fs.existsSync(userEnvPath)) {
+  require('dotenv').config({ path: userEnvPath });
+} else {
+  require('dotenv').config();
+}
+
 // Validate and normalize paths to prevent path traversal
 function validateAndSafePath(envKey, defaultPath) {
   let userPath = process.env[envKey] || defaultPath;
@@ -178,7 +186,7 @@ ipcMain.handle('get-server-url', () => {
 // ── IPC: Save MySQL connection settings ─────────────────────────────
 ipcMain.handle('save-db-config', async (event, config) => {
   try {
-    const envPath = path.join(__dirname, '.env');
+    const envPath = path.join(userDataPath, '.env');
     let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
 
     const set = (key, val) => {
@@ -190,13 +198,27 @@ ipcMain.handle('save-db-config', async (event, config) => {
       }
     };
 
-    set('DB_HOST',     config.host     || 'localhost');
-    set('DB_PORT',     config.port     || '3306');
-    set('DB_NAME',     config.database || 'security_firm_db');
-    set('DB_USER',     config.user     || 'root');
-    set('DB_PASSWORD', config.password || '');
+    const host = config.host || 'localhost';
+    const port = config.port || '3306';
+    const database = config.database || 'security_firm_db';
+    const user = config.user || 'root';
+    const password = config.password || '';
+
+    set('DB_HOST', host);
+    set('DB_PORT', port);
+    set('DB_NAME', database);
+    set('DB_USER', user);
+    set('DB_PASSWORD', password);
 
     fs.writeFileSync(envPath, envContent, 'utf8');
+
+    // Update process.env in memory immediately
+    process.env.DB_HOST = host;
+    process.env.DB_PORT = port;
+    process.env.DB_NAME = database;
+    process.env.DB_USER = user;
+    process.env.DB_PASSWORD = password;
+
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };

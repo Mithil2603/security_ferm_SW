@@ -1,9 +1,7 @@
 require('dotenv').config();
 const { runStartupSecurityCheck } = require('./utils/startupSecurityCheck');
-const startupOk = runStartupSecurityCheck();
-if (!startupOk) {
-  process.exit(1);
-}
+runStartupSecurityCheck();
+
 const express = require('express');
 const logger = require('./utils/logger');
 const cors = require('cors');
@@ -210,22 +208,27 @@ if (process.env.NODE_ENV !== 'test') {
     return 'unknown';
   }
 
+  function startHttpServer() {
+    if (server) return;
+    server = app.listen(PORT, '0.0.0.0', () => {
+      const lanIP = getLanIP();
+      process.env.SERVER_LAN_IP = lanIP;
+      logger.info(`\n🚀 Security Firm Server running on port ${PORT}`);
+      logger.info(`🖥️  Local:   http://localhost:${PORT}`);
+      logger.info(`🌐 Network: http://${lanIP}:${PORT}  ← Share this with LAN users`);
+      logger.info(`📊 Environment: ${process.env.NODE_ENV}`);
+      logger.info(`🗄️  Database: MySQL @ ${process.env.DB_HOST}:${process.env.DB_PORT || 3306}/${process.env.DB_NAME}\n`);
+    });
+  }
+
   initDB()
     .then(() => {
-      server = app.listen(PORT, '0.0.0.0', () => {
-        const lanIP = getLanIP();
-        process.env.SERVER_LAN_IP = lanIP;
-        logger.info(`\n🚀 Security Firm Server running on port ${PORT}`);
-        logger.info(`🖥️  Local:   http://localhost:${PORT}`);
-        logger.info(`🌐 Network: http://${lanIP}:${PORT}  ← Share this with LAN users`);
-        logger.info(`📊 Environment: ${process.env.NODE_ENV}`);
-        logger.info(`🗄️  Database: MySQL @ ${process.env.DB_HOST}:${process.env.DB_PORT || 3306}/${process.env.DB_NAME}\n`);
-      });
+      startHttpServer();
     })
     .catch(err => {
-      logger.error('❌ Failed to start server — database connection error:', err.message);
-      logger.error('   Check your MySQL credentials in .env or the app settings.');
-      process.exit(1);
+      logger.error('❌ Database connection error on startup:', err.message);
+      logger.error('   Starting HTTP server in setup mode so user can configure database...');
+      startHttpServer();
     });
 }
 

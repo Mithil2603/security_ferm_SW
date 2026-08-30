@@ -7,29 +7,33 @@ const { runMigrations } = require('./migrationRunner');
 // ─────────────────────────────────────────────────────────────────────────────
 // MySQL Connection Pool
 // ─────────────────────────────────────────────────────────────────────────────
-const poolConfig = {
-  host:               process.env.DB_HOST     || '127.0.0.1',
-  port:               parseInt(process.env.DB_PORT || '3306'),
-  user:               process.env.DB_USER     || 'root',
-  password:           process.env.DB_PASSWORD || '',
-  database:           process.env.DB_NAME     || 'security_firm_db',
-  waitForConnections: true,
-  connectionLimit:    20,
-  queueLimit:         0,
-  connectTimeout:     10000,
-  enableKeepAlive:    true,
-  keepAliveInitialDelay: 0,
-  timezone:           '+05:30',
-  charset:            'utf8mb4',
-  multipleStatements: true,
-  dateStrings:        true,
-};
+function getPoolConfig() {
+  return {
+    host:               process.env.DB_HOST     || '127.0.0.1',
+    port:               parseInt(process.env.DB_PORT || '3306'),
+    user:               process.env.DB_USER     || 'root',
+    password:           process.env.DB_PASSWORD || '',
+    database:           process.env.DB_NAME     || 'security_firm_db',
+    waitForConnections: true,
+    connectionLimit:    20,
+    queueLimit:         0,
+    connectTimeout:     10000,
+    enableKeepAlive:    true,
+    keepAliveInitialDelay: 0,
+    timezone:           '+05:30',
+    charset:            'utf8mb4',
+    multipleStatements: true,
+    dateStrings:        true,
+  };
+}
 
 let pool = null;
 
 async function initPool() {
   // Idempotent — skip if pool already created
   if (pool) return true;
+
+  const poolConfig = getPoolConfig();
 
   try {
     pool = mysql.createPool(poolConfig);
@@ -56,6 +60,30 @@ async function initPool() {
     conn.release();
     return true;
   } catch (err) {
+    // If database does not exist, automatically create it!
+    if (err.code === 'ER_BAD_DB_ERROR' || err.errno === 1049 || (err.message && err.message.includes('Unknown database'))) {
+      logger.info(`🆕 Database '${poolConfig.database}' does not exist. Creating database automatically...`);
+      try {
+        const rootConn = await mysql.createConnection({
+          host: poolConfig.host,
+          port: poolConfig.port,
+          user: poolConfig.user,
+          password: poolConfig.password,
+        });
+        await rootConn.query(`CREATE DATABASE IF NOT EXISTS \`${poolConfig.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`);
+        await rootConn.end();
+        logger.info(`✅ Database '${poolConfig.database}' created successfully!`);
+
+        // Retry creating connection pool
+        pool = mysql.createPool(poolConfig);
+        const conn = await pool.getConnection();
+        conn.release();
+        return true;
+      } catch (createErr) {
+        logger.error('❌ Failed to auto-create database:', createErr.message);
+        throw createErr;
+      }
+    }
     logger.error('❌ MySQL connection failed:', err.message);
     throw err;
   }
@@ -284,10 +312,11 @@ async function initDB() {
   if (alreadyInitialized) return;
 
   // Check if tables exist; if not, run schema
+  const cfg = getPoolConfig();
   try {
     const [rows] = await pool.execute(
       "SELECT COUNT(*) as cnt FROM information_schema.tables WHERE table_schema = ? AND table_name = 'users'",
-      [poolConfig.database]
+      [cfg.database]
     );
     const tablesExist = rows[0].cnt > 0;
 
@@ -299,7 +328,7 @@ async function initDB() {
 
         // Use a dedicated connection with multipleStatements to execute the whole schema at once
         const schemaConn = await require('mysql2/promise').createConnection({
-          ...poolConfig,
+          ...cfg,
           multipleStatements: true,
         });
         try {
