@@ -9,6 +9,8 @@ import {
   IndianRupee, Percent, Clock, UserPlus, Key, Mail, Receipt, Settings2
 } from 'lucide-react';
 
+import DatabaseBackupTab from '../components/settings/DatabaseBackupTab';
+
 // ─────────────────────────────────────────────────────────────
 // Tab definitions
 // ─────────────────────────────────────────────────────────────
@@ -16,6 +18,7 @@ const TABS = [
   { id: 'salary', label: 'Salary Structures', icon: Banknote },
   { id: 'team',   label: 'Team Management',   icon: Users },
   { id: 'agency', label: 'Agency Profile',     icon: Building2 },
+  { id: 'backup', label: 'Database Backup',    icon: Database },
   { id: 'expenses', label: 'Expense Categories', icon: Receipt },
   { id: 'vendors', label: 'Vendors', icon: Building2 },
   { id: 'recurring', label: 'Recurring Expenses', icon: Clock },
@@ -36,11 +39,11 @@ export default function Settings() {
           <SettingsIcon className="w-6 h-6 text-teal-600" />
           Settings & Administration
         </h1>
-        <p className="text-slate-500 text-sm mt-1">Manage salary structures, team accounts, and agency profile.</p>
+        <p className="text-slate-500 text-sm mt-1">Manage salary structures, database backups, team accounts, and agency profile.</p>
       </div>
 
       {/* Tab Bar */}
-      <div className="flex space-x-1 bg-slate-100 rounded-xl p-1 w-fit">
+      <div className="flex flex-wrap gap-1 bg-slate-100 rounded-xl p-1 w-fit">
         {TABS.map(tab => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -65,6 +68,7 @@ export default function Settings() {
       {activeTab === 'salary' && <SalaryStructuresTab />}
       {activeTab === 'team'   && <TeamManagementTab />}
       {activeTab === 'agency' && <AgencyProfileTab />}
+      {activeTab === 'backup' && <DatabaseBackupTab />}
       {activeTab === 'expenses' && <ExpenseCategoriesTab />}
       {activeTab === 'vendors' && <VendorsTab />}
       {activeTab === 'recurring' && <RecurringExpensesTab />}

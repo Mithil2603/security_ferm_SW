@@ -283,6 +283,22 @@ ipcMain.handle('get-latest-logs', async () => {
   }
 });
 
+// ── IPC: Select Backup Folder Dialog ─────────────────────────────────
+ipcMain.handle('select-folder', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select Backup Destination Folder',
+      properties: ['openDirectory', 'createDirectory']
+    });
+    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      return { canceled: true };
+    }
+    return { canceled: false, folderPath: result.filePaths[0] };
+  } catch (err) {
+    return { canceled: true, error: err.message };
+  }
+});
+
 // ── IPC: Get Hardware ID (machine-unique identifier for licensing) ───
 let cachedHardwareId = null;
 ipcMain.handle('get-hardware-id', async () => {
