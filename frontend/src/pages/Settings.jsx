@@ -6,8 +6,9 @@ import {
   Settings as SettingsIcon, Banknote, Users, Building2,
   Plus, Edit2, Trash2, X, CheckCircle2, AlertCircle,
   Shield, ShieldCheck, ShieldOff, Eye, EyeOff, RotateCcw,
-  IndianRupee, Percent, Clock, UserPlus, Key, Mail, Receipt, Settings2
+  IndianRupee, Percent, Clock, UserPlus, Key, Mail, Receipt, Settings2, Database
 } from 'lucide-react';
+import { getServerBaseUrl } from '../utils/apiUrl';
 
 import DatabaseBackupTab from '../components/settings/DatabaseBackupTab';
 
@@ -92,7 +93,7 @@ function SalaryStructuresTab() {
 
   const emptyForm = {
     name: '', base_salary: '', dearness_allowance: '0', house_rent_allowance: '0',
-    other_allowances: '0', pf_percentage: '12', esi_applicable: false,
+    other_allowances: '0', pf_percentage: '0', esi_applicable: false,
     income_tax_applicable: false, effective_from: format(new Date(), 'yyyy-MM-dd')
   };
   const [formData, setFormData] = useState({ ...emptyForm });
@@ -128,7 +129,7 @@ function SalaryStructuresTab() {
       dearness_allowance: ss.dearness_allowance || '0',
       house_rent_allowance: ss.house_rent_allowance || '0',
       other_allowances: ss.other_allowances || '0',
-      pf_percentage: ss.pf_percentage || '12',
+      pf_percentage: ss.pf_percentage !== undefined && ss.pf_percentage !== null ? String(ss.pf_percentage) : '0',
       esi_applicable: ss.esi_applicable || false,
       income_tax_applicable: ss.income_tax_applicable || false,
       effective_from: ss.effective_from ? ss.effective_from.substring(0, 10) : format(new Date(), 'yyyy-MM-dd'),
@@ -270,17 +271,32 @@ function SalaryStructuresTab() {
                           <CheckCircle2 className="w-3 h-3" /> Active
                         </span>
                       ) : (
-                        <span className="text-xs text-slate-400">Inactive</span>
+                        <span className="text-xs text-slate-400 font-medium">Inactive</span>
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex gap-1">
+                      <div className="flex items-center gap-1.5">
                         <button onClick={() => openEdit(ss)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Edit">
                           <Edit2 className="w-4 h-4" />
                         </button>
-                        {ss.is_active && (
+                        {ss.is_active ? (
                           <button onClick={() => setConfirmDelete(ss.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Deactivate">
                             <Trash2 className="w-4 h-4" />
+                          </button>
+                        ) : (
+                          <button 
+                            onClick={async () => {
+                              try {
+                                await api.put(`/settings/salary-structures/${ss.id}`, { is_active: true });
+                                fetchStructures();
+                              } catch (err) {
+                                alert(err.response?.data?.message || 'Failed to reactivate structure');
+                              }
+                            }} 
+                            className="px-2 py-1 text-xs font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded-md border border-teal-200 transition-colors" 
+                            title="Re-activate Structure"
+                          >
+                            Activate
                           </button>
                         )}
                       </div>
@@ -850,14 +866,15 @@ function AgencyProfileTab() {
       const res = await api.post('/settings/system/agency_logo', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
-      if (res.data.success) {
-        setAgencySettings({ ...agencySettings, agency_logo_url: res.data.logo_url });
+      const newLogoUrl = res.data?.logo_url || res.data?.data?.logo_url;
+      if (newLogoUrl) {
+        setAgencySettings(prev => ({ ...prev, agency_logo_url: newLogoUrl }));
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
       }
     } catch (err) {
       console.error(err);
-      alert('Failed to upload logo');
+      alert(err.response?.data?.message || 'Failed to upload logo. Please ensure image is under 2MB.');
     } finally {
       setUploadingLogo(false);
     }
@@ -866,7 +883,7 @@ function AgencyProfileTab() {
   const handleRemoveLogo = async () => {
     try {
       await api.delete('/settings/system/agency_logo');
-      setAgencySettings({ ...agencySettings, agency_logo_url: '' });
+      setAgencySettings(prev => ({ ...prev, agency_logo_url: '' }));
     } catch (err) {
       console.error(err);
       alert('Failed to remove logo');
@@ -913,9 +930,9 @@ function AgencyProfileTab() {
 
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mb-6">
-            <div className="w-24 h-24 border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center rounded-lg overflow-hidden flex-shrink-0">
+            <div className="w-28 h-24 border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center rounded-lg overflow-hidden flex-shrink-0 p-1">
               {agencySettings.agency_logo_url ? (
-                <img src={`http://localhost:3000${agencySettings.agency_logo_url}`} alt="Logo" className="w-full h-full object-contain" />
+                <img src={`${getServerBaseUrl()}${agencySettings.agency_logo_url}`} alt="Logo" className="w-full h-full object-contain" />
               ) : (
                 <span className="text-xs text-slate-400 text-center px-2">No Logo</span>
               )}
@@ -933,7 +950,9 @@ function AgencyProfileTab() {
                   </button>
                 )}
               </div>
-              <p className="text-xs text-slate-500 mt-2">Recommended: PNG or JPG, max 2MB.</p>
+              <p className="text-xs text-slate-500 mt-2">
+                Standard format: <strong>PNG or JPG</strong>. Recommended dimensions: <strong>400×120 px</strong> (or square 300×300 px), max size 2 MB.
+              </p>
             </div>
           </div>
 
@@ -1326,13 +1345,15 @@ function PayrollAdjustmentsTab() {
   const fetchCategories = async () => {
     try {
       const res = await api.get('/settings/system/payroll_adjustment_categories');
-      setCategories(JSON.parse(res.data || '[]'));
-    } catch (err) {
-      if (err.response && err.response.status === 404) {
-        setCategories([]);
+      if (res.data) {
+        const parsed = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+        setCategories(Array.isArray(parsed) ? parsed : []);
       } else {
-        console.error(err);
+        setCategories([]);
       }
+    } catch (err) {
+      console.error('Fetch categories error:', err);
+      setCategories([]);
     } finally {
       setLoading(false);
     }
@@ -1344,7 +1365,8 @@ function PayrollAdjustmentsTab() {
       await api.put('/settings/system/payroll_adjustment_categories', { value: JSON.stringify(newCats) });
       setCategories(newCats);
     } catch (err) {
-      alert('Failed to save categories');
+      console.error('Save categories error:', err);
+      alert('Failed to save category: ' + (err.response?.data?.message || err.message));
     } finally {
       setSaving(false);
     }
