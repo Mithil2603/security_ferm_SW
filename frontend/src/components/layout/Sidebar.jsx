@@ -40,7 +40,6 @@ const navItems = [
   { name: 'Vendor Ledger', path: '/vendor-statements', icon: FileText, roles: ['admin', 'accountant', 'manager'] },
   { name: 'Reports', path: '/reports', icon: PieChart, roles: ['admin', 'manager', 'accountant'] },
   { name: 'Tax Reports', path: '/tax-reports', icon: Receipt, roles: ['admin', 'manager', 'accountant'] },
-  { name: 'Tax Calculator', path: '/tax-calculator', icon: Calculator, roles: ['admin', 'accountant'] },
   { name: 'PF & Gratuity', path: '/pf-gratuity', icon: Shield, roles: ['admin', 'accountant'] },
   { name: 'GST Compliance', path: '/gst-compliance', icon: FileText, roles: ['admin', 'accountant'] },
   { name: 'Financial Reports', path: '/financial-reports', icon: BarChart3, roles: ['admin', 'accountant'] },

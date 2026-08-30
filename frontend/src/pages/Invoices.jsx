@@ -58,9 +58,35 @@ export default function Invoices() {
 
   const openCreateModal = () => {
     fetchClients();
-    setInvoiceForm({ client_id: '', billing_period_start: '', billing_period_end: '', tax_type: 'none', is_rcm_applicable: false, discount_amount: '0', notes: '' });
+    const now = new Date();
+    const startOfMonth = format(new Date(now.getFullYear(), now.getMonth(), 1), 'yyyy-MM-dd');
+    const endOfMonth = format(new Date(now.getFullYear(), now.getMonth() + 1, 0), 'yyyy-MM-dd');
+    const todayStr = format(now, 'yyyy-MM-dd');
+
+    setInvoiceForm({
+      client_id: '',
+      invoice_date: todayStr,
+      billing_period_start: startOfMonth,
+      billing_period_end: endOfMonth,
+      tax_type: 'cgst_sgst',
+      is_rcm_applicable: false,
+      discount_amount: '0',
+      notes: ''
+    });
     setError('');
     setIsCreateOpen(true);
+  };
+
+  const setMonthPreset = (offsetMonths = 0) => {
+    const d = new Date();
+    d.setMonth(d.getMonth() + offsetMonths);
+    const start = format(new Date(d.getFullYear(), d.getMonth(), 1), 'yyyy-MM-dd');
+    const end = format(new Date(d.getFullYear(), d.getMonth() + 1, 0), 'yyyy-MM-dd');
+    setInvoiceForm(prev => ({
+      ...prev,
+      billing_period_start: start,
+      billing_period_end: end
+    }));
   };
 
   const handleCreateInvoice = async (e) => {
@@ -75,7 +101,7 @@ export default function Invoices() {
       setIsCreateOpen(false);
       fetchInvoices();
     } catch (err) {
-      setError(err.message || 'Failed to create invoice');
+      setError(err.response?.data?.message || err.message || 'Failed to create invoice');
     } finally {
       setSubmitting(false);
     }
@@ -314,62 +340,98 @@ export default function Invoices() {
 
       {/* Create Invoice Modal */}
       {isCreateOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-slide-up">
-            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-slide-up my-6 max-h-[90vh] flex flex-col">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
               <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                <FileText className="w-5 h-5 text-teal-600" /> Create Invoice
+                <FileText className="w-5 h-5 text-teal-600" /> Create Monthly Invoice
               </h3>
               <button onClick={() => setIsCreateOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
-            <form onSubmit={handleCreateInvoice} className="p-6">
-              {error && <div className="mb-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg">{error}</div>}
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Client *</label>
-                  <select required name="client_id" value={invoiceForm.client_id} onChange={(e) => setInvoiceForm({ ...invoiceForm, client_id: e.target.value })} className={inputCls}>
-                    <option value="">-- Select Client --</option>
-                    {clients.map(c => <option key={c.id} value={c.id}>{c.name} (₹{parseFloat(c.monthly_rate).toLocaleString('en-IN')}/mo)</option>)}
-                  </select>
+            <form onSubmit={handleCreateInvoice} className="p-6 overflow-y-auto flex-1 space-y-4">
+              {error && <div className="p-3 bg-red-50 text-red-700 text-sm rounded-lg border border-red-100">{error}</div>}
+              
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Client *</label>
+                <select required name="client_id" value={invoiceForm.client_id} onChange={(e) => setInvoiceForm({ ...invoiceForm, client_id: e.target.value })} className={inputCls}>
+                  <option value="">-- Select Client --</option>
+                  {clients.map(c => <option key={c.id} value={c.id}>{c.name} (₹{parseFloat(c.monthly_rate).toLocaleString('en-IN')}/mo)</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Invoice Date *</label>
+                <input required type="date" value={invoiceForm.invoice_date || ''} onChange={(e) => setInvoiceForm({ ...invoiceForm, invoice_date: e.target.value })} className={inputCls} />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-sm font-medium text-slate-700">Billing Period *</label>
+                  <div className="flex gap-1">
+                    <button type="button" onClick={() => setMonthPreset(0)} className="text-[11px] font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 px-2 py-0.5 rounded transition-colors">This Month</button>
+                    <button type="button" onClick={() => setMonthPreset(-1)} className="text-[11px] font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 px-2 py-0.5 rounded transition-colors">Last Month</button>
+                  </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Billing Start *</label>
+                    <span className="text-[11px] text-slate-500 mb-0.5 block">Start Date</span>
                     <input required type="date" value={invoiceForm.billing_period_start} onChange={(e) => setInvoiceForm({ ...invoiceForm, billing_period_start: e.target.value })} className={inputCls} />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Billing End *</label>
+                    <span className="text-[11px] text-slate-500 mb-0.5 block">End Date</span>
                     <input required type="date" value={invoiceForm.billing_period_end} onChange={(e) => setInvoiceForm({ ...invoiceForm, billing_period_end: e.target.value })} className={inputCls} />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Tax Configuration</label>
-                    <select value={invoiceForm.tax_type} onChange={(e) => setInvoiceForm({ ...invoiceForm, tax_type: e.target.value })} className={inputCls}>
-                      <option value="none">No GST (0%)</option>
-                      <option value="cgst_sgst">Intra-State (CGST 9% + SGST 9%)</option>
-                      <option value="igst">Inter-State (IGST 18%)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Discount (₹)</label>
-                    <input type="number" min="0" step="0.01" value={invoiceForm.discount_amount} onChange={(e) => setInvoiceForm({ ...invoiceForm, discount_amount: e.target.value })} className={inputCls} />
-                  </div>
-                </div>
-                <div className="flex items-center p-3 bg-amber-50 rounded-lg border border-amber-100">
-                  <input type="checkbox" id="monthly_rcm" checked={invoiceForm.is_rcm_applicable} onChange={e => setInvoiceForm({...invoiceForm, is_rcm_applicable: e.target.checked})} className="h-4 w-4 text-amber-600 focus:ring-amber-500 rounded border-amber-300" />
-                  <label htmlFor="monthly_rcm" className="ml-2 block text-sm font-medium text-amber-900 cursor-pointer">
-                    Apply RCM (Reverse Charge Mechanism)
+              </div>
+
+              {/* Tax Configuration */}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">Tax Configuration</label>
+                <div className="grid grid-cols-3 gap-2">
+                  <label className={`flex flex-col p-2.5 rounded-lg border text-center cursor-pointer transition-all ${
+                    invoiceForm.tax_type === 'none' ? 'bg-teal-50 border-teal-500 ring-1 ring-teal-500' : 'bg-white border-slate-200 hover:bg-slate-50'
+                  }`}>
+                    <input type="radio" name="monthly_tax_type" value="none" checked={invoiceForm.tax_type === 'none'} onChange={e => setInvoiceForm({...invoiceForm, tax_type: e.target.value})} className="sr-only" />
+                    <span className="text-xs font-bold text-slate-800">No GST</span>
+                    <span className="text-[10px] text-slate-500">0%</span>
+                  </label>
+                  <label className={`flex flex-col p-2.5 rounded-lg border text-center cursor-pointer transition-all ${
+                    invoiceForm.tax_type === 'cgst_sgst' ? 'bg-teal-50 border-teal-500 ring-1 ring-teal-500' : 'bg-white border-slate-200 hover:bg-slate-50'
+                  }`}>
+                    <input type="radio" name="monthly_tax_type" value="cgst_sgst" checked={invoiceForm.tax_type === 'cgst_sgst'} onChange={e => setInvoiceForm({...invoiceForm, tax_type: e.target.value})} className="sr-only" />
+                    <span className="text-xs font-bold text-slate-800">Intra-State</span>
+                    <span className="text-[10px] text-slate-500">9% CGST + 9% SGST</span>
+                  </label>
+                  <label className={`flex flex-col p-2.5 rounded-lg border text-center cursor-pointer transition-all ${
+                    invoiceForm.tax_type === 'igst' ? 'bg-teal-50 border-teal-500 ring-1 ring-teal-500' : 'bg-white border-slate-200 hover:bg-slate-50'
+                  }`}>
+                    <input type="radio" name="monthly_tax_type" value="igst" checked={invoiceForm.tax_type === 'igst'} onChange={e => setInvoiceForm({...invoiceForm, tax_type: e.target.value})} className="sr-only" />
+                    <span className="text-xs font-bold text-slate-800">Inter-State</span>
+                    <span className="text-[10px] text-slate-500">18% IGST</span>
                   </label>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
-                  <textarea value={invoiceForm.notes} onChange={(e) => setInvoiceForm({ ...invoiceForm, notes: e.target.value })} rows="2" className={inputCls} />
-                </div>
               </div>
-              <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-slate-100">
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Discount (₹)</label>
+                <input type="number" min="0" step="0.01" value={invoiceForm.discount_amount} onChange={(e) => setInvoiceForm({ ...invoiceForm, discount_amount: e.target.value })} className={inputCls} />
+              </div>
+
+              <div className="flex items-center p-3 bg-amber-50 rounded-lg border border-amber-200">
+                <input type="checkbox" id="monthly_rcm" checked={invoiceForm.is_rcm_applicable} onChange={e => setInvoiceForm({...invoiceForm, is_rcm_applicable: e.target.checked})} className="h-4 w-4 text-amber-600 focus:ring-amber-500 rounded border-amber-300 cursor-pointer" />
+                <label htmlFor="monthly_rcm" className="ml-2 block text-xs font-semibold text-amber-900 cursor-pointer">
+                  Apply RCM (Reverse Charge Mechanism - GST paid by client)
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
+                <textarea value={invoiceForm.notes} onChange={(e) => setInvoiceForm({ ...invoiceForm, notes: e.target.value })} rows="2" className={inputCls} placeholder="Optional notes..." />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
                 <button type="button" onClick={() => setIsCreateOpen(false)} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
-                <button type="submit" disabled={submitting} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 shadow-sm disabled:opacity-50">
+                <button type="submit" disabled={submitting} className="px-5 py-2 text-sm font-bold text-white bg-teal-600 rounded-lg hover:bg-teal-700 shadow-md disabled:opacity-50">
                   {submitting ? 'Creating...' : 'Create Invoice'}
                 </button>
               </div>

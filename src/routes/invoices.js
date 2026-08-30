@@ -574,7 +574,8 @@ router.post('/event', async (req, res) => {
     const { 
       client_name, phone, email, address, city, state, gst_number,
       guards_count, rate_per_guard, days_worked,
-      tax_type, is_rcm_applicable, notes 
+      tax_type, is_rcm_applicable, notes,
+      invoice_date, event_date, billing_period_start, billing_period_end
     } = req.body;
 
     if (!client_name || !guards_count || !rate_per_guard || !days_worked) {
@@ -613,9 +614,11 @@ router.post('/event', async (req, res) => {
     }
     total_amount = parseFloat(total_amount.toFixed(2));
 
-    const inv_date = new Date().toISOString().split('T')[0];
+    const inv_date = invoice_date || new Date().toISOString().split('T')[0];
+    const b_start = billing_period_start || event_date || inv_date;
+    const b_end = billing_period_end || event_date || inv_date;
     const dueDays = parseInt(process.env.INVOICE_DUE_DAYS) || 30;
-    const due_date = new Date(Date.now() + dueDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const due_date = new Date(new Date(inv_date).getTime() + dueDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const invoice_number = await generateInvoiceNumber(inv_date);
     
     // Create Invoice
@@ -626,12 +629,14 @@ router.post('/event', async (req, res) => {
         amount_subtotal, total_amount, final_amount, payment_due,
         tax_type, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable,
         duty_days_worked, is_ad_hoc, notes, created_by
-      ) VALUES ($1, $2, $15, $16, $15, $15, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1, $13, $14)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1, $17, $18)
       RETURNING *`,
       [
-        invoice_number, client_id, amount_subtotal, total_amount, total_amount, total_amount,
+        invoice_number, client_id, inv_date, due_date,
+        b_start, b_end,
+        amount_subtotal, total_amount, total_amount, total_amount,
         tax_type || 'none', cgst_amount, sgst_amount, igst_amount, is_rcm_applicable ? 1 : 0,
-        days_worked, notes, req.user.userId, inv_date, due_date
+        days_worked, notes, req.user.userId
       ]
     );
 
@@ -714,4 +719,5 @@ router.put('/:id', async (req, res) => {
   }
 });
 
+router.calculateInvoiceAmounts = calculateInvoiceAmounts;
 module.exports = router;

@@ -241,7 +241,7 @@ function App() {
             <Route path="/budgets" element={<Budgets />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/tax-reports" element={<TaxReports />} />
-            <Route path="/tax-calculator" element={<TaxCalculator />} />
+            <Route path="/tax-calculator" element={<Navigate to="/tax-reports" replace />} />
             <Route path="/pf-gratuity" element={<PFGratuity />} />
             <Route path="/gst-compliance" element={<GSTCompliance />} />
             <Route path="/financial-reports" element={<FinancialReports />} />

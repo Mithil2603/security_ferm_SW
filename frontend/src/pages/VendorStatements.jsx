@@ -4,6 +4,24 @@ import api from '../services/api';
 import { getServerBaseUrl } from '../utils/apiUrl';
 import { format } from 'date-fns';
 
+function formatDateSafe(val) {
+  if (!val) return '-';
+  try {
+    if (typeof val === 'string') {
+      const clean = val.split('T')[0];
+      const parts = clean.split('-');
+      if (parts.length === 3 && parts[0].length === 4) {
+        return `${parts[2]}-${parts[1]}-${parts[0]}`;
+      }
+    }
+    const d = new Date(val);
+    if (isNaN(d.getTime())) return String(val).slice(0, 10);
+    return format(d, 'dd-MM-yyyy');
+  } catch (_) {
+    return String(val).slice(0, 10);
+  }
+}
+
 export default function VendorStatements() {
   const [vendors, setVendors] = useState([]);
   const [selectedVendorId, setSelectedVendorId] = useState('');
@@ -62,29 +80,38 @@ export default function VendorStatements() {
       setError('');
       const res = await api.get(`/vendors/${id}/statement`);
       
-      // Combine expenses and payments into a single ledger
       const { expenses, payments, total_billed, total_paid, balance_due, vendor } = res.data;
       
-      const ledger = expenses.map(e => ({
+      const expenseEntries = (expenses || []).map(e => ({
         id: `exp-${e.id}`,
-        date: new Date(e.expense_date),
+        rawDate: e.expense_date || e.created_at,
+        dateDisplay: formatDateSafe(e.expense_date || e.created_at),
         type: 'Expense',
-        ref: e.id,
-        description: e.description,
+        ref: e.receipt_number ? `Rec #${e.receipt_number}` : `EXP-${e.id}`,
+        description: e.description || e.category,
         category: e.category,
         amount_billed: parseFloat(e.amount) || 0,
         amount_paid: parseFloat(e.amount_paid) || 0,
+        outstanding: Math.max(0, (parseFloat(e.amount) || 0) - (parseFloat(e.amount_paid) || 0)),
         status: e.status
       }));
 
-      // Sort chronological (newest first for display, or oldest first like image?)
-      // Image has oldest first or newest?
-      // Image has: 03-09-2020, then 02-10-2020. So newest first.
-      ledger.sort((a, b) => b.date - a.date);
+      const paymentEntries = (payments || []).map(p => ({
+        id: `pmt-${p.id}`,
+        rawDate: p.payment_date || p.created_at,
+        dateDisplay: formatDateSafe(p.payment_date || p.created_at),
+        type: 'Payment',
+        ref: p.reference_number || `PMT-${p.id}`,
+        description: p.expense_description ? `Payment for: ${p.expense_description}` : `Payment via ${p.payment_mode || 'Bank'}`,
+        category: 'Payment',
+        amount_billed: 0,
+        amount_paid: parseFloat(p.amount) || 0,
+        outstanding: 0,
+        status: 'paid'
+      }));
 
-      // We don't need a running balance, we just calculate outstanding per item
-      ledger.forEach(item => {
-        item.outstanding = Math.max(0, item.amount_billed - item.amount_paid);
+      const ledger = [...expenseEntries, ...paymentEntries].sort((a, b) => {
+        return new Date(b.rawDate || 0) - new Date(a.rawDate || 0);
       });
 
       setStatement({ vendor, total_billed, total_paid, balance_due, ledger });
@@ -244,8 +271,8 @@ export default function VendorStatements() {
                   ) : (
                     statement.ledger.filter(item => item.status !== 'rejected').map((item) => (
                       <tr key={item.id}>
-                        <td className="py-3 text-slate-800">{format(item.date, 'MM-dd-yyyy')}</td>
-                        <td className="py-3 text-slate-800">{item.type === 'Expense' ? item.ref : '-'}</td>
+                        <td className="py-3 text-slate-800 font-medium">{item.dateDisplay}</td>
+                        <td className="py-3 text-slate-800">{item.ref || '-'}</td>
                         <td className="py-3 text-slate-800 truncate max-w-[200px]">{item.description}</td>
                         <td className="py-3 text-right text-slate-800">
                           {item.amount_billed > 0 ? '₹' + item.amount_billed.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '₹0.00'}
