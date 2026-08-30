@@ -29,8 +29,32 @@ const combinedTransport = new DailyRotateFile({
   maxFiles: '14d'
 });
 
+// Direct fixed-name log files for quick inspection
+const directErrorTransport = new winston.transports.File({
+  filename: path.join(logDir, 'latest-error.log'),
+  level: 'error',
+  maxsize: 10 * 1024 * 1024,
+  format: winston.format.combine(
+    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+    winston.format.printf(({ level, message, timestamp, stack }) => {
+      return `[${timestamp}] [${level.toUpperCase()}]: ${stack || message}`;
+    })
+  )
+});
+
+const directCombinedTransport = new winston.transports.File({
+  filename: path.join(logDir, 'app.log'),
+  maxsize: 10 * 1024 * 1024,
+  format: winston.format.combine(
+    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+    winston.format.printf(({ level, message, timestamp, stack }) => {
+      return `[${timestamp}] [${level.toUpperCase()}]: ${stack || message}`;
+    })
+  )
+});
+
 const logger = winston.createLogger({
-  level: isDev ? 'debug' : 'info',
+  level: 'info',
   format: winston.format.combine(
     winston.format.timestamp({
       format: 'YYYY-MM-DD HH:mm:ss'
@@ -42,23 +66,30 @@ const logger = winston.createLogger({
   defaultMeta: { service: 'security-firm-api' },
   transports: [
     errorTransport,
-    combinedTransport
+    combinedTransport,
+    directErrorTransport,
+    directCombinedTransport,
+    new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.printf(({ level, message, timestamp, stack }) => {
+          if (stack) {
+            return `${timestamp} ${level}: ${message}\n${stack}`;
+          }
+          return `${timestamp} ${level}: ${message}`;
+        })
+      )
+    })
   ],
 });
 
-// In development, log to the console with colorized output
-if (isDev) {
-  logger.add(new winston.transports.Console({
-    format: winston.format.combine(
-      winston.format.colorize(),
-      winston.format.printf(({ level, message, timestamp, stack }) => {
-        if (stack) {
-          return `${timestamp} ${level}: ${message}\n${stack}`;
-        }
-        return `${timestamp} ${level}: ${message}`;
-      })
-    )
-  }));
-}
+// Also log unhandled rejections to logger
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Rejection at: ' + promise + ' reason: ' + (reason?.stack || reason));
+});
+
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught Exception thrown: ' + (err?.stack || err));
+});
 
 module.exports = logger;

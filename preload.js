@@ -97,4 +97,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Save MySQL credentials to .env
   saveDbConfig: (config) => ipcRenderer.invoke('save-db-config', config),
+
+  // Open Log Directory in Windows Explorer
+  openLogFolder: () => ipcRenderer.invoke('open-log-folder'),
+
+  // Get Latest Logs
+  getLatestLogs: () => ipcRenderer.invoke('get-latest-logs'),
 });

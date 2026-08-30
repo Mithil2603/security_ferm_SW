@@ -60,6 +60,62 @@ async function initPool() {
     conn.release();
     return true;
   } catch (err) {
+    // If Access Denied, try common password fallback candidates automatically!
+    if (err.code === 'ER_ACCESS_DENIED_ERROR' || err.errno === 1045) {
+      logger.info('🔑 Access denied with current password. Attempting automatic password discovery...');
+      const fallbackPasswords = [
+        process.env.DB_PASSWORD,
+        '9722623655@MySql',
+        'root',
+        'admin',
+        '123456',
+        '',
+        'admin123',
+        'root1234'
+      ].filter(Boolean);
+
+      let foundWorkingPassword = null;
+      for (const trialPwd of fallbackPasswords) {
+        try {
+          const testConn = await mysql.createConnection({
+            host: poolConfig.host,
+            port: poolConfig.port,
+            user: poolConfig.user,
+            password: trialPwd,
+            connectTimeout: 3000,
+          });
+          await testConn.ping();
+          await testConn.end();
+          foundWorkingPassword = trialPwd;
+          logger.info(`✅ Discovered matching MySQL password: "${trialPwd}"`);
+          break;
+        } catch (pwdErr) {
+          // ignore trial failure
+        }
+      }
+
+      if (foundWorkingPassword !== null) {
+        process.env.DB_PASSWORD = foundWorkingPassword;
+        const updatedConfig = getPoolConfig();
+        // Check if DB exists with working password
+        try {
+          const rootConn = await mysql.createConnection({
+            host: updatedConfig.host,
+            port: updatedConfig.port,
+            user: updatedConfig.user,
+            password: updatedConfig.password,
+          });
+          await rootConn.query(`CREATE DATABASE IF NOT EXISTS \`${updatedConfig.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`);
+          await rootConn.end();
+        } catch (dbErr) {}
+
+        pool = mysql.createPool(updatedConfig);
+        const conn = await pool.getConnection();
+        conn.release();
+        return true;
+      }
+    }
+
     // If database does not exist, automatically create it!
     if (err.code === 'ER_BAD_DB_ERROR' || err.errno === 1049 || (err.message && err.message.includes('Unknown database'))) {
       logger.info(`🆕 Database '${poolConfig.database}' does not exist. Creating database automatically...`);

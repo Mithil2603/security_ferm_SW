@@ -245,6 +245,44 @@ ipcMain.handle('test-db-connection', async (event, config) => {
   }
 });
 
+// ── IPC: Open Logs Directory in Windows Explorer ─────────────────────
+ipcMain.handle('open-log-folder', async () => {
+  const logDir = process.env.LOG_DIR || path.join(userDataPath, 'logs');
+  if (!fs.existsSync(logDir)) {
+    fs.mkdirSync(logDir, { recursive: true });
+  }
+  shell.openPath(logDir);
+  return { success: true, path: logDir };
+});
+
+// ── IPC: Get Latest Log Content ──────────────────────────────────────
+ipcMain.handle('get-latest-logs', async () => {
+  try {
+    const logDir = process.env.LOG_DIR || path.join(userDataPath, 'logs');
+    if (!fs.existsSync(logDir)) {
+      return { success: true, logs: 'Log directory is empty.' };
+    }
+    const files = fs.readdirSync(logDir)
+      .filter(f => f.endsWith('.log'))
+      .sort((a, b) => {
+        const sA = fs.statSync(path.join(logDir, a)).mtimeMs;
+        const sB = fs.statSync(path.join(logDir, b)).mtimeMs;
+        return sB - sA;
+      });
+
+    if (files.length === 0) {
+      return { success: true, logs: 'No log files recorded yet.' };
+    }
+
+    const latestFile = path.join(logDir, files[0]);
+    const content = fs.readFileSync(latestFile, 'utf8');
+    const lines = content.split('\n').slice(-150).join('\n');
+    return { success: true, fileName: files[0], logs: lines };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 // ── IPC: Get Hardware ID (machine-unique identifier for licensing) ───
 let cachedHardwareId = null;
 ipcMain.handle('get-hardware-id', async () => {
