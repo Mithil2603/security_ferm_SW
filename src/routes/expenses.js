@@ -62,11 +62,16 @@ router.get('/', async (req, res) => {
     const countResult = await query(`SELECT COUNT(*) AS count FROM expenses e ${where}`, params);
     const sumResult = await query(`SELECT COALESCE(SUM(amount), 0) as total FROM expenses e ${where}`, params);
 
+    const totalCount = parseInt(countResult.rows[0]?.count || 0);
+    const limitNum = parseInt(limit) || 20;
+    const pageNum = parseInt(page) || 1;
+    const totalPages = Math.ceil(totalCount / limitNum) || 1;
+
     res.json({
       success: true,
       data: result.rows,
-      total_amount: parseFloat(sumResult.rows[0].total),
-      pagination: { total: parseInt(countResult.rows[0].count), page: parseInt(page), limit: parseInt(limit) }
+      total_amount: parseFloat(sumResult.rows[0]?.total || 0),
+      pagination: { total: totalCount, page: pageNum, limit: limitNum, pages: totalPages }
     });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'expenses' });

@@ -1,9 +1,14 @@
 import { ChevronLeft, ChevronRight, MoreHorizontal } from 'lucide-react';
 
 export default function Pagination({ pagination, onPageChange }) {
-  if (!pagination || pagination.pages <= 1) return null;
+  if (!pagination) return null;
 
-  const { page, pages: totalPages, total: totalRecords, limit } = pagination;
+  const totalRecords = parseInt(pagination.total || 0);
+  const limit = parseInt(pagination.limit || 20);
+  const page = parseInt(pagination.page || 1);
+  const totalPages = parseInt(pagination.pages) || Math.ceil(totalRecords / limit) || 1;
+
+  if (totalPages <= 1 && totalRecords <= limit) return null;
   
   // Calculate page window
   const getPageNumbers = () => {

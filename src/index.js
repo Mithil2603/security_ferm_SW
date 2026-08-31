@@ -14,9 +14,10 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Security middleware with Content Security Policy
+// Security middleware with Content Security Policy & Cross-Origin Resource Policy
 app.use(
   helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
@@ -50,43 +51,53 @@ function isLanOrigin(origin) {
   return false;
 }
 
-app.use(cors({
-  origin: function(origin, callback) {
-    if (isLanOrigin(origin)) return callback(null, true);
-    logger.warn(`⚠️  CORS blocked origin: ${origin}`);
-    callback(new Error('Not allowed by CORS'));
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-master-passcode', 'x-refresh-token'],
-  maxAge: 86400
-}));
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
+  : ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:5173', 'http://127.0.0.1:3000'];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin) || isLanOrigin(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Blocked by CORS policy'));
+      }
+    },
+    credentials: true,
+  })
+);
 app.use(cookieParser());
 
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 500
+  max: 2000,
+  standardHeaders: true,
+  legacyHeaders: false,
 });
-
-// Stricter limits for sensitive operations (Issue #13)
 const strictLimiter = rateLimit({
-  windowMs: 60 * 1000,  // 1 minute
-  max: 15               // Max 15 requests per minute
+  windowMs: 15 * 60 * 1000,
+  max: 50,
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
-app.use('/api/payroll', strictLimiter);
-app.use('/api/invoices', strictLimiter);
+app.use('/api/auth/login', strictLimiter);
 app.use('/api/bank-reconciliation', strictLimiter);
 app.use('/api/', limiter);
 
-// Serve static files (documents/uploads)
+// Serve static files (documents/uploads) with cross-origin access
 const path = require('path');
 const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
-app.use('/uploads', express.static(uploadDir));
+app.use('/uploads', (req, res, next) => {
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  next();
+}, express.static(uploadDir));
 
 // Body parsing
 app.use(express.json({ limit: '10mb' }));

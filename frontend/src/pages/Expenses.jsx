@@ -1,12 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Receipt, Plus, CheckCircle, XCircle, Trash2, X } from 'lucide-react';
+import { Receipt, Plus, CheckCircle, XCircle, Trash2, X, Download, Eye, ExternalLink, Building, Image as ImageIcon, FileText } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import api from '../services/api';
 import { getServerBaseUrl } from '../utils/apiUrl';
 import { format } from 'date-fns';
 import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
-
-// Categories are now fetched dynamically from the database
 
 const PAYMENT_METHODS = [
   { value: 'cash', label: 'Cash' },
@@ -41,6 +40,15 @@ export default function Expenses() {
   const [categories, setCategories] = useState([]);
   const [vendors, setVendors] = useState([]);
   
+  // Quick Add Vendor State
+  const [isVendorModalOpen, setIsVendorModalOpen] = useState(false);
+  const [vendorForm, setVendorForm] = useState({ name: '', contact_info: '', payment_terms_days: '0' });
+  const [creatingVendor, setCreatingVendor] = useState(false);
+  const [vendorError, setVendorError] = useState('');
+
+  // Receipt Preview & Download Modal State
+  const [selectedReceipt, setSelectedReceipt] = useState(null);
+
   // Payment Modal State
   const [payModalExpense, setPayModalExpense] = useState(null);
   const [payFormData, setPayFormData] = useState({ amount: '', payment_method: 'bank_transfer', payment_date: format(new Date(), 'yyyy-MM-dd'), reference_number: '', notes: '' });
@@ -91,11 +99,12 @@ export default function Expenses() {
   useEffect(() => { setPage(1); }, [statusFilter]);
 
   const handleInputChange = (e) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
   };
 
   const openCreateModal = () => {
-    setFormData({ ...emptyForm });
+    setFormData({ ...emptyForm, expense_date: format(new Date(), 'yyyy-MM-dd') });
     setReceiptFile(null);
     setError('');
     setIsModalOpen(true);
@@ -114,9 +123,6 @@ export default function Expenses() {
       });
       if (receiptFile) data.append('receipt_file', receiptFile);
 
-      // Using raw axios for FormData to prevent Content-Type being strictly JSON in our interceptor
-      // Wait, axios automatically sets correct Content-Type for FormData, but our interceptor forces JSON.
-      // We will override headers.
       await api.post('/expenses', data, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
@@ -124,9 +130,58 @@ export default function Expenses() {
       setIsModalOpen(false);
       fetchExpenses();
     } catch (err) {
-      setError(err.message || 'Failed to record expense');
+      setError(err.response?.data?.message || err.message || 'Failed to record expense');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleCreateVendor = async (e) => {
+    e.preventDefault();
+    if (!vendorForm.name.trim()) {
+      setVendorError('Vendor name is required');
+      return;
+    }
+    setVendorError('');
+    setCreatingVendor(true);
+    try {
+      const res = await api.post('/vendors', {
+        name: vendorForm.name.trim(),
+        contact_info: vendorForm.contact_info,
+        payment_terms_days: parseInt(vendorForm.payment_terms_days) || 0
+      });
+      const newVendor = res.data;
+      await fetchVendors();
+      if (newVendor && newVendor.id) {
+        setFormData(prev => ({ ...prev, vendor_id: newVendor.id }));
+      }
+      setIsVendorModalOpen(false);
+      setVendorForm({ name: '', contact_info: '', payment_terms_days: '0' });
+    } catch (err) {
+      setVendorError(err.response?.data?.message || err.message || 'Failed to create vendor');
+    } finally {
+      setCreatingVendor(false);
+    }
+  };
+
+  const handleDownloadReceipt = async (receiptUrl, filename = 'expense-receipt') => {
+    try {
+      const fullUrl = `${getServerBaseUrl()}${receiptUrl}`;
+      const res = await fetch(fullUrl);
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const ext = receiptUrl.split('.').pop() || 'png';
+      a.download = `${filename}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Download error:', err);
+      // fallback
+      window.open(`${getServerBaseUrl()}${receiptUrl}`, '_blank');
     }
   };
 
@@ -154,7 +209,7 @@ export default function Expenses() {
       fetchExpenses();
     } catch (err) {
       console.error('Failed to reject expense', err);
-      alert(err.message || 'Failed to reject expense');
+      alert(err.response?.data?.message || err.message || 'Failed to reject expense');
     } finally {
       setRejecting(false);
     }
@@ -168,7 +223,7 @@ export default function Expenses() {
       setPayModalExpense(null);
       fetchExpenses();
     } catch (err) {
-      alert(err.message || 'Failed to record payment');
+      alert(err.response?.data?.message || err.message || 'Failed to record payment');
     } finally {
       setPaying(false);
     }
@@ -185,7 +240,7 @@ export default function Expenses() {
     }
   };
 
-  const inputCls = "w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm";
+  const inputCls = "w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm bg-white text-slate-800 transition-all";
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -195,25 +250,48 @@ export default function Expenses() {
             <Receipt className="w-6 h-6 text-teal-600" />
             Expenses Management
           </h1>
-          <p className="text-slate-500 text-sm mt-1">Track company expenditures and manage approvals.</p>
+          <p className="text-slate-500 text-sm mt-1">Track company expenditures, receipts, and vendor payouts.</p>
         </div>
-        <button onClick={openCreateModal}
-          className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2">
-          <Plus className="w-4 h-4" />
-          Record Expense
-        </button>
+        <div className="flex gap-2.5">
+          <Link
+            to="/vendor-ledger"
+            className="bg-white hover:bg-slate-50 text-slate-700 font-medium px-3.5 py-2 rounded-lg border border-slate-300 text-sm transition-colors shadow-sm flex items-center gap-2"
+          >
+            <Building className="w-4 h-4 text-slate-500" />
+            Vendor Ledger
+          </Link>
+          <button 
+            onClick={openCreateModal}
+            className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg text-sm font-bold transition-colors shadow-sm flex items-center gap-2"
+          >
+            <Plus className="w-4 h-4" />
+            Record Expense
+          </button>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row gap-4">
+        <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div className="flex gap-2 flex-wrap">
             {['', 'pending', 'approved', 'rejected'].map(s => (
-              <button key={s} onClick={() => setStatusFilter(s)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${statusFilter === s ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
-                {s ? s.charAt(0).toUpperCase() + s.slice(1) : 'All'}
+              <button 
+                key={s} 
+                onClick={() => setStatusFilter(s)}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                  statusFilter === s 
+                    ? 'bg-teal-600 text-white border-teal-600 shadow-sm' 
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                {s ? s.charAt(0).toUpperCase() + s.slice(1) : 'All Expenses'}
               </button>
             ))}
           </div>
+          {pagination && (
+            <div className="text-xs text-slate-500">
+              Total Records: <span className="font-bold text-slate-800">{pagination.total || 0}</span>
+            </div>
+          )}
         </div>
 
         <div className="overflow-x-auto">
@@ -222,7 +300,8 @@ export default function Expenses() {
               <tr>
                 <th className="px-6 py-4 font-semibold">Date</th>
                 <th className="px-6 py-4 font-semibold">Category</th>
-                <th className="px-6 py-4 font-semibold">Description</th>
+                <th className="px-6 py-4 font-semibold">Description / Vendor</th>
+                <th className="px-4 py-4 font-semibold text-center">Receipt</th>
                 <th className="px-6 py-4 font-semibold text-right">Amount / Bal</th>
                 <th className="px-6 py-4 font-semibold">Status</th>
                 <th className="px-6 py-4 font-semibold text-right">Actions</th>
@@ -231,55 +310,72 @@ export default function Expenses() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan="6">
-                    <TableSkeleton columns={6} rows={10} />
+                  <td colSpan="7">
+                    <TableSkeleton columns={7} rows={10} />
                   </td>
                 </tr>
               ) : expenses.length === 0 ? (
-                <tr><td colSpan="6" className="px-6 py-12 text-center text-slate-500">
-                  <div className="flex justify-center mb-3"><Receipt className="w-10 h-10 text-slate-300" /></div>
-                  <p className="font-medium text-slate-600 mb-1">No expenses recorded</p>
-                  <p className="text-xs">Click "Record Expense" to add one.</p>
-                </td></tr>
+                <tr>
+                  <td colSpan="7" className="px-6 py-12 text-center text-slate-500">
+                    <div className="flex justify-center mb-3"><Receipt className="w-10 h-10 text-slate-300" /></div>
+                    <p className="font-medium text-slate-600 mb-1">No expenses recorded</p>
+                    <p className="text-xs">Click "Record Expense" to add one.</p>
+                  </td>
+                </tr>
               ) : (
                 expenses.map((expense) => (
                   <tr key={expense.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-6 py-4 text-slate-600 font-medium">
+                    <td className="px-6 py-4 text-slate-700 font-semibold whitespace-nowrap">
                       {format(new Date(expense.expense_date), 'MMM dd, yyyy')}
                     </td>
                     <td className="px-6 py-4">
-                      <span className="px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 text-slate-700 uppercase tracking-wide">
+                      <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-slate-100 text-slate-700 uppercase tracking-wide">
                         {expense.category.replace('_', ' ')}
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="font-medium text-slate-800">{expense.description}</div>
-                      {expense.vendor_name && <div className="text-slate-500 text-xs mt-0.5">Vendor: {expense.vendor_name}</div>}
-                      <div className="text-slate-400 text-xs mt-0.5 flex gap-2 items-center">
-                        <span>By {expense.created_by_name}</span>
-                        {expense.receipt_url && (
-                          <a 
-                            href={`${getServerBaseUrl()}${expense.receipt_url}`} 
-                            target="_blank" 
-                            rel="noreferrer" 
-                            className="text-teal-600 hover:underline flex items-center gap-1 ml-2"
-                          >
-                            <Receipt className="w-3 h-3" /> View Receipt
-                          </a>
-                        )}
-                      </div>
+                      <div className="font-semibold text-slate-800">{expense.description}</div>
+                      {expense.vendor_name && (
+                        <div className="text-slate-500 text-xs mt-0.5 flex items-center gap-1">
+                          <Building className="w-3 h-3 text-slate-400" />
+                          <span>Vendor: <strong className="text-slate-700">{expense.vendor_name}</strong></span>
+                        </div>
+                      )}
+                      <div className="text-slate-400 text-xs mt-0.5">By {expense.created_by_name || 'Staff'}</div>
                     </td>
+                    
+                    {/* Dedicated Receipt Thumbnail / View Column */}
+                    <td className="px-4 py-4 text-center">
+                      {expense.receipt_url ? (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedReceipt(expense)}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-lg text-xs font-semibold transition-colors shadow-sm group"
+                          title="View and download receipt"
+                        >
+                          {expense.receipt_url.match(/\.(jpg|jpeg|png|webp)$/i) ? (
+                            <ImageIcon className="w-3.5 h-3.5 text-teal-600" />
+                          ) : (
+                            <FileText className="w-3.5 h-3.5 text-teal-600" />
+                          )}
+                          <span>View Receipt</span>
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-300 font-normal">No receipt</span>
+                      )}
+                    </td>
+
                     <td className="px-6 py-4 text-right">
                       <div className="font-bold text-slate-900">₹{parseFloat(expense.amount).toLocaleString('en-IN')}</div>
                       {expense.amount_paid > 0 && (
-                        <div className="text-xs text-emerald-600 mt-1">Paid: ₹{parseFloat(expense.amount_paid).toLocaleString('en-IN')}</div>
+                        <div className="text-xs text-emerald-600 mt-0.5">Paid: ₹{parseFloat(expense.amount_paid).toLocaleString('en-IN')}</div>
                       )}
                       {(expense.amount - (expense.amount_paid || 0)) > 0 && expense.status !== 'rejected' && (
-                        <div className="text-xs text-amber-600">Bal: ₹{parseFloat(expense.amount - (expense.amount_paid || 0)).toLocaleString('en-IN')}</div>
+                        <div className="text-xs text-amber-600 font-medium">Bal: ₹{parseFloat(expense.amount - (expense.amount_paid || 0)).toLocaleString('en-IN')}</div>
                       )}
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium capitalize border
+                      <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold capitalize border
                         ${expense.status === 'approved' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
                           expense.status === 'rejected' ? 'bg-red-50 text-red-700 border-red-200' :
                           expense.status === 'paid' ? 'bg-blue-50 text-blue-700 border-blue-200' :
@@ -293,9 +389,15 @@ export default function Expenses() {
                           <button 
                             onClick={() => {
                               setPayModalExpense(expense);
-                              setPayFormData({ ...payFormData, amount: expense.amount - (expense.amount_paid || 0) });
+                              setPayFormData({ 
+                                amount: expense.amount - (expense.amount_paid || 0),
+                                payment_method: 'bank_transfer',
+                                payment_date: format(new Date(), 'yyyy-MM-dd'),
+                                reference_number: '',
+                                notes: ''
+                              });
                             }}
-                            className="px-2 py-1 bg-teal-50 text-teal-700 text-xs font-medium border border-teal-200 hover:bg-teal-100 rounded transition-colors"
+                            className="px-2.5 py-1 bg-teal-50 text-teal-700 text-xs font-bold border border-teal-200 hover:bg-teal-100 rounded-lg transition-colors"
                           >
                             Pay
                           </button>
@@ -329,73 +431,182 @@ export default function Expenses() {
         <Pagination pagination={pagination} onPageChange={setPage} />
       </div>
 
-      {/* Add Expense Modal */}
+      {/* ─── Receipt Preview & Download Modal ────────────────────────────────────── */}
+      {selectedReceipt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden animate-slide-up border border-slate-200">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
+              <div className="flex items-center gap-2">
+                <Receipt className="w-5 h-5 text-teal-600" />
+                <h3 className="text-base font-bold text-slate-800">
+                  Expense Receipt — ₹{parseFloat(selectedReceipt.amount).toLocaleString('en-IN')}
+                </h3>
+              </div>
+              <button 
+                onClick={() => setSelectedReceipt(null)} 
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1 flex flex-col items-center justify-center bg-slate-50/50 min-h-[300px]">
+              {selectedReceipt.receipt_url.match(/\.(jpg|jpeg|png|webp|gif)$/i) ? (
+                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-white p-2 max-w-full">
+                  <img 
+                    src={`${getServerBaseUrl()}${selectedReceipt.receipt_url}`} 
+                    alt="Receipt" 
+                    className="max-h-[60vh] max-w-full object-contain mx-auto rounded-lg"
+                  />
+                </div>
+              ) : (
+                <div className="w-full h-[60vh] border border-slate-200 rounded-xl overflow-hidden bg-white">
+                  <iframe 
+                    src={`${getServerBaseUrl()}${selectedReceipt.receipt_url}`} 
+                    title="PDF Receipt" 
+                    className="w-full h-full"
+                  />
+                </div>
+              )}
+
+              <div className="mt-4 w-full bg-white p-3.5 rounded-xl border border-slate-200 text-xs grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-600">
+                <div>
+                  <span className="block text-slate-400">Date:</span>
+                  <span className="font-semibold text-slate-800">{selectedReceipt.expense_date}</span>
+                </div>
+                <div>
+                  <span className="block text-slate-400">Category:</span>
+                  <span className="font-semibold text-slate-800">{selectedReceipt.category}</span>
+                </div>
+                <div>
+                  <span className="block text-slate-400">Vendor:</span>
+                  <span className="font-semibold text-slate-800">{selectedReceipt.vendor_name || 'N/A'}</span>
+                </div>
+                <div>
+                  <span className="block text-slate-400">Receipt #:</span>
+                  <span className="font-semibold text-slate-800">{selectedReceipt.receipt_number || 'N/A'}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-slate-100 bg-white flex justify-between items-center shrink-0">
+              <a 
+                href={`${getServerBaseUrl()}${selectedReceipt.receipt_url}`} 
+                target="_blank" 
+                rel="noreferrer"
+                className="text-xs text-teal-600 hover:underline flex items-center gap-1 font-medium"
+              >
+                <ExternalLink className="w-3.5 h-3.5" /> Open in New Tab
+              </a>
+              <div className="flex gap-2">
+                <button 
+                  type="button" 
+                  onClick={() => setSelectedReceipt(null)} 
+                  className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50"
+                >
+                  Close
+                </button>
+                <button 
+                  type="button"
+                  onClick={() => handleDownloadReceipt(selectedReceipt.receipt_url, `Receipt-${selectedReceipt.id}-${selectedReceipt.expense_date}`)}
+                  className="px-4 py-2 text-sm font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-lg shadow-sm flex items-center gap-2"
+                >
+                  <Download className="w-4 h-4" /> Download Receipt
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Record Expense Modal ─────────────────────────────────────────────────── */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-slide-up">
-            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-slide-up my-6 max-h-[90vh] flex flex-col">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
               <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                 <Receipt className="w-5 h-5 text-teal-600" /> Record Expense
               </h3>
               <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
-            <form onSubmit={handleSubmit} className="p-6">
-              {error && <div className="mb-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg">{error}</div>}
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Date *</label>
-                    <input required type="date" name="expense_date" value={formData.expense_date} onChange={handleInputChange} className={inputCls} />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Category *</label>
-                    <select required name="category" value={formData.category} onChange={handleInputChange} className={inputCls}>
-                      <option value="">-- Select Category --</option>
-                      {categories.map(c => <option key={c.id} value={c.name}>{c.name.replace('_', ' ').toUpperCase()}</option>)}
-                    </select>
-                  </div>
+            <form onSubmit={handleSubmit} className="p-6 overflow-y-auto flex-1 space-y-4">
+              {error && <div className="p-3 bg-red-50 text-red-700 text-sm rounded-lg border border-red-100">{error}</div>}
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Expense Date *</label>
+                  <input required type="date" name="expense_date" value={formData.expense_date} onChange={handleInputChange} className={inputCls} />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Description *</label>
-                  <input required type="text" name="description" value={formData.description} onChange={handleInputChange} className={inputCls} placeholder="What was this expense for?" />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Amount (₹) *</label>
-                    <input required type="number" min="0.01" step="0.01" name="amount" value={formData.amount} onChange={handleInputChange} className={inputCls} />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Payment Method *</label>
-                    <select required name="payment_method" value={formData.payment_method} onChange={handleInputChange} className={inputCls}>
-                      {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Vendor</label>
-                    <select name="vendor_id" value={formData.vendor_id} onChange={handleInputChange} className={inputCls}>
-                      <option value="">-- No Vendor --</option>
-                      {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Receipt Number</label>
-                    <input type="text" name="receipt_number" value={formData.receipt_number} onChange={handleInputChange} className={inputCls} />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Receipt Attachment</label>
-                  <input type="file" accept="image/*,.pdf" onChange={e => setReceiptFile(e.target.files[0])} className="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-teal-50 file:text-teal-700 hover:file:bg-teal-100" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
-                  <textarea name="notes" value={formData.notes} onChange={handleInputChange} rows="2" className={inputCls} />
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Category *</label>
+                  <select required name="category" value={formData.category} onChange={handleInputChange} className={inputCls}>
+                    <option value="">-- Select Category --</option>
+                    {categories.map(c => <option key={c.id} value={c.name}>{c.name.replace('_', ' ').toUpperCase()}</option>)}
+                  </select>
                 </div>
               </div>
-              <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-slate-100">
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Description *</label>
+                <input required type="text" name="description" value={formData.description} onChange={handleInputChange} className={inputCls} placeholder="What was this expense for?" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Amount (₹) *</label>
+                  <input required type="number" min="0.01" step="0.01" name="amount" value={formData.amount} onChange={handleInputChange} className={inputCls} placeholder="0.00" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Payment Method *</label>
+                  <select required name="payment_method" value={formData.payment_method} onChange={handleInputChange} className={inputCls}>
+                    {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Vendor Selection with Quick Add New Vendor */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-sm font-medium text-slate-700">Vendor (Optional)</label>
+                  <button 
+                    type="button" 
+                    onClick={() => {
+                      setVendorForm({ name: '', contact_info: '', payment_terms_days: '0' });
+                      setVendorError('');
+                      setIsVendorModalOpen(true);
+                    }}
+                    className="text-xs font-bold text-teal-700 hover:text-teal-800 bg-teal-50 hover:bg-teal-100 px-2 py-0.5 rounded transition-colors flex items-center gap-1 border border-teal-200"
+                  >
+                    <Plus className="w-3 h-3" /> New Vendor
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <select name="vendor_id" value={formData.vendor_id} onChange={handleInputChange} className={inputCls}>
+                    <option value="">-- No Vendor --</option>
+                    {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                  </select>
+                  <input type="text" name="receipt_number" value={formData.receipt_number} onChange={handleInputChange} className={inputCls} placeholder="Receipt / Bill No." />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Receipt Attachment (Image or PDF)</label>
+                <input 
+                  type="file" 
+                  accept="image/*,.pdf" 
+                  onChange={e => setReceiptFile(e.target.files[0])} 
+                  className="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-teal-50 file:text-teal-700 hover:file:bg-teal-100" 
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
+                <textarea name="notes" value={formData.notes} onChange={handleInputChange} rows="2" className={inputCls} placeholder="Additional details..." />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
-                <button type="submit" disabled={submitting} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 shadow-sm disabled:opacity-50">
+                <button type="submit" disabled={submitting} className="px-5 py-2 text-sm font-bold text-white bg-teal-600 rounded-lg hover:bg-teal-700 shadow-md disabled:opacity-50">
                   {submitting ? 'Saving...' : 'Record Expense'}
                 </button>
               </div>
@@ -404,42 +615,110 @@ export default function Expenses() {
         </div>
       )}
 
-      {/* Payment Modal */}
+      {/* ─── Quick Add Vendor Modal ──────────────────────────────────────────────── */}
+      {isVendorModalOpen && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-slide-up border border-slate-200">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                <Building className="w-5 h-5 text-teal-600" /> Add New Vendor
+              </h3>
+              <button onClick={() => setIsVendorModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleCreateVendor} className="p-6 space-y-4">
+              {vendorError && <div className="p-3 bg-red-50 text-red-700 text-sm rounded-lg border border-red-100">{vendorError}</div>}
+              
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Vendor Name *
+                </label>
+                <input 
+                  type="text" 
+                  required 
+                  autoFocus
+                  placeholder="e.g. Acme Uniforms Ltd."
+                  value={vendorForm.name} 
+                  onChange={e => setVendorForm(prev => ({ ...prev, name: e.target.value }))} 
+                  className={inputCls}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Contact Info / Phone / Address
+                </label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. Phone: 9876543210, Ahmedabad"
+                  value={vendorForm.contact_info} 
+                  onChange={e => setVendorForm(prev => ({ ...prev, contact_info: e.target.value }))} 
+                  className={inputCls}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Payment Terms (Days)
+                </label>
+                <input 
+                  type="number" 
+                  min="0"
+                  placeholder="0"
+                  value={vendorForm.payment_terms_days} 
+                  onChange={e => setVendorForm(prev => ({ ...prev, payment_terms_days: e.target.value }))} 
+                  className={inputCls}
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button type="button" onClick={() => setIsVendorModalOpen(false)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium py-2.5 rounded-lg text-sm transition-colors">
+                  Cancel
+                </button>
+                <button type="submit" disabled={creatingVendor} className="flex-1 bg-teal-600 hover:bg-teal-700 text-white font-bold py-2.5 rounded-lg text-sm shadow-md transition-colors disabled:opacity-50">
+                  {creatingVendor ? 'Adding...' : 'Add Vendor'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Payment Modal ───────────────────────────────────────────────────────── */}
       {payModalExpense && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-slide-up">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-slide-up border border-slate-100">
             <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h3 className="text-lg font-bold text-slate-800">Record Payment</h3>
+              <h3 className="text-lg font-bold text-slate-800">Record Expense Payment</h3>
               <button onClick={() => setPayModalExpense(null)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handlePaySubmit} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Amount (₹) *</label>
-                <input required type="number" min="0.01" step="0.01" value={payFormData.amount} onChange={e => setPayFormData({...payFormData, amount: e.target.value})} className={inputCls} />
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Amount (₹) *</label>
+                <input required type="number" min="0.01" step="0.01" value={payFormData.amount} onChange={e => setPayFormData(prev => ({ ...prev, amount: e.target.value }))} className={inputCls} />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Payment Method *</label>
-                  <select required value={payFormData.payment_method} onChange={e => setPayFormData({...payFormData, payment_method: e.target.value})} className={inputCls}>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Payment Method *</label>
+                  <select required value={payFormData.payment_method} onChange={e => setPayFormData(prev => ({ ...prev, payment_method: e.target.value }))} className={inputCls}>
                     {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Date *</label>
-                  <input required type="date" value={payFormData.payment_date} onChange={e => setPayFormData({...payFormData, payment_date: e.target.value})} className={inputCls} />
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Date *</label>
+                  <input required type="date" value={payFormData.payment_date} onChange={e => setPayFormData(prev => ({ ...prev, payment_date: e.target.value }))} className={inputCls} />
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Reference Number</label>
-                <input type="text" value={payFormData.reference_number} onChange={e => setPayFormData({...payFormData, reference_number: e.target.value})} className={inputCls} placeholder="e.g. UTR / Cheque No" />
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Reference Number</label>
+                <input type="text" value={payFormData.reference_number} onChange={e => setPayFormData(prev => ({ ...prev, reference_number: e.target.value }))} className={inputCls} placeholder="e.g. UTR / Cheque No" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
-                <textarea rows="2" value={payFormData.notes} onChange={e => setPayFormData({...payFormData, notes: e.target.value})} className={inputCls}></textarea>
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Notes</label>
+                <textarea rows="2" value={payFormData.notes} onChange={e => setPayFormData(prev => ({ ...prev, notes: e.target.value }))} className={inputCls} placeholder="Payment notes..."></textarea>
               </div>
-              <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-slate-100">
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
                 <button type="button" onClick={() => setPayModalExpense(null)} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
-                <button type="submit" disabled={paying} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50">
+                <button type="submit" disabled={paying} className="px-5 py-2 text-sm font-bold text-white bg-teal-600 rounded-lg hover:bg-teal-700 shadow-md disabled:opacity-50">
                   {paying ? 'Saving...' : 'Record Payment'}
                 </button>
               </div>
@@ -448,29 +727,29 @@ export default function Expenses() {
         </div>
       )}
 
-      {/* Rejection Modal */}
+      {/* ─── Rejection Modal ─────────────────────────────────────────────────────── */}
       {rejectModal.open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-slide-up">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-slide-up border border-slate-100">
             <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-rose-50">
               <h3 className="text-lg font-bold text-rose-800">Reject Expense</h3>
               <button type="button" onClick={() => setRejectModal({ open: false, id: null, reason: '' })} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleRejectSubmit} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Rejection Reason (Optional)</label>
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Rejection Reason (Optional)</label>
                 <textarea
                   rows="3"
                   value={rejectModal.reason}
-                  onChange={e => setRejectModal({ ...rejectModal, reason: e.target.value })}
+                  onChange={e => setRejectModal(prev => ({ ...prev, reason: e.target.value }))}
                   className={inputCls}
                   placeholder="Enter reason for rejecting this expense..."
                   autoFocus
                 ></textarea>
               </div>
-              <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-slate-100">
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
                 <button type="button" onClick={() => setRejectModal({ open: false, id: null, reason: '' })} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
-                <button type="submit" disabled={rejecting} className="px-4 py-2 text-sm font-medium text-white bg-rose-600 rounded-lg hover:bg-rose-700 disabled:opacity-50">
+                <button type="submit" disabled={rejecting} className="px-5 py-2 text-sm font-bold text-white bg-rose-600 rounded-lg hover:bg-rose-700 shadow-md disabled:opacity-50">
                   {rejecting ? 'Rejecting...' : 'Confirm Rejection'}
                 </button>
               </div>

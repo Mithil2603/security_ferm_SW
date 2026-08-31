@@ -238,6 +238,7 @@ function App() {
             <Route path="/ledger" element={<Ledger />} />
             <Route path="/expenses" element={<Expenses />} />
             <Route path="/vendor-statements" element={<VendorStatements />} />
+            <Route path="/vendor-ledger" element={<Navigate to="/vendor-statements" replace />} />
             <Route path="/budgets" element={<Budgets />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/tax-reports" element={<TaxReports />} />
