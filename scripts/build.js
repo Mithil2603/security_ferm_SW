@@ -14,12 +14,19 @@ console.log('🚀 Starting full production build...\n');
 console.log('📦 Step 1/3: Building frontend with Vite...');
 execSync('npm run build:frontend', { stdio: 'inherit', cwd: path.resolve(__dirname, '..') });
 
-// 2. Prepare isolated temp build output directory
-const tempBuildDir = path.join(os.tmpdir(), 'electron-build-output');
-if (fs.existsSync(tempBuildDir)) {
-  fs.rmSync(tempBuildDir, { recursive: true, force: true });
-}
+// 2. Prepare isolated temp build output directory (use unique timestamp to prevent Windows EBUSY file locks)
+const tempBuildDir = path.join(os.tmpdir(), `electron-build-${Date.now()}`);
 fs.mkdirSync(tempBuildDir, { recursive: true });
+
+// Attempt background cleanup of older electron-build temp folders without failing
+try {
+  const tmpFiles = fs.readdirSync(os.tmpdir());
+  for (const f of tmpFiles) {
+    if (f.startsWith('electron-build') && f !== path.basename(tempBuildDir)) {
+      try { fs.rmSync(path.join(os.tmpdir(), f), { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }); } catch (_) {}
+    }
+  }
+} catch (_) {}
 
 // 3. Run electron-builder
 const extraArgs = process.argv.slice(2).join(' ');
@@ -46,6 +53,11 @@ for (const file of files) {
     fs.copyFileSync(srcPath, destPath);
   }
 }
+
+// Cleanup current tempBuildDir
+try {
+  fs.rmSync(tempBuildDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+} catch (_) {}
 
 console.log('\n🎉 Build completed successfully!');
 console.log('───────────────────────────────────────────────────────');
