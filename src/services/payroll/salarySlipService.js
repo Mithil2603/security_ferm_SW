@@ -163,7 +163,7 @@ class SalarySlipService {
       ]
     );
 
-    const slipId = slipResult.lastInsertRowid;
+    const slipId = slipResult.insertId || slipResult.lastInsertRowid || (slipResult.rows && slipResult.rows[0]?.id);
 
     // ─── Insert Component Breakdown ───────────────────────────────────────────
     for (const e of earnings) {
@@ -360,18 +360,23 @@ class SalarySlipService {
   }
 
   /**
-   * Mark as paid (approved → paid).
+   * Mark as paid (draft/pending/approved → paid).
    */
   async markPaid(id, paymentDetails = {}) {
     const slip = await this.findById(id);
     if (!slip) throw new Error('Salary slip not found');
-    if (slip.status !== 'approved') throw new Error('Only approved slips can be marked as paid');
+    if (slip.status === 'paid') throw new Error('Salary slip is already marked as paid');
+    if (slip.status === 'cancelled') throw new Error('Cannot pay a cancelled salary slip');
+
+    const paidAt = paymentDetails.payment_date 
+      ? new Date(paymentDetails.payment_date) 
+      : new Date();
 
     await query(
-      `UPDATE salary_slips SET status = 'paid', paid_at = CURRENT_TIMESTAMP, 
-       payment_method = $1, transaction_reference = $2, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $3`,
-      [paymentDetails.payment_method || 'bank_transfer', paymentDetails.transaction_reference || null, id]
+      `UPDATE salary_slips SET status = 'paid', paid_at = $1, 
+       payment_method = $2, transaction_reference = $3, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $4`,
+      [paidAt, paymentDetails.payment_method || 'bank_transfer', paymentDetails.transaction_reference || null, id]
     );
     return this.findById(id);
   }

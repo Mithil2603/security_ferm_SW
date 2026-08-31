@@ -196,6 +196,7 @@ router.post('/:id/pay', async (req, res) => {
     const schema = Joi.object({
       payment_method: Joi.string().valid('bank_transfer', 'cash', 'cheque', 'upi').default('bank_transfer'),
       transaction_reference: Joi.string().max(100).allow(null, ''),
+      payment_date: Joi.string().allow(null, ''),
     });
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });

@@ -45,19 +45,23 @@ export default function Invoices() {
     }
   };
 
-  useEffect(() => { fetchInvoices(); }, [page]);
+  useEffect(() => {
+    fetchInvoices();
+    fetchClients();
+  }, [page]);
 
   const fetchClients = async () => {
     try {
       const res = await api.get('/clients?limit=200');
-      setClients((res.data || []).filter(c => c.is_active));
+      const all = res.data || [];
+      setClients(all.filter(c => c.is_active));
     } catch (err) {
       console.error('Failed to fetch clients', err);
     }
   };
 
-  const openCreateModal = () => {
-    fetchClients();
+  const openCreateModal = async () => {
+    await fetchClients();
     const now = new Date();
     const startOfMonth = format(new Date(now.getFullYear(), now.getMonth(), 1), 'yyyy-MM-dd');
     const endOfMonth = format(new Date(now.getFullYear(), now.getMonth() + 1, 0), 'yyyy-MM-dd');
@@ -372,7 +376,13 @@ export default function Invoices() {
               
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Client *</label>
-                <select required name="client_id" value={invoiceForm.client_id} onChange={(e) => setInvoiceForm({ ...invoiceForm, client_id: e.target.value })} className={inputCls}>
+                <select 
+                  required 
+                  name="client_id" 
+                  value={invoiceForm.client_id} 
+                  onChange={(e) => setInvoiceForm(prev => ({ ...prev, client_id: e.target.value }))} 
+                  className={inputCls}
+                >
                   <option value="">-- Select Client --</option>
                   {clients.map(c => <option key={c.id} value={c.id}>{c.name} (₹{parseFloat(c.monthly_rate).toLocaleString('en-IN')}/mo)</option>)}
                 </select>
@@ -380,7 +390,13 @@ export default function Invoices() {
 
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Invoice Date *</label>
-                <input required type="date" value={invoiceForm.invoice_date || ''} onChange={(e) => setInvoiceForm({ ...invoiceForm, invoice_date: e.target.value })} className={inputCls} />
+                <input 
+                  required 
+                  type="date" 
+                  value={invoiceForm.invoice_date || ''} 
+                  onChange={(e) => setInvoiceForm(prev => ({ ...prev, invoice_date: e.target.value }))} 
+                  className={inputCls} 
+                />
               </div>
 
               <div>
@@ -394,11 +410,23 @@ export default function Invoices() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <span className="text-[11px] text-slate-500 mb-0.5 block">Start Date</span>
-                    <input required type="date" value={invoiceForm.billing_period_start} onChange={(e) => setInvoiceForm({ ...invoiceForm, billing_period_start: e.target.value })} className={inputCls} />
+                    <input 
+                      required 
+                      type="date" 
+                      value={invoiceForm.billing_period_start || ''} 
+                      onChange={(e) => setInvoiceForm(prev => ({ ...prev, billing_period_start: e.target.value }))} 
+                      className={inputCls} 
+                    />
                   </div>
                   <div>
                     <span className="text-[11px] text-slate-500 mb-0.5 block">End Date</span>
-                    <input required type="date" value={invoiceForm.billing_period_end} onChange={(e) => setInvoiceForm({ ...invoiceForm, billing_period_end: e.target.value })} className={inputCls} />
+                    <input 
+                      required 
+                      type="date" 
+                      value={invoiceForm.billing_period_end || ''} 
+                      onChange={(e) => setInvoiceForm(prev => ({ ...prev, billing_period_end: e.target.value }))} 
+                      className={inputCls} 
+                    />
                   </div>
                 </div>
               </div>
@@ -410,21 +438,21 @@ export default function Invoices() {
                   <label className={`flex flex-col p-2.5 rounded-lg border text-center cursor-pointer transition-all ${
                     invoiceForm.tax_type === 'none' ? 'bg-teal-50 border-teal-500 ring-1 ring-teal-500' : 'bg-white border-slate-200 hover:bg-slate-50'
                   }`}>
-                    <input type="radio" name="monthly_tax_type" value="none" checked={invoiceForm.tax_type === 'none'} onChange={e => setInvoiceForm({...invoiceForm, tax_type: e.target.value})} className="sr-only" />
+                    <input type="radio" name="monthly_tax_type" value="none" checked={invoiceForm.tax_type === 'none'} onChange={e => setInvoiceForm(prev => ({...prev, tax_type: e.target.value}))} className="sr-only" />
                     <span className="text-xs font-bold text-slate-800">No GST</span>
                     <span className="text-[10px] text-slate-500">0%</span>
                   </label>
                   <label className={`flex flex-col p-2.5 rounded-lg border text-center cursor-pointer transition-all ${
                     invoiceForm.tax_type === 'cgst_sgst' ? 'bg-teal-50 border-teal-500 ring-1 ring-teal-500' : 'bg-white border-slate-200 hover:bg-slate-50'
                   }`}>
-                    <input type="radio" name="monthly_tax_type" value="cgst_sgst" checked={invoiceForm.tax_type === 'cgst_sgst'} onChange={e => setInvoiceForm({...invoiceForm, tax_type: e.target.value})} className="sr-only" />
+                    <input type="radio" name="monthly_tax_type" value="cgst_sgst" checked={invoiceForm.tax_type === 'cgst_sgst'} onChange={e => setInvoiceForm(prev => ({...prev, tax_type: e.target.value}))} className="sr-only" />
                     <span className="text-xs font-bold text-slate-800">Intra-State</span>
                     <span className="text-[10px] text-slate-500">9% CGST + 9% SGST</span>
                   </label>
                   <label className={`flex flex-col p-2.5 rounded-lg border text-center cursor-pointer transition-all ${
                     invoiceForm.tax_type === 'igst' ? 'bg-teal-50 border-teal-500 ring-1 ring-teal-500' : 'bg-white border-slate-200 hover:bg-slate-50'
                   }`}>
-                    <input type="radio" name="monthly_tax_type" value="igst" checked={invoiceForm.tax_type === 'igst'} onChange={e => setInvoiceForm({...invoiceForm, tax_type: e.target.value})} className="sr-only" />
+                    <input type="radio" name="monthly_tax_type" value="igst" checked={invoiceForm.tax_type === 'igst'} onChange={e => setInvoiceForm(prev => ({...prev, tax_type: e.target.value}))} className="sr-only" />
                     <span className="text-xs font-bold text-slate-800">Inter-State</span>
                     <span className="text-[10px] text-slate-500">18% IGST</span>
                   </label>
@@ -433,19 +461,74 @@ export default function Invoices() {
 
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Discount (₹)</label>
-                <input type="number" min="0" step="0.01" value={invoiceForm.discount_amount} onChange={(e) => setInvoiceForm({ ...invoiceForm, discount_amount: e.target.value })} className={inputCls} />
+                <input 
+                  type="number" 
+                  min="0" 
+                  step="0.01" 
+                  value={invoiceForm.discount_amount} 
+                  onChange={(e) => setInvoiceForm(prev => ({ ...prev, discount_amount: e.target.value }))} 
+                  className={inputCls} 
+                />
               </div>
 
               <div className="flex items-center p-3 bg-amber-50 rounded-lg border border-amber-200">
-                <input type="checkbox" id="monthly_rcm" checked={invoiceForm.is_rcm_applicable} onChange={e => setInvoiceForm({...invoiceForm, is_rcm_applicable: e.target.checked})} className="h-4 w-4 text-amber-600 focus:ring-amber-500 rounded border-amber-300 cursor-pointer" />
+                <input 
+                  type="checkbox" 
+                  id="monthly_rcm" 
+                  checked={invoiceForm.is_rcm_applicable} 
+                  onChange={e => setInvoiceForm(prev => ({...prev, is_rcm_applicable: e.target.checked}))} 
+                  className="h-4 w-4 text-amber-600 focus:ring-amber-500 rounded border-amber-300 cursor-pointer" 
+                />
                 <label htmlFor="monthly_rcm" className="ml-2 block text-xs font-semibold text-amber-900 cursor-pointer">
                   Apply RCM (Reverse Charge Mechanism - GST paid by client)
                 </label>
               </div>
 
+              {/* Live Preview Summary */}
+              {invoiceForm.client_id && (() => {
+                const selectedClient = clients.find(c => String(c.id) === String(invoiceForm.client_id));
+                const rate = parseFloat(selectedClient?.monthly_rate || 0);
+                const disc = parseFloat(invoiceForm.discount_amount || 0);
+                const taxable = Math.max(0, rate - disc);
+                let tax = 0;
+                if (invoiceForm.tax_type === 'cgst_sgst' || invoiceForm.tax_type === 'igst') {
+                  tax = taxable * 0.18;
+                }
+                const total = invoiceForm.is_rcm_applicable ? taxable : (taxable + tax);
+
+                return (
+                  <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs space-y-1.5">
+                    <div className="flex justify-between text-slate-600">
+                      <span>Contract Monthly Rate:</span>
+                      <span className="font-semibold text-slate-800">₹{rate.toLocaleString('en-IN')}</span>
+                    </div>
+                    {disc > 0 && (
+                      <div className="flex justify-between text-amber-700">
+                        <span>Discount:</span>
+                        <span className="font-semibold">- ₹{disc.toLocaleString('en-IN')}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between text-slate-600">
+                      <span>Tax ({invoiceForm.tax_type === 'cgst_sgst' ? '18% CGST+SGST' : invoiceForm.tax_type === 'igst' ? '18% IGST' : '0%'}):</span>
+                      <span className="font-semibold text-slate-800">{invoiceForm.is_rcm_applicable ? '₹0 (RCM)' : `₹${tax.toLocaleString('en-IN')}`}</span>
+                    </div>
+                    <div className="flex justify-between text-sm font-bold text-teal-800 pt-1.5 border-t border-slate-200">
+                      <span>Billed Total:</span>
+                      <span>₹{total.toLocaleString('en-IN')}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
-                <textarea value={invoiceForm.notes} onChange={(e) => setInvoiceForm({ ...invoiceForm, notes: e.target.value })} rows="2" className={inputCls} placeholder="Optional notes..." />
+                <textarea 
+                  value={invoiceForm.notes} 
+                  onChange={(e) => setInvoiceForm(prev => ({ ...prev, notes: e.target.value }))} 
+                  rows="2" 
+                  className={inputCls} 
+                  placeholder="Optional notes..." 
+                />
               </div>
 
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">

@@ -322,7 +322,7 @@ const query = async (text, params = []) => {
     if (rows && !Array.isArray(rows)) {
       // It's a ResultSetHeader (INSERT/UPDATE/DELETE)
       const header = rows;
-      const result = { rows: [], rowCount: header.affectedRows, insertId: header.insertId };
+      const result = { rows: [], rowCount: header.affectedRows, insertId: header.insertId, lastInsertRowid: header.insertId };
       if (hasReturning && header.insertId) {
         // Simulate RETURNING by fetching the inserted row
         const tableMatch = mysqlText.match(/INSERT\s+(?:IGNORE\s+)?INTO\s+(`?\w+`?)/i);

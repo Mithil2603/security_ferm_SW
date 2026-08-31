@@ -22,6 +22,18 @@ if (typeof window !== 'undefined') {
   } catch (e) {
     console.warn('Could not polyfill window.prompt:', e);
   }
+
+  // Globally open the native calendar popup when clicking anywhere inside a date/month input
+  document.addEventListener('click', (e) => {
+    const target = e.target;
+    if (target && (target.type === 'date' || target.type === 'month' || target.type === 'time' || target.type === 'datetime-local')) {
+      try {
+        if (typeof target.showPicker === 'function') {
+          target.showPicker();
+        }
+      } catch (_) {}
+    }
+  });
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(
