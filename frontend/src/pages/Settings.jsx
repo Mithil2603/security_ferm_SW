@@ -9,6 +9,8 @@ import {
   IndianRupee, Percent, Clock, UserPlus, Key, Mail, Receipt, Settings2, Database
 } from 'lucide-react';
 import { getServerBaseUrl, getApiBaseUrl } from '../utils/apiUrl';
+import Toast from '../components/Toast';
+import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
 
 import DatabaseBackupTab from '../components/settings/DatabaseBackupTab';
 
@@ -453,6 +455,11 @@ function TeamManagementTab() {
     full_name: '', email: '', password: '', role: 'manager', phone: ''
   });
   const [resetPwd, setResetPwd] = useState('');
+  const [toast, setToast] = useState({ show: false, message: '', type: 'error' });
+
+  const showToast = (message, type = 'error') => {
+    setToast({ show: true, message, type });
+  };
 
   const fetchUsers = async () => {
     try {
@@ -461,7 +468,9 @@ function TeamManagementTab() {
       const res = await api.get('/auth/users');
       setUsers(res.data || []);
     } catch (err) {
-      setFetchError(err.message || 'Failed to load team members');
+      const msg = err.response?.data?.message || err.message || 'Failed to load team members';
+      setFetchError(msg);
+      showToast(msg, 'error');
       console.error('Failed to fetch users', err);
     } finally {
       setLoading(false);
@@ -473,14 +482,25 @@ function TeamManagementTab() {
   const handleAddUser = async (e) => {
     e.preventDefault();
     setError('');
+
+    const phoneCheck = validatePhone(addForm.phone, 'Team Member Phone', false);
+    if (!phoneCheck.valid) {
+      setError(phoneCheck.error);
+      showToast(phoneCheck.error, 'error');
+      return;
+    }
+
     setSubmitting(true);
     try {
       await api.post('/auth/users', addForm);
       setIsAddOpen(false);
       setAddForm({ full_name: '', email: '', password: '', role: 'manager', phone: '' });
+      showToast('Team member added successfully!', 'success');
       fetchUsers();
     } catch (err) {
-      setError(err.message || 'Failed to create user');
+      const msg = err.response?.data?.message || err.message || 'Failed to create user';
+      setError(msg);
+      showToast(msg, 'error');
     } finally {
       setSubmitting(false);
     }
@@ -489,9 +509,11 @@ function TeamManagementTab() {
   const toggleUser = async (id) => {
     try {
       await api.patch(`/settings/users/${id}/toggle`);
+      showToast('User status updated successfully!', 'success');
       fetchUsers();
     } catch (err) {
-      alert(err.message || 'Failed to toggle user');
+      const msg = err.response?.data?.message || err.message || 'Failed to toggle user';
+      showToast(msg, 'error');
     }
   };
 
@@ -503,9 +525,11 @@ function TeamManagementTab() {
       await api.post(`/settings/users/${isResetOpen}/reset-password`, { new_password: resetPwd });
       setIsResetOpen(null);
       setResetPwd('');
-      alert('Password reset successfully');
+      showToast('Password reset successfully!', 'success');
     } catch (err) {
-      setError(err.message || 'Failed to reset password');
+      const msg = err.response?.data?.message || err.message || 'Failed to reset password';
+      setError(msg);
+      showToast(msg, 'error');
     } finally {
       setSubmitting(false);
     }
@@ -518,9 +542,12 @@ function TeamManagementTab() {
     try {
       await api.put(`/settings/users/${isPermissionsOpen.id}`, { permissions: selectedPermissions });
       setIsPermissionsOpen(null);
+      showToast('Permissions updated successfully!', 'success');
       fetchUsers();
     } catch (err) {
-      setError(err.message || 'Failed to update permissions');
+      const msg = err.response?.data?.message || err.message || 'Failed to update permissions';
+      setError(msg);
+      showToast(msg, 'error');
     } finally {
       setSubmitting(false);
     }
@@ -662,8 +689,8 @@ function TeamManagementTab() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Phone</label>
-                  <input value={addForm.phone} onChange={e => setAddForm({...addForm, phone: e.target.value})} className={inputCls} />
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Phone (10 Digits)</label>
+                  <input type="tel" maxLength="10" placeholder="10-digit number" value={addForm.phone} onChange={e => setAddForm(prev => ({ ...prev, phone: sanitizePhone(e.target.value) }))} className={inputCls} />
                 </div>
               </div>
               <div className="flex justify-end gap-3 pt-2">
@@ -755,6 +782,13 @@ function TeamManagementTab() {
           </div>
         </div>
       )}
+      {toast.show && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast({ show: false, message: '', type: 'error' })}
+        />
+      )}
     </>
   );
 }
@@ -830,14 +864,23 @@ function AgencyProfileTab() {
       .catch(err => console.error('Failed to load smtp settings', err));
   }, [user]);
 
+  const [agencyToast, setAgencyToast] = useState({ show: false, message: '', type: 'error' });
+
   const handleSaveAgency = async () => {
+    const phoneCheck = validatePhone(agencySettings.agency_phone, 'Agency Phone Number', false);
+    if (!phoneCheck.valid) {
+      setAgencyToast({ show: true, message: phoneCheck.error, type: 'error' });
+      return;
+    }
+
     try {
       await api.put('/settings/system/agency_settings', { value: JSON.stringify(agencySettings) });
       setSaved(true);
+      setAgencyToast({ show: true, message: 'Agency profile saved successfully!', type: 'success' });
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
       console.error(err);
-      alert('Failed to save agency settings');
+      setAgencyToast({ show: true, message: err.response?.data?.message || err.message || 'Failed to save agency settings', type: 'error' });
     }
   };
 
@@ -966,8 +1009,8 @@ function AgencyProfileTab() {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Phone</label>
-              <input value={agencySettings.agency_phone} onChange={e => setAgencySettings({...agencySettings, agency_phone: e.target.value})} className={inputCls} />
+              <label className="block text-sm font-medium text-slate-700 mb-1">Phone (10 Digits)</label>
+              <input type="tel" maxLength="10" placeholder="10-digit number" value={agencySettings.agency_phone} onChange={e => setAgencySettings({...agencySettings, agency_phone: sanitizePhone(e.target.value)})} className={inputCls} />
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
@@ -1192,6 +1235,13 @@ function AgencyProfileTab() {
           {!changePwd && <p className="text-sm text-slate-400">Click "Change" above to update your login password.</p>}
         </div>
       </div>
+      {agencyToast.show && (
+        <Toast
+          message={agencyToast.message}
+          type={agencyToast.type}
+          onClose={() => setAgencyToast({ show: false, message: '', type: 'error' })}
+        />
+      )}
     </div>
   );
 }

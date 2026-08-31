@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { X, FileText, Calendar, ShieldCheck, CheckCircle2 } from 'lucide-react';
 import { format } from 'date-fns';
 import api from '../services/api';
+import Toast from './Toast';
+import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
 
 export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
   const todayStr = format(new Date(), 'yyyy-MM-dd');
@@ -51,17 +53,33 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
     });
   }, [form]);
 
+  const [toast, setToast] = useState({ show: false, message: '', type: 'error' });
+
+  const showToast = (message, type = 'error') => {
+    setToast({ show: true, message, type });
+  };
+
   if (!isOpen) return null;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+
+    const phoneCheck = validatePhone(form.phone, 'Client Phone Number', true);
+    if (!phoneCheck.valid) {
+      setError(phoneCheck.error);
+      showToast(phoneCheck.error, 'error');
+      return;
+    }
+
     setSubmitting(true);
     try {
       await api.post('/invoices/event', form);
       onSuccess();
     } catch (err) {
-      setError(err.response?.data?.message || err.message || 'Failed to generate event invoice');
+      const msg = err.response?.data?.message || err.message || 'Failed to generate event invoice';
+      setError(msg);
+      showToast(msg, 'error');
     } finally {
       setSubmitting(false);
     }
@@ -96,8 +114,8 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                   <input required type="text" value={form.client_name} onChange={e => setForm({...form, client_name: e.target.value})} className={inputCls} placeholder="e.g. Acme Corp Events" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Phone Number *</label>
-                  <input required type="tel" value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} className={inputCls} placeholder="10-digit number" />
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Phone Number (10 Digits) *</label>
+                  <input required type="tel" maxLength="10" value={form.phone} onChange={e => setForm(prev => ({ ...prev, phone: sanitizePhone(e.target.value) }))} className={inputCls} placeholder="10-digit mobile number" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Email (Optional)</label>
@@ -246,6 +264,13 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
           </button>
         </div>
       </div>
+      {toast.show && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast({ show: false, message: '', type: 'error' })}
+        />
+      )}
     </div>
   );
 }

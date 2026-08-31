@@ -7,6 +7,8 @@ import * as XLSX from 'xlsx';
 import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
 import ImportModal from '../components/shared/ImportModal';
+import Toast from '../components/Toast';
+import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
 
 const emptyForm = {
   full_name: '', phone: '', email: '', date_of_birth: '', address: '', city: '',
@@ -75,7 +77,11 @@ export default function Employees() {
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
-    setFormData({ ...formData, [name]: type === 'checkbox' ? checked : value });
+    if (name === 'phone' || name === 'emergency_contact_phone') {
+      setFormData(prev => ({ ...prev, [name]: sanitizePhone(value) }));
+      return;
+    }
+    setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
   };
 
   const openCreateModal = () => {
@@ -112,6 +118,22 @@ export default function Employees() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+
+    // Phone validation: 10 digits check
+    const phoneCheck = validatePhone(formData.phone, 'Employee Phone Number', true);
+    if (!phoneCheck.valid) {
+      setError(phoneCheck.error);
+      showToast(phoneCheck.error, 'error');
+      return;
+    }
+
+    const emgCheck = validatePhone(formData.emergency_contact_phone, 'Emergency Contact Phone', false);
+    if (!emgCheck.valid) {
+      setError(emgCheck.error);
+      showToast(emgCheck.error, 'error');
+      return;
+    }
+
     setSubmitting(true);
     try {
       const payload = { ...formData };
@@ -120,18 +142,20 @@ export default function Employees() {
 
       if (editingEmp) {
         await api.put(`/employees/${editingEmp.id}`, payload);
+        showToast('Employee updated successfully!', 'success');
       } else {
         await api.post('/employees', payload);
+        showToast('Employee registered successfully!', 'success');
       }
       setIsModalOpen(false);
       setEditingEmp(null);
       fetchEmployees();
     } catch (err) {
-      if (err.errors && Array.isArray(err.errors)) {
-        setError(err.errors.map(e => e.message).join(' | '));
-      } else {
-        setError(err.message || 'Failed to save employee');
-      }
+      const msg = err.errors && Array.isArray(err.errors)
+        ? err.errors.map(e => e.message).join(' | ')
+        : err.response?.data?.message || err.message || 'Failed to save employee';
+      setError(msg);
+      showToast(msg, 'error');
     } finally {
       setSubmitting(false);
     }
@@ -409,8 +433,8 @@ export default function Employees() {
                   <input required type="text" name="full_name" value={formData.full_name} onChange={handleInputChange} className={inputCls} />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Phone *</label>
-                  <input required type="text" name="phone" value={formData.phone} onChange={handleInputChange} className={inputCls} />
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Phone (10 Digits) *</label>
+                  <input required type="tel" maxLength="10" placeholder="10-digit number" name="phone" value={formData.phone} onChange={handleInputChange} className={inputCls} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
@@ -503,8 +527,8 @@ export default function Employees() {
                   <input type="text" name="emergency_contact_name" value={formData.emergency_contact_name} onChange={handleInputChange} className={inputCls} />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Contact Phone</label>
-                  <input type="text" name="emergency_contact_phone" value={formData.emergency_contact_phone} onChange={handleInputChange} className={inputCls} />
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Contact Phone (10 Digits)</label>
+                  <input type="tel" maxLength="10" placeholder="10-digit number" name="emergency_contact_phone" value={formData.emergency_contact_phone} onChange={handleInputChange} className={inputCls} />
                 </div>
               </div>
 
@@ -588,6 +612,14 @@ export default function Employees() {
           fetchEmployees();
         }}
       />
+
+      {toast.show && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast({ show: false, message: '', type: 'error' })}
+        />
+      )}
     </div>
   );
 }

@@ -6,6 +6,8 @@ import * as XLSX from 'xlsx';
 import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
 import ImportModal from '../components/shared/ImportModal';
+import Toast from '../components/Toast';
+import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
 
 const emptyForm = {
   name: '', address: '', city: '', state: 'Gujarat', postal_code: '',
@@ -61,9 +63,19 @@ export default function Clients() {
     setPage(1);
   }, [searchTerm, showInactive]);
 
+  const [toast, setToast] = useState({ show: false, message: '', type: 'error' });
+
+  const showToast = (message, type = 'error') => {
+    setToast({ show: true, message, type });
+  };
+
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
-    setFormData({ ...formData, [name]: type === 'checkbox' ? checked : value });
+    if (name === 'phone') {
+      setFormData(prev => ({ ...prev, phone: sanitizePhone(value) }));
+      return;
+    }
+    setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
   };
 
   const openCreateModal = () => {
@@ -98,23 +110,34 @@ export default function Clients() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+
+    // Phone validation (if provided)
+    const phoneCheck = validatePhone(formData.phone, 'Client Phone Number', false);
+    if (!phoneCheck.valid) {
+      setError(phoneCheck.error);
+      showToast(phoneCheck.error, 'error');
+      return;
+    }
+
     setSubmitting(true);
     try {
       if (editingClient) {
         await api.put(`/clients/${editingClient.id}`, formData);
+        showToast('Client updated successfully!', 'success');
       } else {
         await api.post('/clients', formData);
+        showToast('Client created successfully!', 'success');
       }
       setIsModalOpen(false);
       setEditingClient(null);
       setFormData({ ...emptyForm });
       fetchClients();
     } catch (err) {
-      if (err.errors && Array.isArray(err.errors)) {
-        setError(err.errors.map(e => e.message).join(' | '));
-      } else {
-        setError(err.message || 'Failed to save client');
-      }
+      const msg = err.errors && Array.isArray(err.errors)
+        ? err.errors.map(e => e.message).join(' | ')
+        : err.response?.data?.message || err.message || 'Failed to save client';
+      setError(msg);
+      showToast(msg, 'error');
     } finally {
       setSubmitting(false);
     }
@@ -590,8 +613,8 @@ export default function Clients() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Phone Number</label>
-                  <input type="text" name="phone" value={formData.phone} onChange={handleInputChange} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent" />
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Phone Number (10 Digits)</label>
+                  <input type="tel" maxLength="10" placeholder="10-digit mobile number" name="phone" value={formData.phone} onChange={handleInputChange} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent" />
                 </div>
 
                 <div>
@@ -741,6 +764,13 @@ export default function Clients() {
           fetchClients();
         }}
       />
+      {toast.show && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast({ show: false, message: '', type: 'error' })}
+        />
+      )}
     </div>
   );
 }

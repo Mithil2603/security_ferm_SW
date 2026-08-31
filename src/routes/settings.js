@@ -152,28 +152,104 @@ router.get('/team', async (req, res) => {
   }
 });
 
-// PUT /api/settings/team/:id/permissions
-router.put('/team/:id/permissions', async (req, res) => {
+// PUT /api/settings/users/:id or /api/settings/team/:id/permissions
+router.put(['/users/:id', '/team/:id/permissions'], async (req, res) => {
   try {
-    const { permissions } = req.body;
-    if (!Array.isArray(permissions)) {
-      return res.status(400).json({ success: false, message: 'Permissions must be an array' });
+    const { permissions, role, full_name, phone } = req.body;
+    const userId = req.params.id;
+
+    const updates = [];
+    const params = [];
+    let pCount = 1;
+
+    if (permissions !== undefined) {
+      if (!Array.isArray(permissions)) {
+        return res.status(400).json({ success: false, message: 'Permissions must be an array' });
+      }
+      updates.push(`permissions = $${pCount++}`);
+      params.push(JSON.stringify(permissions));
+    }
+    if (role !== undefined) {
+      updates.push(`role = $${pCount++}`);
+      params.push(role);
+    }
+    if (full_name !== undefined) {
+      updates.push(`full_name = $${pCount++}`);
+      params.push(full_name);
+    }
+    if (phone !== undefined) {
+      updates.push(`phone = $${pCount++}`);
+      params.push(phone);
     }
 
-    const permJson = JSON.stringify(permissions);
-    const result = await query(
-      'UPDATE users SET permissions = $1 WHERE id = $2 RETURNING id, username, email, full_name, role, is_active, permissions',
-      [permJson, req.params.id]
+    if (updates.length === 0) {
+      return res.status(400).json({ success: false, message: 'No fields to update' });
+    }
+
+    params.push(userId);
+    const sql = `UPDATE users SET ${updates.join(', ')} WHERE id = $${pCount}`;
+    await query(sql, params);
+
+    const checkUser = await query(
+      'SELECT id, email, full_name, role, is_active, permissions FROM users WHERE id = $1',
+      [userId]
     );
 
-    if (result.rows.length === 0) {
+    if (checkUser.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-    res.json({ success: true, data: result.rows[0], message: 'Permissions updated successfully' });
+    res.json({ success: true, data: checkUser.rows[0], message: 'User updated successfully' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
-    logger.error('Update permissions error:', error);
-    res.status(500).json({ success: false, message: 'Failed to update permissions' });
+    logger.error('Update user error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update user' });
+  }
+});
+
+// PATCH /api/settings/users/:id/toggle
+router.patch('/users/:id/toggle', async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+    if (userId === req.user.userId) {
+      return res.status(400).json({ success: false, message: 'Cannot deactivate your own account' });
+    }
+
+    const check = await query('SELECT is_active FROM users WHERE id = $1', [userId]);
+    if (check.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const newStatus = check.rows[0].is_active ? 0 : 1;
+    await query('UPDATE users SET is_active = $1 WHERE id = $2', [newStatus, userId]);
+
+    res.json({ success: true, is_active: newStatus, message: `User ${newStatus ? 'activated' : 'deactivated'} successfully` });
+  } catch (error) {
+    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
+    logger.error('Toggle user error:', error);
+    res.status(500).json({ success: false, message: 'Failed to toggle user status' });
+  }
+});
+
+// POST /api/settings/users/:id/reset-password
+router.post('/users/:id/reset-password', async (req, res) => {
+  try {
+    const { new_password } = req.body;
+    if (!new_password || new_password.length < 6) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
+    }
+
+    const hash = await bcrypt.hash(new_password, 12);
+    const result = await query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.params.id]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    res.json({ success: true, message: 'Password reset successfully' });
+  } catch (error) {
+    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
+    logger.error('Reset password error:', error);
+    res.status(500).json({ success: false, message: 'Failed to reset password' });
   }
 });
 
