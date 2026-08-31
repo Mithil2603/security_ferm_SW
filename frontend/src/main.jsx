@@ -4,6 +4,7 @@ import App from './App.jsx'
 import './index.css'
 
 import ErrorBoundary from './components/ErrorBoundary.jsx'
+import { ToastProvider } from './context/ToastContext.jsx'
 
 // Electron does not support window.prompt by default; prevent UnhandledRejections
 if (typeof window !== 'undefined') {
@@ -39,7 +40,9 @@ if (typeof window !== 'undefined') {
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <App />
+      <ToastProvider>
+        <App />
+      </ToastProvider>
     </ErrorBoundary>
   </React.StrictMode>,
 )

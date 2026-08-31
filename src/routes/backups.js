@@ -35,15 +35,21 @@ router.use(requireBackupAccess);
 // GET /api/backups
 router.get('/', async (req, res) => {
   try {
-    const [backups, settings] = await Promise.all([
+    const [backups, settings, activeDir] = await Promise.all([
       backupService.getAvailableBackups(),
-      backupService.getBackupSettings()
+      backupService.getBackupSettings(),
+      backupService.getActiveBackupDir()
     ]);
+    const populatedSettings = {
+      ...settings,
+      backup_destination_path: settings.backup_destination_path || activeDir
+    };
     res.json({
       success: true,
       data: {
         backups,
-        settings
+        settings: populatedSettings,
+        active_path: activeDir
       }
     });
   } catch (error) {
@@ -54,6 +60,63 @@ router.get('/', async (req, res) => {
       extra: { operation: 'fetch_backups' }
     });
     res.status(500).json({ success: false, message: 'Failed to fetch backups' });
+  }
+});
+
+// GET /api/backups/browse-dirs - Browse server filesystem directories
+router.get('/browse-dirs', async (req, res) => {
+  try {
+    const requestedPath = req.query.path || process.cwd();
+    const targetPath = path.resolve(requestedPath);
+    
+    // Available drives on Windows
+    const availableDrives = ['C:\\', 'D:\\', 'E:\\', 'F:\\', 'G:\\'].filter(d => {
+      try { return fs.existsSync(d); } catch (_) { return false; }
+    });
+
+    let subdirs = [];
+    if (fs.existsSync(targetPath)) {
+      try {
+        const entries = fs.readdirSync(targetPath, { withFileTypes: true });
+        subdirs = entries
+          .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+          .map(e => ({
+            name: e.name,
+            path: path.join(targetPath, e.name)
+          }))
+          .slice(0, 60);
+      } catch (readErr) {
+        logger.warn('Could not read directory subdirs:', readErr.message);
+      }
+    }
+
+    const defaultBackupsDir = path.join(process.cwd(), 'backups');
+
+    res.json({
+      success: true,
+      currentPath: targetPath,
+      parentPath: path.dirname(targetPath) !== targetPath ? path.dirname(targetPath) : null,
+      drives: availableDrives,
+      subdirs,
+      defaultPath: defaultBackupsDir
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/backups/system-folder-picker - Open native OS Folder Dialog
+router.post('/system-folder-picker', async (req, res) => {
+  try {
+    const { openNativeSystemFolderPicker } = require('../utils/folderPicker');
+    const selectedFolder = await openNativeSystemFolderPicker();
+    if (selectedFolder) {
+      res.json({ success: true, folderPath: selectedFolder, canceled: false });
+    } else {
+      res.json({ success: true, folderPath: null, canceled: true });
+    }
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 

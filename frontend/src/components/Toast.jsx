@@ -1,5 +1,6 @@
-import { useEffect } from 'react';
-import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
+import React, { useEffect } from 'react';
+import { CheckCircle2, AlertCircle, AlertTriangle, Info, X } from 'lucide-react';
+export { useToast, toast, ToastProvider } from '../context/ToastContext';
 
 export default function Toast({ message, type = 'error', onClose, duration = 4000 }) {
   useEffect(() => {
@@ -14,22 +15,26 @@ export default function Toast({ message, type = 'error', onClose, duration = 400
 
   const isSuccess = type === 'success';
   const isError = type === 'error';
+  const isWarning = type === 'warning';
 
   return (
-    <div className="fixed bottom-6 right-6 z-[100] max-w-sm sm:max-w-md w-[calc(100%-3rem)] animate-slide-up shadow-2xl rounded-2xl border pointer-events-auto transition-all">
+    <div className="fixed bottom-6 right-6 z-[99999] max-w-sm sm:max-w-md w-[calc(100%-3rem)] animate-slide-up shadow-2xl rounded-2xl border pointer-events-auto transition-all">
       <div className={`p-4 rounded-2xl flex items-start gap-3 border ${
         isSuccess
-          ? 'bg-slate-900 text-emerald-300 border-emerald-500/50 shadow-emerald-950/40 backdrop-blur-md'
+          ? 'bg-slate-900/95 text-emerald-300 border-emerald-500/50 shadow-emerald-950/40 backdrop-blur-md'
           : isError
-          ? 'bg-slate-900 text-rose-300 border-rose-500/50 shadow-rose-950/40 backdrop-blur-md'
-          : 'bg-slate-900 text-slate-100 border-slate-700 backdrop-blur-md'
+          ? 'bg-slate-900/95 text-rose-300 border-rose-500/50 shadow-rose-950/40 backdrop-blur-md'
+          : isWarning
+          ? 'bg-slate-900/95 text-amber-300 border-amber-500/50 shadow-amber-950/40 backdrop-blur-md'
+          : 'bg-slate-900/95 text-slate-100 border-slate-700 backdrop-blur-md'
       }`}>
         <div className="mt-0.5 shrink-0">
           {isSuccess && <CheckCircle2 className="w-5 h-5 text-emerald-400" />}
           {isError && <AlertCircle className="w-5 h-5 text-rose-400" />}
-          {!isSuccess && !isError && <Info className="w-5 h-5 text-teal-400" />}
+          {isWarning && <AlertTriangle className="w-5 h-5 text-amber-400" />}
+          {!isSuccess && !isError && !isWarning && <Info className="w-5 h-5 text-teal-400" />}
         </div>
-        <div className="flex-1 text-sm font-medium leading-relaxed pr-2 text-white">
+        <div className="flex-1 text-sm font-medium leading-relaxed pr-2 text-white break-words">
           {message}
         </div>
         <button

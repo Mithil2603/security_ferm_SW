@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Target, TrendingUp, AlertTriangle, Plus, Trash2 } from 'lucide-react';
+import { Target, TrendingUp, AlertTriangle, Plus, Trash2, X } from 'lucide-react';
 import api from '../services/api';
+import { toast } from '../context/ToastContext';
 
 export default function Budgets() {
   const [budgets, setBudgets] = useState([]);
@@ -28,16 +29,16 @@ export default function Budgets() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [budRes, cliRes, venRes] = await Promise.all([
+      const [budRes, cliRes, venRes] = await Promise.allSettled([
         api.get('/budgets/vs-actual'),
         api.get('/clients'),
         api.get('/vendors')
       ]);
-      setBudgets(budRes.data || []);
-      setClients(cliRes.data || []);
-      setVendors(venRes.data || []);
+      if (budRes.status === 'fulfilled') setBudgets(budRes.value.data || []);
+      if (cliRes.status === 'fulfilled') setClients(cliRes.value.data || []);
+      if (venRes.status === 'fulfilled') setVendors(venRes.value.data || []);
     } catch (err) {
-      console.error(err);
+      console.error('Failed to fetch budget data:', err);
     } finally {
       setLoading(false);
     }
@@ -45,9 +46,14 @@ export default function Budgets() {
 
   const handleSave = async (e) => {
     e.preventDefault();
+    if (!form.amount || parseFloat(form.amount) <= 0) {
+      toast.error('Please enter a valid budget amount');
+      return;
+    }
     setSaving(true);
     try {
       await api.post('/budgets', form);
+      toast.success('Budget saved successfully!');
       setShowModal(false);
       setForm({
         entity_type: 'client', entity_id: '', budget_category: '', amount: '',
@@ -55,7 +61,8 @@ export default function Budgets() {
       });
       fetchData();
     } catch (err) {
-      alert(err.message || 'Failed to save budget');
+      const msg = err.response?.data?.message || err.message || 'Failed to save budget';
+      toast.error(msg);
     } finally {
       setSaving(false);
     }
@@ -65,23 +72,25 @@ export default function Budgets() {
     if (!window.confirm('Are you sure you want to delete this budget?')) return;
     try {
       await api.delete(`/budgets/${id}`);
+      toast.success('Budget deleted successfully!');
       fetchData();
     } catch (err) {
-      alert('Failed to delete');
+      const msg = err.response?.data?.message || 'Failed to delete budget';
+      toast.error(msg);
     }
   };
 
   const getEntityName = (type, id) => {
     if (!id) return 'General/All';
     if (type === 'client') {
-      const c = clients.find(c => c.id === id);
+      const c = clients.find(c => c.id === parseInt(id));
       return c ? c.name : `Client #${id}`;
     }
     if (type === 'vendor') {
-      const v = vendors.find(v => v.id === id);
+      const v = vendors.find(v => v.id === parseInt(id));
       return v ? v.name : `Vendor #${id}`;
     }
-    return 'Unknown';
+    return 'General/All';
   };
 
   return (

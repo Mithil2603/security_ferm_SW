@@ -9,6 +9,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 
 import { getApiBaseUrl } from '../../utils/apiUrl';
+import Toast from '../Toast';
 
 export default function DatabaseBackupTab() {
   const { user } = useAuth();
@@ -27,6 +28,20 @@ export default function DatabaseBackupTab() {
   const [savingSettings, setSavingSettings] = useState(false);
   const [creatingBackup, setCreatingBackup] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
+  const [toast, setToast] = useState({ show: false, message: '', type: 'error' });
+  const [folderModalOpen, setFolderModalOpen] = useState(false);
+  const [browserData, setBrowserData] = useState({
+    currentPath: '',
+    parentPath: null,
+    drives: [],
+    subdirs: [],
+    defaultPath: ''
+  });
+  const [browserLoading, setBrowserLoading] = useState(false);
+
+  const showToast = (message, type = 'error') => {
+    setToast({ show: true, message, type });
+  };
 
   useEffect(() => {
     fetchBackupData();
@@ -39,28 +54,72 @@ export default function DatabaseBackupTab() {
       const res = await api.get('/backups');
       const backupList = res.data?.backups || res.backups || [];
       const backupSettings = res.data?.settings || res.settings || null;
+      const activePath = res.data?.active_path || res.active_path || '';
       setBackups(backupList);
       if (backupSettings) {
-        setSettings(backupSettings);
+        setSettings({
+          ...backupSettings,
+          backup_destination_path: backupSettings.backup_destination_path || activePath,
+          auto_backup_time: backupSettings.auto_backup_time
+            ? String(backupSettings.auto_backup_time).slice(0, 5)
+            : '02:00'
+        });
       }
     } catch (err) {
-      setMessage({
-        type: 'error',
-        text: err.response?.data?.message || err.message || 'Failed to load backup data'
-      });
+      const msg = err.response?.data?.message || err.message || 'Failed to load backup data';
+      setMessage({ type: 'error', text: msg });
+      showToast(msg, 'error');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleBrowseFolder = async () => {
-    if (window.electronAPI && window.electronAPI.selectFolder) {
-      const res = await window.electronAPI.selectFolder();
-      if (!res.canceled && res.folderPath) {
-        setSettings(prev => ({ ...prev, backup_destination_path: res.folderPath }));
+  const loadBrowserDir = async (dirPath) => {
+    try {
+      setBrowserLoading(true);
+      const res = await api.get(`/backups/browse-dirs?path=${encodeURIComponent(dirPath || '')}`);
+      if (res.data || res.currentPath) {
+        setBrowserData(res.data || res);
       }
-    } else {
-      alert('In desktop mode, this opens a Windows folder picker. You can also type or paste the exact folder path below.');
+    } catch (err) {
+      console.error('Failed to browse directories:', err);
+      showToast('Could not load directory listing', 'error');
+    } finally {
+      setBrowserLoading(false);
+    }
+  };
+
+  const handleBrowseFolder = async () => {
+    // 1. Electron Desktop Native Picker
+    if (window.electronAPI && window.electronAPI.selectFolder) {
+      try {
+        const res = await window.electronAPI.selectFolder();
+        if (!res.canceled && res.folderPath) {
+          setSettings(prev => ({ ...prev, backup_destination_path: res.folderPath }));
+          showToast('Folder selected: ' + res.folderPath, 'success');
+          return;
+        }
+        if (res.canceled) return;
+      } catch (_) {}
+    }
+
+    // 2. Web Browser: Launch Native Windows System Folder Dialog
+    try {
+      showToast('Opening Windows Folder Dialog...', 'info');
+      const res = await api.post('/backups/system-folder-picker');
+      if (res && !res.canceled && res.folderPath) {
+        setSettings(prev => ({ ...prev, backup_destination_path: res.folderPath }));
+        showToast('Selected: ' + res.folderPath, 'success');
+        return;
+      }
+      if (res && res.canceled) {
+        return;
+      }
+    } catch (err) {
+      // Fallback to in-app directory picker if needed
+      console.warn('System picker fallback:', err);
+      await loadBrowserDir(settings.backup_destination_path || '');
+      setFolderModalOpen(true);
     }
   };
 
@@ -69,13 +128,17 @@ export default function DatabaseBackupTab() {
     try {
       setSavingSettings(true);
       setMessage({ type: '', text: '' });
-      await api.post('/backups/settings', settings);
+      const payload = {
+        ...settings,
+        auto_backup_time: settings.auto_backup_time || '02:00'
+      };
+      await api.post('/backups/settings', payload);
       setMessage({ type: 'success', text: 'Backup configuration saved successfully!' });
+      showToast('Backup configuration saved successfully!', 'success');
     } catch (err) {
-      setMessage({
-        type: 'error',
-        text: err.response?.data?.message || err.message || 'Failed to save backup configuration'
-      });
+      const msg = err.response?.data?.message || err.message || 'Failed to save backup configuration';
+      setMessage({ type: 'error', text: msg });
+      showToast(msg, 'error');
     } finally {
       setSavingSettings(false);
     }
@@ -91,12 +154,12 @@ export default function DatabaseBackupTab() {
         type: 'success',
         text: `Manual backup "${filename}" created successfully!`
       });
+      showToast(`Manual backup "${filename}" created successfully!`, 'success');
       await fetchBackupData();
     } catch (err) {
-      setMessage({
-        type: 'error',
-        text: err.response?.data?.message || err.message || 'Failed to create database backup'
-      });
+      const msg = err.response?.data?.message || err.message || 'Failed to create database backup';
+      setMessage({ type: 'error', text: msg });
+      showToast(msg, 'error');
     } finally {
       setCreatingBackup(false);
     }
@@ -207,7 +270,7 @@ export default function DatabaseBackupTab() {
                   value={settings.backup_destination_path || ''}
                   onChange={(e) => setSettings({ ...settings, backup_destination_path: e.target.value })}
                   placeholder="e.g. D:\SecurityFirmBackups"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono text-slate-800 focus:ring-2 focus:ring-teal-500 focus:outline-none"
                 />
                 <button
                   type="button"
@@ -217,6 +280,17 @@ export default function DatabaseBackupTab() {
                   <FolderOpen className="w-4 h-4 text-slate-600" />
                   <span>Browse</span>
                 </button>
+              </div>
+
+              {/* Prominent Active Path Display */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                  <FolderOpen className="w-3.5 h-3.5 text-teal-600" />
+                  <span>Current Active Storage Directory:</span>
+                </div>
+                <div className="font-mono text-xs text-teal-900 break-all select-all font-semibold bg-white p-2 rounded-lg border border-teal-200/60 shadow-xs">
+                  {settings.backup_destination_path || 'Default local backups directory'}
+                </div>
               </div>
             </div>
           </div>
@@ -255,16 +329,41 @@ export default function DatabaseBackupTab() {
               Configure daily scheduled backups to automatically secure your database without any manual intervention.
             </p>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Execution Time (Daily)</label>
-                <input
-                  type="time"
-                  value={settings.auto_backup_time || '02:00'}
-                  onChange={(e) => setSettings({ ...settings, auto_backup_time: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:outline-none"
-                />
-                <span className="text-[11px] text-slate-400 mt-1 block">Default is 02:00 AM</span>
+                <div className="relative">
+                  <input
+                    type="time"
+                    step="60"
+                    value={settings.auto_backup_time ?? '02:00'}
+                    onChange={(e) => setSettings({ ...settings, auto_backup_time: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-medium text-slate-800 focus:ring-2 focus:ring-teal-500 focus:outline-none cursor-pointer bg-white"
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                  <span className="text-[11px] text-slate-400">Quick:</span>
+                  {[
+                    { label: '12:00 AM', val: '00:00' },
+                    { label: '02:00 AM', val: '02:00' },
+                    { label: '04:00 AM', val: '04:00' },
+                    { label: '02:00 PM', val: '14:00' },
+                    { label: '10:00 PM', val: '22:00' }
+                  ].map(preset => (
+                    <button
+                      key={preset.val}
+                      type="button"
+                      onClick={() => setSettings({ ...settings, auto_backup_time: preset.val })}
+                      className={`px-2 py-0.5 text-[11px] rounded font-medium border transition-colors ${
+                        (settings.auto_backup_time || '02:00').slice(0, 5) === preset.val
+                          ? 'bg-teal-600 text-white border-teal-600 shadow-sm'
+                          : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-teal-50 hover:text-teal-700 hover:border-teal-200'
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Frequency</label>
@@ -276,6 +375,9 @@ export default function DatabaseBackupTab() {
                   <option value="daily">Daily (Every Day)</option>
                   <option value="weekly">Weekly (Every Sunday)</option>
                 </select>
+                <span className="text-[11px] text-slate-400 mt-2 block">
+                  Automatic backups run in the background at this time.
+                </span>
               </div>
             </div>
           </div>
@@ -417,6 +519,131 @@ export default function DatabaseBackupTab() {
           </div>
         )}
       </div>
+
+      {/* Interactive Folder Browser Modal */}
+      {folderModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl w-full max-w-xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[85vh]">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FolderOpen className="w-5 h-5 text-teal-600" />
+                <h3 className="text-base font-bold text-slate-800">Select Backup Destination Folder</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFolderModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 text-lg font-bold p-1"
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Quick Drive Presets & Defaults */}
+            <div className="px-6 py-3 bg-slate-50/50 border-b border-slate-100 flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold text-slate-500">Quick Locations:</span>
+              {browserData.drives?.map(drv => (
+                <button
+                  key={drv}
+                  type="button"
+                  onClick={() => loadBrowserDir(drv)}
+                  className="px-2.5 py-1 bg-white hover:bg-teal-50 hover:text-teal-700 hover:border-teal-300 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 transition-colors shadow-xs"
+                >
+                  {drv}
+                </button>
+              ))}
+              {browserData.defaultPath && (
+                <button
+                  type="button"
+                  onClick={() => loadBrowserDir(browserData.defaultPath)}
+                  className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 rounded-lg text-xs font-bold transition-colors ml-auto shadow-xs"
+                >
+                  Default App Backups Folder
+                </button>
+              )}
+            </div>
+
+            {/* Current Path Bar & Up Navigation */}
+            <div className="p-4 bg-white border-b border-slate-100 flex items-center gap-2">
+              {browserData.parentPath && (
+                <button
+                  type="button"
+                  onClick={() => loadBrowserDir(browserData.parentPath)}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-lg flex items-center gap-1 shrink-0 transition-colors"
+                  title="Go Up One Level"
+                >
+                  <span>⬆ Up</span>
+                </button>
+              )}
+              <div className="flex-1 font-mono text-xs bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg text-slate-800 font-semibold break-all select-all whitespace-normal">
+                {browserData.currentPath || 'Loading directory...'}
+              </div>
+            </div>
+
+            {/* Subdirectories List */}
+            <div className="p-4 overflow-y-auto flex-1 min-h-[220px] max-h-[350px] space-y-1">
+              {browserLoading ? (
+                <div className="flex items-center justify-center py-12 text-slate-400 gap-2">
+                  <RefreshCw className="w-5 h-5 animate-spin text-teal-600" />
+                  <span className="text-sm font-medium">Scanning folders...</span>
+                </div>
+              ) : browserData.subdirs?.length === 0 ? (
+                <div className="text-center py-10 text-slate-400 text-xs">
+                  No subdirectories found in this folder. You can select this folder as the destination!
+                </div>
+              ) : (
+                browserData.subdirs?.map(sub => (
+                  <div
+                    key={sub.path}
+                    onClick={() => loadBrowserDir(sub.path)}
+                    className="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-100 cursor-pointer transition-colors group"
+                  >
+                    <div className="flex items-center gap-2.5 truncate">
+                      <FolderOpen className="w-4 h-4 text-teal-600 shrink-0 group-hover:scale-110 transition-transform" />
+                      <span className="text-xs font-semibold text-slate-700 truncate">{sub.name}</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400 group-hover:text-teal-600 font-medium shrink-0">Open →</span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Footer Action Buttons */}
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setFolderModalOpen(false)}
+                className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-semibold transition-colors"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (browserData.currentPath) {
+                    setSettings(prev => ({ ...prev, backup_destination_path: browserData.currentPath }));
+                    showToast('Selected backup directory: ' + browserData.currentPath, 'success');
+                    setFolderModalOpen(false);
+                  }
+                }}
+                className="px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold shadow-sm transition-colors flex items-center gap-1.5"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>Select This Folder</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toast.show && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast({ show: false, message: '', type: 'error' })}
+        />
+      )}
     </div>
   );
 }
