@@ -8,7 +8,7 @@ import {
   Shield, ShieldCheck, ShieldOff, Eye, EyeOff, RotateCcw,
   IndianRupee, Percent, Clock, UserPlus, Key, Mail, Receipt, Settings2, Database
 } from 'lucide-react';
-import { getServerBaseUrl } from '../utils/apiUrl';
+import { getServerBaseUrl, getApiBaseUrl } from '../utils/apiUrl';
 
 import DatabaseBackupTab from '../components/settings/DatabaseBackupTab';
 
@@ -866,7 +866,7 @@ function AgencyProfileTab() {
       const res = await api.post('/settings/system/agency_logo', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
-      const newLogoUrl = res.data?.logo_url || res.data?.data?.logo_url;
+      const newLogoUrl = res.logo_url || res.data?.logo_url || res.data?.data?.logo_url;
       if (newLogoUrl) {
         setAgencySettings(prev => ({ ...prev, agency_logo_url: newLogoUrl }));
         setSaved(true);
@@ -1044,11 +1044,10 @@ function AgencyProfileTab() {
               onClick={async () => {
                 try {
                   const res = await api.post('/backups/create');
-                  if (res.data.success) {
-                    alert('Backup created successfully!');
-                  }
+                  const filename = res.data?.filename || res.filename || 'manual_backup.zip';
+                  alert(`Backup "${filename}" created successfully!`);
                 } catch (err) {
-                  alert('Failed to create manual backup');
+                  alert(err.response?.data?.message || err.message || 'Failed to create manual backup');
                 }
               }}
               className="w-full px-4 py-2.5 text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors flex items-center justify-center gap-2"
@@ -1059,15 +1058,16 @@ function AgencyProfileTab() {
               onClick={async () => {
                 try {
                   const res = await api.get('/backups');
-                  if (res.data.success && res.data.data.length > 0) {
-                    const latest = res.data.data[0].filename;
-                    const token = localStorage.getItem('token');
-                    window.open(`http://localhost:3000/api/backups/download/${latest}?token=${token}`, '_blank');
+                  const backupList = res.data?.backups || res.backups || [];
+                  if (backupList.length > 0) {
+                    const latest = backupList[0].filename;
+                    const token = localStorage.getItem('token') || sessionStorage.getItem('token') || '';
+                    window.open(`${getApiBaseUrl()}/backups/download/${latest}?token=${token}`, '_blank');
                   } else {
                     alert('No backups available. Trigger one first.');
                   }
                 } catch (err) {
-                  alert('Failed to fetch backup list');
+                  alert(err.response?.data?.message || err.message || 'Failed to fetch backup list');
                 }
               }}
               className="w-full px-4 py-2.5 text-sm font-medium text-white bg-slate-800 rounded-lg hover:bg-slate-900 shadow-sm transition-colors flex items-center justify-center gap-2"

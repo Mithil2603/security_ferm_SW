@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
+import { getApiBaseUrl } from '../../utils/apiUrl';
+
 export default function DatabaseBackupTab() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
@@ -35,16 +37,16 @@ export default function DatabaseBackupTab() {
       setLoading(true);
       setMessage({ type: '', text: '' });
       const res = await api.get('/backups');
-      if (res.data?.success) {
-        setBackups(res.data.data.backups || []);
-        if (res.data.data.settings) {
-          setSettings(res.data.data.settings);
-        }
+      const backupList = res.data?.backups || res.backups || [];
+      const backupSettings = res.data?.settings || res.settings || null;
+      setBackups(backupList);
+      if (backupSettings) {
+        setSettings(backupSettings);
       }
     } catch (err) {
       setMessage({
         type: 'error',
-        text: err.response?.data?.message || 'Failed to load backup data'
+        text: err.response?.data?.message || err.message || 'Failed to load backup data'
       });
     } finally {
       setLoading(false);
@@ -67,14 +69,12 @@ export default function DatabaseBackupTab() {
     try {
       setSavingSettings(true);
       setMessage({ type: '', text: '' });
-      const res = await api.post('/backups/settings', settings);
-      if (res.data?.success) {
-        setMessage({ type: 'success', text: 'Backup configuration saved successfully!' });
-      }
+      await api.post('/backups/settings', settings);
+      setMessage({ type: 'success', text: 'Backup configuration saved successfully!' });
     } catch (err) {
       setMessage({
         type: 'error',
-        text: err.response?.data?.message || 'Failed to save backup configuration'
+        text: err.response?.data?.message || err.message || 'Failed to save backup configuration'
       });
     } finally {
       setSavingSettings(false);
@@ -86,17 +86,16 @@ export default function DatabaseBackupTab() {
       setCreatingBackup(true);
       setMessage({ type: '', text: '' });
       const res = await api.post('/backups/create');
-      if (res.data?.success) {
-        setMessage({
-          type: 'success',
-          text: `Manual backup "${res.data.data?.filename}" created successfully!`
-        });
-        fetchBackupData();
-      }
+      const filename = res.data?.filename || res.filename || 'manual_backup.zip';
+      setMessage({
+        type: 'success',
+        text: `Manual backup "${filename}" created successfully!`
+      });
+      await fetchBackupData();
     } catch (err) {
       setMessage({
         type: 'error',
-        text: err.response?.data?.message || 'Failed to create database backup'
+        text: err.response?.data?.message || err.message || 'Failed to create database backup'
       });
     } finally {
       setCreatingBackup(false);
@@ -104,21 +103,20 @@ export default function DatabaseBackupTab() {
   };
 
   const handleDownloadBackup = (filename) => {
-    window.open(`/api/backups/download/${filename}`, '_blank');
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token') || '';
+    window.open(`${getApiBaseUrl()}/backups/download/${filename}?token=${token}`, '_blank');
   };
 
   const handleDeleteBackup = async (filename) => {
     if (!window.confirm(`Are you sure you want to delete backup "${filename}"?`)) return;
     try {
-      const res = await api.delete(`/backups/${filename}`);
-      if (res.data?.success) {
-        setMessage({ type: 'success', text: `Backup ${filename} deleted.` });
-        setBackups(prev => prev.filter(b => b.filename !== filename));
-      }
+      await api.delete(`/backups/${filename}`);
+      setMessage({ type: 'success', text: `Backup ${filename} deleted.` });
+      setBackups(prev => prev.filter(b => b.filename !== filename));
     } catch (err) {
       setMessage({
         type: 'error',
-        text: err.response?.data?.message || 'Failed to delete backup'
+        text: err.response?.data?.message || err.message || 'Failed to delete backup'
       });
     }
   };
