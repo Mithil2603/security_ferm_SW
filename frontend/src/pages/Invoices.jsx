@@ -205,16 +205,35 @@ export default function Invoices() {
     }
   };
 
-  const handleDownloadPDF = (inv) => {
+  const handleDownloadPDF = async (inv) => {
     try {
-      const token = localStorage.getItem('token');
-      const baseUrl = getApiBaseUrl();
-      const url = `${baseUrl}/invoices/${inv.id}/pdf?token=${token}`;
-      // window.open triggers Electron's setWindowOpenHandler -> downloadURL
-      window.open(url, '_blank');
+      const res = await api.get(`/invoices/${inv.id}/pdf`, {
+        responseType: 'blob'
+      });
+      // Handle response.data vs res from Axios interceptor
+      const rawData = (res && res.data !== undefined) ? res.data : res;
+      const blob = rawData instanceof Blob 
+        ? rawData 
+        : new Blob([rawData], { type: 'application/pdf' });
+
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Invoice-${inv.invoice_number || inv.id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
     } catch (err) {
-      console.error(err);
-      alert('Failed to trigger PDF download');
+      console.error('Blob PDF download failed, trying direct fallback:', err);
+      try {
+        const token = localStorage.getItem('token');
+        const baseUrl = getApiBaseUrl();
+        const url = `${baseUrl}/invoices/${inv.id}/pdf?token=${token}`;
+        window.open(url, '_blank');
+      } catch (fallbackErr) {
+        alert('Failed to download invoice PDF');
+      }
     }
   };
 

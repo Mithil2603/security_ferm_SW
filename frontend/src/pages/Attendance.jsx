@@ -1,13 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
-import { CalendarCheck, CalendarDays, Check, X, Clock, AlertCircle, Users, X as XIcon, Upload } from 'lucide-react';
+import { CalendarCheck, CalendarDays, Check, X, Clock, AlertCircle, Users, X as XIcon, Upload, FileSpreadsheet } from 'lucide-react';
 import api from '../services/api';
 import { format } from 'date-fns';
+import AttendanceImportModal from '../components/AttendanceImportModal';
 
 export default function Attendance() {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [dateFilter, setDateFilter] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [employees, setEmployees] = useState([]);
   const [bulkRecords, setBulkRecords] = useState([]);
   const [bulkDate, setBulkDate] = useState(format(new Date(), 'yyyy-MM-dd'));
@@ -129,10 +131,12 @@ export default function Attendance() {
           <input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)}
             className="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:ring-2 focus:ring-teal-500 outline-none" />
           
-          <input type="file" accept=".csv" ref={fileInputRef} onChange={handleCSVUpload} className="hidden" />
-          <button onClick={() => fileInputRef.current?.click()} disabled={uploadingCsv} className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2 disabled:opacity-50">
-            <Upload className="w-4 h-4" />
-            {uploadingCsv ? 'Uploading...' : 'CSV Upload'}
+          <button 
+            onClick={() => setIsUploadModalOpen(true)} 
+            className="bg-white border border-slate-200 hover:bg-slate-50 hover:border-teal-200 hover:text-teal-700 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-teal-600" />
+            Upload Attendance (Excel / CSV)
           </button>
 
           <button onClick={openBulkModal} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2">
@@ -288,6 +292,15 @@ export default function Attendance() {
           </div>
         </div>
       )}
+
+      {/* Attendance Import Modal (Excel .xlsx / CSV) */}
+      <AttendanceImportModal 
+        isOpen={isUploadModalOpen} 
+        onClose={() => setIsUploadModalOpen(false)} 
+        onImportSuccess={() => {
+          fetchAttendance();
+        }} 
+      />
     </div>
   );
 }

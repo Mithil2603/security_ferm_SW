@@ -17,8 +17,10 @@ import {
   PlusCircle, 
   CheckSquare, 
   Receipt, 
-  UserPlus
+  UserPlus,
+  FileSpreadsheet
 } from 'lucide-react';
+import AttendanceImportModal from '../components/AttendanceImportModal';
 import { 
   AreaChart, 
   Area, 
@@ -69,6 +71,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [fetchError, setFetchError] = useState(null);
+  const [isAttendanceUploadOpen, setIsAttendanceUploadOpen] = useState(false);
 
   const fetchDashboard = useCallback(async (isManualRefresh = false) => {
     if (isManualRefresh) setRefreshing(true);
@@ -228,7 +231,7 @@ export default function Dashboard() {
       {/* Quick Actions */}
       <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
         <h3 className="text-sm font-bold text-slate-800 mb-4 uppercase tracking-wider">Quick Actions</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
           <Link to="/invoices" className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-teal-50 hover:border-teal-100 hover:text-teal-700 transition-colors group">
             <PlusCircle className="w-6 h-6 text-slate-400 group-hover:text-teal-600 mb-2" />
             <span className="text-sm font-medium">Create Invoice</span>
@@ -237,6 +240,14 @@ export default function Dashboard() {
             <CheckSquare className="w-6 h-6 text-slate-400 group-hover:text-teal-600 mb-2" />
             <span className="text-sm font-medium">Mark Attendance</span>
           </Link>
+          <button 
+            type="button"
+            onClick={() => setIsAttendanceUploadOpen(true)}
+            className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors group text-slate-700"
+          >
+            <FileSpreadsheet className="w-6 h-6 text-slate-400 group-hover:text-emerald-600 mb-2" />
+            <span className="text-sm font-medium">Upload Attendance</span>
+          </button>
           <Link to="/employees" className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-teal-50 hover:border-teal-100 hover:text-teal-700 transition-colors group">
             <UserPlus className="w-6 h-6 text-slate-400 group-hover:text-teal-600 mb-2" />
             <span className="text-sm font-medium">Add Watchman</span>
@@ -405,6 +416,15 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Attendance Import Modal (Excel .xlsx / CSV) */}
+      <AttendanceImportModal 
+        isOpen={isAttendanceUploadOpen} 
+        onClose={() => setIsAttendanceUploadOpen(false)} 
+        onImportSuccess={() => {
+          fetchDashboard(true);
+        }} 
+      />
     </div>
   );
 }

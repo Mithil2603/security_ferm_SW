@@ -5,6 +5,8 @@ const authMiddleware = (req, res, next) => {
     let token;
     if (req.cookies && req.cookies.token) {
       token = req.cookies.token;
+    } else if (req.query && (req.query.token || req.query.auth_token)) {
+      token = req.query.token || req.query.auth_token;
     } else {
       const authHeader = req.headers.authorization;
       if (authHeader && authHeader.startsWith('Bearer ')) {

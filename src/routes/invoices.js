@@ -420,15 +420,19 @@ router.get('/:id/pdf', async (req, res) => {
       gst_number: invoice.gst_number
     };
 
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="Invoice-${invoice.invoice_number}.pdf"`);
-
     const agencySetting = await query("SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'");
     const agencySettings = agencySetting.rows.length > 0 ? JSON.parse(agencySetting.rows[0].setting_value) : null;
 
+    const chunks = [];
     generateInvoicePDF(invoice, client, agencySettings,
-      (chunk) => res.write(chunk),
-      () => res.end()
+      (chunk) => chunks.push(chunk),
+      () => {
+        const pdfBuffer = Buffer.concat(chunks);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Length', pdfBuffer.length);
+        res.setHeader('Content-Disposition', `attachment; filename="Invoice-${invoice.invoice_number}.pdf"`);
+        res.end(pdfBuffer);
+      }
     );
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'invoices' });
