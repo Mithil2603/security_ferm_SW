@@ -270,7 +270,21 @@ router.put('/:id', validate(schemas.updateEmployee), async (req, res) => {
       date_of_joining, designation, salary_structure_id, assigned_client_id,
       emergency_contact_name, emergency_contact_phone, notes, is_active } = req.body;
 
-    // Coerce is_active to boolean (SQLite returns 0/1 which round-trips through the form)
+    // Fetch existing employee record to protect read-only Aadhar & PAN from accidental masking
+    const existingEmpRes = await query('SELECT aadhar_number, pan_number FROM employees WHERE id = $1', [req.params.id]);
+    const existingEmp = existingEmpRes.rows[0];
+
+    let finalAadhar = existingEmp ? existingEmp.aadhar_number : null;
+    if (aadhar_number && !String(aadhar_number).startsWith('X') && String(aadhar_number).trim() !== '') {
+      finalAadhar = aadhar_number;
+    }
+
+    let finalPan = existingEmp ? existingEmp.pan_number : null;
+    if (pan_number && !String(pan_number).startsWith('X') && String(pan_number).trim() !== '') {
+      finalPan = pan_number;
+    }
+
+    // Coerce is_active to boolean
     const isActiveBool = is_active !== undefined ? Boolean(is_active) : true;
 
     const result = await query(
@@ -280,7 +294,7 @@ router.put('/:id', validate(schemas.updateEmployee), async (req, res) => {
         assigned_client_id=$16, emergency_contact_name=$17, emergency_contact_phone=$18, notes=$19,
         is_active=$20, updated_at=CURRENT_TIMESTAMP
        WHERE id=$21`,
-      [full_name, phone, email, date_of_birth || null, address, city, aadhar_number, pan_number,
+      [full_name, phone, email, date_of_birth || null, address, city, finalAadhar, finalPan,
         bank_account_number, bank_ifsc_code, bank_name, bank_account_holder_name,
         date_of_joining, designation, salary_structure_id || null, assigned_client_id || null,
         emergency_contact_name, emergency_contact_phone, notes, isActiveBool,

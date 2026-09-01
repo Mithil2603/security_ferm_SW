@@ -17,13 +17,15 @@ const storage = multer.diskStorage({
 });
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
   fileFilter: (req, file, cb) => {
-    const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
-    if (allowedMimes.includes(file.mimetype)) {
+    const allowedMimes = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const allowedExts = ['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.xlsx'];
+    if (allowedMimes.includes((file.mimetype || '').toLowerCase()) || allowedExts.includes(ext)) {
       cb(null, true);
     } else {
-      cb(new Error('Invalid file type. Only PDF, JPG, PNG, WEBP, and XLSX are allowed.'));
+      cb(new Error('Invalid file type. Only PDF, JPG, PNG, WEBP, and XLSX receipts are allowed.'));
     }
   }
 });
@@ -161,20 +163,26 @@ router.post('/', upload.single('receipt_file'), validate(schemas.createExpense),
     if (!expense_date || !category || !description || !amount || !payment_method) {
       return res.status(400).json({ success: false, message: 'Date, category, description, amount, and payment method are required' });
     }
-    if (parseFloat(amount) <= 0) {
-      return res.status(400).json({ success: false, message: 'Amount must be positive' });
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'Amount must be a positive number' });
     }
+
+    const parsedVendorId = vendor_id && !isNaN(parseInt(vendor_id)) && parseInt(vendor_id) > 0 ? parseInt(vendor_id) : null;
+    const parsedReceiptNo = receipt_number ? String(receipt_number).trim() : null;
+    const parsedNotes = notes ? String(notes).trim() : null;
 
     const result = await query(
       `INSERT INTO expenses (expense_date, category, description, amount, payment_method, vendor_id, receipt_number, notes, receipt_url, created_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [expense_date, category, description, amount, payment_method, vendor_id, receipt_number, notes, receipt_url, req.user.userId]
+      [expense_date, category, description, parsedAmount, payment_method, parsedVendorId, parsedReceiptNo, parsedNotes, receipt_url, req.user.userId]
     );
 
     res.status(201).json({ success: true, data: result.rows[0], message: 'Expense recorded successfully' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'expenses' });
-    res.status(500).json({ success: false, message: 'Failed to create expense' });
+    logger.error('Create expense error:', error);
+    res.status(500).json({ success: false, message: 'Failed to create expense: ' + (error.message || '') });
   }
 });
 
@@ -189,16 +197,20 @@ router.put('/:id', upload.single('receipt_file'), async (req, res) => {
 
     let receipt_url = req.file ? `/uploads/${req.file.filename}` : null;
     
-    // If no new file, keep existing receipt_url
+    const parsedVendorId = vendor_id && !isNaN(parseInt(vendor_id)) && parseInt(vendor_id) > 0 ? parseInt(vendor_id) : null;
+    const parsedAmount = parseFloat(amount);
+    const parsedReceiptNo = receipt_number ? String(receipt_number).trim() : null;
+    const parsedNotes = notes ? String(notes).trim() : null;
+
     let updateQuery, params;
     if (receipt_url) {
       updateQuery = `UPDATE expenses SET expense_date=$1, category=$2, description=$3, amount=$4, payment_method=$5,
         vendor_id=$6, receipt_number=$7, notes=$8, receipt_url=$9 WHERE id=$10 AND status='pending'`;
-      params = [expense_date, category, description, amount, payment_method, vendor_id, receipt_number, notes, receipt_url, req.params.id];
+      params = [expense_date, category, description, parsedAmount, payment_method, parsedVendorId, parsedReceiptNo, parsedNotes, receipt_url, req.params.id];
     } else {
       updateQuery = `UPDATE expenses SET expense_date=$1, category=$2, description=$3, amount=$4, payment_method=$5,
         vendor_id=$6, receipt_number=$7, notes=$8 WHERE id=$9 AND status='pending'`;
-      params = [expense_date, category, description, amount, payment_method, vendor_id, receipt_number, notes, req.params.id];
+      params = [expense_date, category, description, parsedAmount, payment_method, parsedVendorId, parsedReceiptNo, parsedNotes, req.params.id];
     }
 
     const result = await query(updateQuery, params);

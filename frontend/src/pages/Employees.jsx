@@ -82,6 +82,16 @@ export default function Employees() {
       setFormData(prev => ({ ...prev, [name]: sanitizePhone(value) }));
       return;
     }
+    if (name === 'aadhar_number') {
+      const cleanAadhar = value.replace(/\D/g, '').slice(0, 12);
+      setFormData(prev => ({ ...prev, aadhar_number: cleanAadhar }));
+      return;
+    }
+    if (name === 'pan_number') {
+      const cleanPan = value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 10).toUpperCase();
+      setFormData(prev => ({ ...prev, pan_number: cleanPan }));
+      return;
+    }
     setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
   };
 
@@ -124,15 +134,30 @@ export default function Employees() {
     const phoneCheck = validatePhone(formData.phone, 'Employee Phone Number', true);
     if (!phoneCheck.valid) {
       setError(phoneCheck.error);
-      showToast(phoneCheck.error, 'error');
+      toast.error(phoneCheck.error);
       return;
     }
 
     const emgCheck = validatePhone(formData.emergency_contact_phone, 'Emergency Contact Phone', false);
     if (!emgCheck.valid) {
       setError(emgCheck.error);
-      showToast(emgCheck.error, 'error');
+      toast.error(emgCheck.error);
       return;
+    }
+
+    if (!editingEmp) {
+      if (formData.aadhar_number && formData.aadhar_number.length !== 12) {
+        const msg = 'Aadhar number must be exactly 12 digits';
+        setError(msg);
+        toast.error(msg);
+        return;
+      }
+      if (formData.pan_number && formData.pan_number.length !== 10) {
+        const msg = 'PAN number must be exactly 10 characters (e.g. ABCDE1234F)';
+        setError(msg);
+        toast.error(msg);
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -142,11 +167,13 @@ export default function Employees() {
       if (!payload.assigned_client_id) payload.assigned_client_id = null;
 
       if (editingEmp) {
+        delete payload.aadhar_number;
+        delete payload.pan_number;
         await api.put(`/employees/${editingEmp.id}`, payload);
-        showToast('Employee updated successfully!', 'success');
+        toast.success('Employee updated successfully!');
       } else {
         await api.post('/employees', payload);
-        showToast('Employee registered successfully!', 'success');
+        toast.success('Employee registered successfully!');
       }
       setIsModalOpen(false);
       setEditingEmp(null);
@@ -156,7 +183,7 @@ export default function Employees() {
         ? err.errors.map(e => e.message).join(' | ')
         : err.response?.data?.message || err.message || 'Failed to save employee';
       setError(msg);
-      showToast(msg, 'error');
+      toast.error(msg);
     } finally {
       setSubmitting(false);
     }
@@ -478,12 +505,38 @@ export default function Employees() {
                   <input type="text" name="address" value={formData.address} onChange={handleInputChange} className={inputCls} />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Aadhar Number</label>
-                  <input type="text" name="aadhar_number" value={formData.aadhar_number} onChange={handleInputChange} maxLength="12" className={inputCls} />
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-sm font-medium text-slate-700">Aadhar Number</label>
+                    {editingEmp && <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">🔒 Read Only</span>}
+                  </div>
+                  <input
+                    type="text"
+                    name="aadhar_number"
+                    value={formData.aadhar_number}
+                    onChange={handleInputChange}
+                    maxLength="12"
+                    placeholder="12-digit number"
+                    disabled={!!editingEmp}
+                    className={editingEmp ? "w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-100 text-slate-700 font-mono cursor-not-allowed select-none" : inputCls}
+                  />
+                  {editingEmp && <p className="text-[11px] text-slate-600 mt-1">Aadhar is locked once registered for compliance.</p>}
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">PAN Number</label>
-                  <input type="text" name="pan_number" value={formData.pan_number} onChange={handleInputChange} maxLength="10" className={inputCls} />
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-sm font-medium text-slate-700">PAN Number</label>
+                    {editingEmp && <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">🔒 Read Only</span>}
+                  </div>
+                  <input
+                    type="text"
+                    name="pan_number"
+                    value={formData.pan_number}
+                    onChange={handleInputChange}
+                    maxLength="10"
+                    placeholder="ABCDE1234F"
+                    disabled={!!editingEmp}
+                    className={editingEmp ? "w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-100 text-slate-700 font-mono cursor-not-allowed select-none" : inputCls}
+                  />
+                  {editingEmp && <p className="text-[11px] text-slate-600 mt-1">PAN is locked once registered for compliance.</p>}
                 </div>
               </div>
 

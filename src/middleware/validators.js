@@ -117,16 +117,15 @@ const createEmployeeSchema = Joi.object({
     .messages({ 'date.max': 'Date of birth cannot be in the future' })
     .label('Date of birth'),
   address: Joi.string().max(500).optional().allow('', null).label('Address'),
-  city: Joi.string().max(100).optional().allow('', null).label('City'),
   aadhar_number: Joi.string()
-    .pattern(/^\d{12}$/)
+    .pattern(/^(\d{12}|[X\d-]{12,16})$/i)
     .optional().allow('', null)
     .messages({ 'string.pattern.base': 'Aadhar number must be exactly 12 digits' })
     .label('Aadhar number'),
   pan_number: Joi.string()
-    .pattern(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/)
+    .pattern(/^([A-Z]{5}[0-9]{4}[A-Z]{1}|[X\dA-Z]{10})$/i)
     .optional().allow('', null)
-    .messages({ 'string.pattern.base': 'PAN number must be in the format ABCDE1234F (all uppercase)' })
+    .messages({ 'string.pattern.base': 'PAN number must be in the format ABCDE1234F' })
     .label('PAN number'),
   bank_account_number: Joi.string()
     .max(50)
@@ -150,9 +149,11 @@ const createEmployeeSchema = Joi.object({
 
 // PUT /api/employees/:id
 const updateEmployeeSchema = createEmployeeSchema.fork(
-  ['full_name', 'phone', 'date_of_joining'],
-  (schema) => schema.optional()
+  ['full_name', 'phone', 'date_of_joining', 'aadhar_number', 'pan_number'],
+  (schema) => schema.optional().allow('', null)
 ).append({
+  aadhar_number: Joi.string().optional().allow('', null),
+  pan_number: Joi.string().optional().allow('', null),
   is_active: Joi.alternatives().try(Joi.boolean(), Joi.number().valid(0, 1)).optional(),
 });
 
@@ -214,10 +215,14 @@ const createExpenseSchema = Joi.object({
   description: Joi.string().min(3).max(500).required().label('Description'),
   amount: positiveDecimal.required().label('Amount'),
   payment_method: Joi.string()
-    .valid('cash', 'bank_transfer', 'cheque', 'upi', 'online', 'other')
+    .valid('cash', 'bank_transfer', 'cheque', 'upi', 'online', 'card', 'other')
     .required()
     .label('Payment method'),
-  vendor_id: Joi.number().integer().optional().allow(null, '').label('Vendor ID'),
+  vendor_id: Joi.alternatives().try(
+    Joi.number().integer(),
+    Joi.string().allow('', null),
+    Joi.allow(null)
+  ).optional().label('Vendor ID'),
   receipt_number: Joi.string().max(100).optional().allow('', null).label('Receipt number'),
   invoice_reference: Joi.string().max(200).optional().allow('', null).label('Invoice reference'),
   notes: Joi.string().max(2000).optional().allow('', null).label('Notes'),

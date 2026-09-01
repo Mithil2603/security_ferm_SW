@@ -114,12 +114,65 @@ export default function Expenses() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+
+    // Field validations
+    if (!formData.expense_date) {
+      const msg = 'Please select the expense date';
+      setError(msg);
+      toast.warning(msg);
+      return;
+    }
+    if (!formData.category) {
+      const msg = 'Please select an expense category';
+      setError(msg);
+      toast.warning(msg);
+      return;
+    }
+    if (!formData.description || formData.description.trim().length < 3) {
+      const msg = 'Please provide a clear description (at least 3 characters)';
+      setError(msg);
+      toast.warning(msg);
+      return;
+    }
+    const amt = parseFloat(formData.amount);
+    if (isNaN(amt) || amt <= 0) {
+      const msg = 'Please enter a valid amount greater than zero';
+      setError(msg);
+      toast.warning(msg);
+      return;
+    }
+
+    if (receiptFile) {
+      // Validate receipt size (max 10MB)
+      if (receiptFile.size > 10 * 1024 * 1024) {
+        const msg = 'Receipt file size exceeds 10MB limit. Please choose a smaller file.';
+        setError(msg);
+        toast.error(msg);
+        return;
+      }
+      // Validate file extension
+      const validExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.pdf', '.gif'];
+      const fileExt = '.' + (receiptFile.name.split('.').pop() || '').toLowerCase();
+      if (!validExtensions.includes(fileExt)) {
+        const msg = 'Invalid receipt format. Only JPG, PNG, WEBP, and PDF files are allowed.';
+        setError(msg);
+        toast.error(msg);
+        return;
+      }
+    }
+
     setSubmitting(true);
     try {
       const data = new FormData();
       Object.keys(formData).forEach(key => {
         if (formData[key] !== null && formData[key] !== undefined) {
-          data.append(key, formData[key]);
+          if (key === 'vendor_id') {
+            if (formData[key] && parseInt(formData[key]) > 0) {
+              data.append(key, formData[key]);
+            }
+          } else {
+            data.append(key, formData[key]);
+          }
         }
       });
       if (receiptFile) data.append('receipt_file', receiptFile);
@@ -128,10 +181,15 @@ export default function Expenses() {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       
+      toast.success('Expense recorded successfully!');
       setIsModalOpen(false);
+      setFormData({ ...emptyForm, expense_date: format(new Date(), 'yyyy-MM-dd') });
+      setReceiptFile(null);
       fetchExpenses();
     } catch (err) {
-      setError(err.response?.data?.message || err.message || 'Failed to record expense');
+      const msg = err.response?.data?.message || err.message || 'Failed to record expense';
+      setError(msg);
+      toast.error(msg);
     } finally {
       setSubmitting(false);
     }
@@ -609,12 +667,39 @@ export default function Expenses() {
 
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Receipt Attachment (Image or PDF)</label>
-                <input 
-                  type="file" 
-                  accept="image/*,.pdf" 
-                  onChange={e => setReceiptFile(e.target.files[0])} 
-                  className="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-teal-50 file:text-teal-700 hover:file:bg-teal-100" 
-                />
+                <div className="flex items-center gap-2">
+                  <input 
+                    type="file" 
+                    accept="image/*,.pdf" 
+                    onChange={e => {
+                      const file = e.target.files[0];
+                      if (file) {
+                        if (file.size > 10 * 1024 * 1024) {
+                          toast.error('File size exceeds 10MB limit');
+                          e.target.value = '';
+                          return;
+                        }
+                        setReceiptFile(file);
+                      }
+                    }} 
+                    className="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-teal-50 file:text-teal-700 hover:file:bg-teal-100 cursor-pointer" 
+                  />
+                  {receiptFile && (
+                    <button
+                      type="button"
+                      onClick={() => setReceiptFile(null)}
+                      className="px-2.5 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50 border border-rose-200 rounded-lg transition-colors shrink-0"
+                      title="Remove selected receipt"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                {receiptFile && (
+                  <p className="text-xs text-teal-700 mt-1.5 flex items-center gap-1 font-medium">
+                    ✓ Selected: {receiptFile.name} ({(receiptFile.size / 1024).toFixed(1)} KB)
+                  </p>
+                )}
               </div>
 
               <div>
