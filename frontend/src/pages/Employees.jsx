@@ -596,15 +596,25 @@ export default function Employees() {
                               <p className="text-xs text-slate-400">Uploaded {format(new Date(doc.uploaded_at), 'MMM dd, yyyy')}</p>
                             </div>
                           </div>
-                          <a 
-                            href={`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="p-2 text-teal-600 hover:bg-teal-50 rounded-lg transition-colors"
-                            title="Download/View"
-                          >
-                            <Download className="w-4 h-4" />
-                          </a>
+                          <div className="flex items-center gap-1">
+                            <a 
+                              href={`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="p-1.5 text-teal-600 hover:bg-teal-50 rounded-lg transition-colors"
+                              title="Download / View"
+                            >
+                              <Download className="w-4 h-4" />
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteDocument(doc.id, doc.file_name)}
+                              className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors"
+                              title="Delete Document"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </li>
                       ))}
                     </ul>
