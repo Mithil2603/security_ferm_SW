@@ -8,6 +8,7 @@ import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
 import ImportModal from '../components/shared/ImportModal';
 import Toast from '../components/Toast';
+import { toast, confirmDialog } from '../context/ToastContext';
 import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
 
 const emptyForm = {
@@ -174,11 +175,32 @@ export default function Employees() {
       await api.post(`/employees/${editingEmp.id}/upload-doc`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
+      toast.success('Document uploaded successfully');
       fetchDocuments(editingEmp.id);
     } catch (err) {
-      alert(err.message || 'Failed to upload document');
+      toast.error(err.message || 'Failed to upload document');
     } finally {
       setUploadingDoc(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleDeleteDocument = async (docId, fileName) => {
+    if (!editingEmp) return;
+    const confirmed = await confirmDialog({
+      title: 'Delete Document',
+      message: `Are you sure you want to delete "${fileName || 'this document'}"?`,
+      confirmText: 'Delete',
+      variant: 'danger'
+    });
+    if (!confirmed) return;
+
+    try {
+      await api.delete(`/employees/${editingEmp.id}/docs/${docId}`);
+      toast.success('Document deleted successfully');
+      fetchDocuments(editingEmp.id);
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to delete document');
     }
   };
 
@@ -186,9 +208,11 @@ export default function Employees() {
     try {
       await api.delete(`/employees/${id}`);
       setConfirmDelete(null);
+      toast.success('Employee status updated');
       fetchEmployees();
     } catch (err) {
       console.error('Failed to deactivate employee', err);
+      toast.error('Failed to deactivate employee');
     }
   };
 
@@ -196,9 +220,10 @@ export default function Employees() {
     try {
       await api.delete(`/employees/${id}/hard`);
       setConfirmDelete(null);
+      toast.success('Employee permanently deleted');
       fetchEmployees();
     } catch (err) {
-      alert(err.response?.data?.message || 'Failed to permanently delete employee');
+      toast.error(err.response?.data?.message || 'Failed to permanently delete employee');
       console.error('Failed to permanently delete employee', err);
     }
   };
