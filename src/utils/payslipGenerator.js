@@ -104,37 +104,42 @@ function generatePayslipPDF(payroll, employee, client, agencySettings, dataCallb
   
   let leftY = tableTop + 30;
   doc.font('Helvetica');
-  generateTableRow(doc, leftY, 'Basic Salary', `Rs ${Number(payroll.base_salary).toLocaleString('en-IN')}`, 50, 250, '#ffffff', '#334155');
-  leftY += 25;
-  if (Number(payroll.da_amount) > 0) {
-    generateTableRow(doc, leftY, 'Dearness Allowance (DA)', `Rs ${Number(payroll.da_amount).toLocaleString('en-IN')}`, 50, 250, '#ffffff', '#334155');
-    leftY += 25;
-  }
-  if (Number(payroll.hra_amount) > 0) {
-    generateTableRow(doc, leftY, 'House Rent Allowance (HRA)', `Rs ${Number(payroll.hra_amount).toLocaleString('en-IN')}`, 50, 250, '#ffffff', '#334155');
-    leftY += 25;
-  }
-  let parsedAdjustments = [];
-  try {
-    if (payroll.adjustments) parsedAdjustments = JSON.parse(payroll.adjustments);
-  } catch (e) {}
-  
-  const customAdditions = parsedAdjustments.filter(a => a.type === 'addition');
-  const customDeductions = parsedAdjustments.filter(a => a.type === 'deduction');
 
-  if (Number(payroll.other_allowances) > 0 || customAdditions.length > 0) {
-    let otherAllowRemaining = Number(payroll.other_allowances);
-    customAdditions.forEach(adj => {
-      const label = adj.category + (adj.description ? ` (${adj.description})` : '');
-      generateTableRow(doc, leftY, label, `Rs ${Number(adj.amount).toLocaleString('en-IN')}`, 50, 250, '#ffffff', '#334155');
+  if (Array.isArray(payroll.earnings) && payroll.earnings.length > 0) {
+    payroll.earnings.forEach(e => {
+      generateTableRow(doc, leftY, e.component_name, `Rs ${Number(e.amount).toLocaleString('en-IN')}`, 50, 250, '#ffffff', '#334155');
       leftY += 25;
-      otherAllowRemaining -= Number(adj.amount);
     });
-    // Ensure precision issues don't show tiny decimals
-    otherAllowRemaining = Math.round(otherAllowRemaining * 100) / 100;
-    if (otherAllowRemaining > 0) {
-      generateTableRow(doc, leftY, 'Other Allowances', `Rs ${otherAllowRemaining.toLocaleString('en-IN')}`, 50, 250, '#ffffff', '#334155');
+  } else {
+    generateTableRow(doc, leftY, 'Basic Salary', `Rs ${Number(payroll.base_salary || 0).toLocaleString('en-IN')}`, 50, 250, '#ffffff', '#334155');
+    leftY += 25;
+    if (Number(payroll.da_amount) > 0) {
+      generateTableRow(doc, leftY, 'Dearness Allowance (DA)', `Rs ${Number(payroll.da_amount).toLocaleString('en-IN')}`, 50, 250, '#ffffff', '#334155');
       leftY += 25;
+    }
+    if (Number(payroll.hra_amount) > 0) {
+      generateTableRow(doc, leftY, 'House Rent Allowance (HRA)', `Rs ${Number(payroll.hra_amount).toLocaleString('en-IN')}`, 50, 250, '#ffffff', '#334155');
+      leftY += 25;
+    }
+    let parsedAdjustments = [];
+    try {
+      if (payroll.adjustments) parsedAdjustments = JSON.parse(payroll.adjustments);
+    } catch (e) {}
+    
+    const customAdditions = parsedAdjustments.filter(a => a.type === 'addition');
+    if (Number(payroll.other_allowances) > 0 || customAdditions.length > 0) {
+      let otherAllowRemaining = Number(payroll.other_allowances || 0);
+      customAdditions.forEach(adj => {
+        const label = adj.category + (adj.description ? ` (${adj.description})` : '');
+        generateTableRow(doc, leftY, label, `Rs ${Number(adj.amount).toLocaleString('en-IN')}`, 50, 250, '#ffffff', '#334155');
+        leftY += 25;
+        otherAllowRemaining -= Number(adj.amount);
+      });
+      otherAllowRemaining = Math.round(otherAllowRemaining * 100) / 100;
+      if (otherAllowRemaining > 0) {
+        generateTableRow(doc, leftY, 'Other Allowances', `Rs ${otherAllowRemaining.toLocaleString('en-IN')}`, 50, 250, '#ffffff', '#334155');
+        leftY += 25;
+      }
     }
   }
 
@@ -144,40 +149,56 @@ function generatePayslipPDF(payroll, employee, client, agencySettings, dataCallb
   
   let rightY = tableTop + 30;
   doc.font('Helvetica');
-  if (Number(payroll.pf_deduction) > 0) {
-    generateTableRow(doc, rightY, 'Provident Fund (PF)', `Rs ${Number(payroll.pf_deduction).toLocaleString('en-IN')}`, 310, 240, '#ffffff', '#334155');
-    rightY += 25;
-  }
-  if (Number(payroll.esi_deduction) > 0) {
-    generateTableRow(doc, rightY, 'ESI', `Rs ${Number(payroll.esi_deduction).toLocaleString('en-IN')}`, 310, 240, '#ffffff', '#334155');
-    rightY += 25;
-  }
-  if (Number(payroll.tax_deduction) > 0) {
-    generateTableRow(doc, rightY, 'Professional Tax / TDS', `Rs ${Number(payroll.tax_deduction).toLocaleString('en-IN')}`, 310, 240, '#ffffff', '#334155');
-    rightY += 25;
-  }
-  if (Number(payroll.other_deductions) > 0 || customDeductions.length > 0) {
-    let otherDeductionsRemaining = Number(payroll.other_deductions);
-    customDeductions.forEach(adj => {
-      const label = adj.category + (adj.description ? ` (${adj.description})` : '');
-      generateTableRow(doc, rightY, label, `Rs ${Number(adj.amount).toLocaleString('en-IN')}`, 310, 240, '#ffffff', '#334155');
+
+  if (Array.isArray(payroll.deductions) && payroll.deductions.length > 0) {
+    payroll.deductions.forEach(d => {
+      generateTableRow(doc, rightY, d.component_name, `Rs ${Number(d.amount).toLocaleString('en-IN')}`, 310, 240, '#ffffff', '#334155');
       rightY += 25;
-      otherDeductionsRemaining -= Number(adj.amount);
     });
-    otherDeductionsRemaining = Math.round(otherDeductionsRemaining * 100) / 100;
-    if (otherDeductionsRemaining > 0) {
-      generateTableRow(doc, rightY, 'Other Deductions / Advances', `Rs ${otherDeductionsRemaining.toLocaleString('en-IN')}`, 310, 240, '#ffffff', '#334155');
+  } else {
+    if (Number(payroll.pf_deduction) > 0) {
+      generateTableRow(doc, rightY, 'Provident Fund (PF)', `Rs ${Number(payroll.pf_deduction).toLocaleString('en-IN')}`, 310, 240, '#ffffff', '#334155');
       rightY += 25;
+    }
+    if (Number(payroll.esi_deduction) > 0) {
+      generateTableRow(doc, rightY, 'ESI', `Rs ${Number(payroll.esi_deduction).toLocaleString('en-IN')}`, 310, 240, '#ffffff', '#334155');
+      rightY += 25;
+    }
+    if (Number(payroll.tax_deduction) > 0) {
+      generateTableRow(doc, rightY, 'Professional Tax / TDS', `Rs ${Number(payroll.tax_deduction).toLocaleString('en-IN')}`, 310, 240, '#ffffff', '#334155');
+      rightY += 25;
+    }
+    let parsedAdjustments = [];
+    try {
+      if (payroll.adjustments) parsedAdjustments = JSON.parse(payroll.adjustments);
+    } catch (e) {}
+    const customDeductions = parsedAdjustments.filter(a => a.type === 'deduction');
+    if (Number(payroll.other_deductions) > 0 || customDeductions.length > 0) {
+      let otherDeductionsRemaining = Number(payroll.other_deductions || 0);
+      customDeductions.forEach(adj => {
+        const label = adj.category + (adj.description ? ` (${adj.description})` : '');
+        generateTableRow(doc, rightY, label, `Rs ${Number(adj.amount).toLocaleString('en-IN')}`, 310, 240, '#ffffff', '#334155');
+        rightY += 25;
+        otherDeductionsRemaining -= Number(adj.amount);
+      });
+      otherDeductionsRemaining = Math.round(otherDeductionsRemaining * 100) / 100;
+      if (otherDeductionsRemaining > 0) {
+        generateTableRow(doc, rightY, 'Other Deductions / Advances', `Rs ${otherDeductionsRemaining.toLocaleString('en-IN')}`, 310, 240, '#ffffff', '#334155');
+        rightY += 25;
+      }
     }
   }
 
   const maxY = Math.max(leftY, rightY);
   const totalsTop = maxY + 10;
 
+  const grossAmt = payroll.gross_salary || payroll.total_earnings || 0;
+  const deductAmt = payroll.total_deductions || 0;
+
   // Gross Totals
   doc.font('Helvetica');
-  generateTableRow(doc, totalsTop, 'Gross Earnings', `Rs ${Number(payroll.gross_salary).toLocaleString('en-IN')}`, 50, 250, '#f8fafc', '#0f172a');
-  generateTableRow(doc, totalsTop, 'Total Deductions', `Rs ${Number(payroll.total_deductions).toLocaleString('en-IN')}`, 310, 240, '#f8fafc', '#0f172a');
+  generateTableRow(doc, totalsTop, 'Gross Earnings', `Rs ${Number(grossAmt).toLocaleString('en-IN')}`, 50, 250, '#f8fafc', '#0f172a');
+  generateTableRow(doc, totalsTop, 'Total Deductions', `Rs ${Number(deductAmt).toLocaleString('en-IN')}`, 310, 240, '#f8fafc', '#0f172a');
 
   // Net Pay
   const netPayTop = totalsTop + 50;

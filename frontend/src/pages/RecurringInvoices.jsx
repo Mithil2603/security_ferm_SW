@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { RefreshCw, Plus, Search, Pause, Play, Zap, Clock, X, Calendar, DollarSign, TrendingUp, History } from 'lucide-react';
 import api from '../services/api';
 import { format } from 'date-fns';
+import { toast, confirmDialog } from '../context/ToastContext';
 import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
 
@@ -124,25 +125,39 @@ export default function RecurringInvoices() {
   };
 
   const handleGenerateNow = async (id) => {
-    if (!window.confirm('Generate an invoice from this template now?')) return;
+    const confirmed = await confirmDialog({
+      title: 'Generate Invoice Now',
+      message: 'Generate an invoice from this template now?',
+      confirmText: 'Generate',
+      variant: 'teal'
+    });
+    if (!confirmed) return;
     try {
       const res = await api.post(`/recurring-invoices/${id}/generate`);
-      alert(`Invoice ${res.data.invoice_number} generated for ₹${res.data.amount}`);
+      const resData = res.data || res;
+      toast.success(`Invoice ${resData.invoice_number} generated for ₹${resData.amount}`);
       fetchRecurring();
       fetchStats();
     } catch (err) {
-      alert(err.message || 'Failed to generate');
+      toast.error(err.message || 'Failed to generate');
     }
   };
 
   const handleCancel = async (id) => {
-    if (!window.confirm('Cancel this recurring invoice? This cannot be undone.')) return;
+    const confirmed = await confirmDialog({
+      title: 'Cancel Recurring Invoice',
+      message: 'Cancel this recurring invoice? This cannot be undone.',
+      confirmText: 'Cancel Recurring',
+      variant: 'danger'
+    });
+    if (!confirmed) return;
     try {
       await api.delete(`/recurring-invoices/${id}`);
+      toast.success('Recurring invoice cancelled');
       fetchRecurring();
       fetchStats();
     } catch (err) {
-      alert(err.message || 'Failed to cancel');
+      toast.error(err.message || 'Failed to cancel');
     }
   };
 

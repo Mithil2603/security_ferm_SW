@@ -180,6 +180,18 @@ const ExcelJS = require('exceljs');
 function parseDateString(dateVal) {
   if (!dateVal) return null;
   if (dateVal instanceof Date) return dateVal.toISOString().split('T')[0];
+  
+  const num = Number(dateVal);
+  // Detect Excel date serial number (e.g. 46031 or 46031.00011574074)
+  if (!isNaN(num) && num > 25000 && num < 80000) {
+    try {
+      const date = new Date(Math.round((num - 25569) * 86400 * 1000));
+      if (!isNaN(date.getTime())) {
+        return date.toISOString().split('T')[0];
+      }
+    } catch (_) {}
+  }
+
   const str = String(dateVal).trim();
   // YYYY-MM-DD
   if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(str)) {
@@ -207,6 +219,15 @@ function parseTimeString(timeVal) {
     const hh = String(timeVal.getHours()).padStart(2, '0');
     const mm = String(timeVal.getMinutes()).padStart(2, '0');
     return `${hh}:${mm}:00`;
+  }
+  const num = Number(timeVal);
+  // Detect Excel fractional time of day (e.g. 0.375 for 09:00)
+  if (!isNaN(num) && num >= 0 && num < 1) {
+    const totalSeconds = Math.round(num * 86400);
+    const hh = String(Math.floor(totalSeconds / 3600)).padStart(2, '0');
+    const mm = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0');
+    const ss = String(totalSeconds % 60).padStart(2, '0');
+    return `${hh}:${mm}:${ss}`;
   }
   const str = String(timeVal).trim();
   const match = str.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/i);

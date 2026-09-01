@@ -235,4 +235,71 @@ router.post('/:id/cancel', async (req, res) => {
   }
 });
 
+// GET /api/salary-slips/:id/pdf - Download Salary Slip PDF
+router.get('/:id/pdf', async (req, res) => {
+  try {
+    const { query } = require('../database/connection');
+    const { generatePayslipPDF } = require('../utils/payslipGenerator');
+
+    const slip = await salarySlipService.findById(parseInt(req.params.id));
+    if (!slip) {
+      return res.status(404).json({ success: false, message: 'Salary slip not found' });
+    }
+
+    const employee = {
+      full_name: slip.employee_name,
+      employee_id: slip.emp_code || `EMP${slip.employee_id}`,
+      designation: slip.designation || 'Staff',
+      aadhar_number: slip.aadhar_number || '',
+      pan_number: slip.pan_number || '',
+      bank_account_number: slip.bank_account_number || '',
+      bank_ifsc_code: slip.bank_ifsc_code || '',
+      bank_name: slip.bank_name || ''
+    };
+
+    const client = slip.client_name ? { name: slip.client_name } : null;
+
+    const formattedPayroll = {
+      ...slip,
+      payroll_month: slip.payroll_month,
+      days_in_month: slip.days_in_month || 30,
+      days_worked: slip.days_worked || 0,
+      days_absent: Math.max(0, (slip.days_in_month || 30) - (slip.days_worked || 0)),
+      days_leave: 0,
+      gross_salary: slip.total_earnings,
+      total_earnings: slip.total_earnings,
+      total_deductions: slip.total_deductions,
+      net_salary: slip.net_salary,
+      earnings: slip.earnings || [],
+      deductions: slip.deductions || []
+    };
+
+    const agencySetting = await query("SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'");
+    const agencySettings = agencySetting.rows.length > 0 ? JSON.parse(agencySetting.rows[0].setting_value) : null;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    const safeEmpName = (slip.employee_name || 'Employee').replace(/\s+/g, '_');
+    res.setHeader('Content-Disposition', `attachment; filename="Payslip-${safeEmpName}-${slip.payroll_month}.pdf"`);
+
+    generatePayslipPDF(
+      formattedPayroll,
+      employee,
+      client,
+      agencySettings,
+      (chunk) => res.write(chunk),
+      () => res.end()
+    );
+  } catch (err) {
+    logError({
+      error: err,
+      req,
+      severity: ERROR_SEVERITY.HIGH,
+      category: ERROR_CATEGORY.PAYROLL,
+      feature: 'salary-slips',
+      extra: { message: 'Failed to generate payslip PDF:' }
+    });
+    res.status(500).json({ success: false, message: 'Failed to generate payslip PDF' });
+  }
+});
+
 module.exports = router;

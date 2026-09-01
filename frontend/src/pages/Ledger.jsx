@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import api from '../services/api';
 import { Plus, Trash2, IndianRupee, ArrowDownRight, ArrowUpRight, Search, X } from 'lucide-react';
 import { format } from 'date-fns';
+import { toast, confirmDialog } from '../context/ToastContext';
 
 export default function Ledger() {
   const [employees, setEmployees] = useState([]);
@@ -79,13 +80,20 @@ export default function Ledger() {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Delete this unsettled transaction?')) return;
+    const confirmed = await confirmDialog({
+      title: 'Delete Transaction',
+      message: 'Delete this unsettled transaction?',
+      confirmText: 'Delete',
+      variant: 'danger'
+    });
+    if (!confirmed) return;
     try {
       await api.delete(`/ledger/${id}`);
       setLedgerEntries(ledgerEntries.filter(e => e.id !== id));
+      toast.success('Transaction deleted');
       fetchData(); // refresh balances
     } catch (err) {
-      alert(err.response?.data?.message || 'Failed to delete');
+      toast.error(err.response?.data?.message || 'Failed to delete');
     }
   };
 
@@ -104,10 +112,11 @@ export default function Ledger() {
       });
       setIsAddModalOpen(false);
       setForm({ ...form, category: '', amount: '', description: '' });
+      toast.success('Transaction recorded successfully!');
       openLedger(selectedEmp);
       fetchData();
     } catch (err) {
-      alert(err.response?.data?.message || 'Failed to add transaction');
+      toast.error(err.response?.data?.message || 'Failed to add transaction');
     } finally {
       setSubmitting(false);
     }

@@ -72,6 +72,24 @@ export default function AttendanceImportModal({ isOpen, onClose, onImportSuccess
     document.body.removeChild(link);
   };
 
+  const formatPreviewCell = (val) => {
+    if (val === null || val === undefined || val === '') return '';
+    if (val instanceof Date) {
+      return val.toISOString().split('T')[0];
+    }
+    const num = Number(val);
+    // Detect Excel date serial number (e.g. 46031.00011574074 or 46031)
+    if (!isNaN(num) && num > 25000 && num < 80000) {
+      try {
+        const date = new Date(Math.round((num - 25569) * 86400 * 1000));
+        if (!isNaN(date.getTime())) {
+          return date.toISOString().split('T')[0];
+        }
+      } catch (_) {}
+    }
+    return String(val);
+  };
+
   const handleFileChange = (e) => {
     const selected = e.target.files[0];
     if (selected && selected.name.match(/\.(xlsx|xls|csv)$/i)) {
@@ -84,9 +102,9 @@ export default function AttendanceImportModal({ isOpen, onClose, onImportSuccess
       reader.onload = (evt) => {
         try {
           const data = evt.target.result;
-          const workbook = XLSX.read(data, { type: 'binary' });
+          const workbook = XLSX.read(data, { type: 'binary', cellDates: true });
           const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-          const rows = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+          const rows = XLSX.utils.sheet_to_json(firstSheet, { header: 1, raw: false });
           if (rows && rows.length > 1) {
             setPreviewRows(rows.slice(0, 5)); // first 5 rows
           } else {
@@ -121,11 +139,12 @@ export default function AttendanceImportModal({ isOpen, onClose, onImportSuccess
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       
-      if (res.data.success) {
-        setResult(res.data);
+      const resData = res?.data || res;
+      if (resData && (resData.success || resData.successCount !== undefined)) {
+        setResult(resData);
         if (onImportSuccess) onImportSuccess();
       } else {
-        setError(res.data.message || 'Upload failed');
+        setError(resData?.message || 'Upload failed');
       }
     } catch (err) {
       setError(err.response?.data?.message || err.message || 'Failed to upload file');
@@ -288,7 +307,7 @@ export default function AttendanceImportModal({ isOpen, onClose, onImportSuccess
                     {previewRows.slice(1).map((r, ri) => (
                       <tr key={ri} className="hover:bg-slate-50">
                         {r.map((c, ci) => (
-                          <td key={ci} className="px-3 py-1.5 text-slate-700 truncate max-w-[120px]">{String(c || '')}</td>
+                          <td key={ci} className="px-3 py-1.5 text-slate-700 truncate max-w-[120px]">{formatPreviewCell(c)}</td>
                         ))}
                       </tr>
                     ))}

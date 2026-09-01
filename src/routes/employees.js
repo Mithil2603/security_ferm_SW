@@ -386,4 +386,39 @@ router.get('/:id/docs', async (req, res) => {
   }
 });
 
+// DELETE /api/employees/:id/docs/:docId
+router.delete('/:id/docs/:docId', async (req, res) => {
+  try {
+    const { id, docId } = req.params;
+    const docRes = await query(
+      'SELECT file_path FROM employee_documents WHERE id = $1 AND employee_id = $2',
+      [docId, id]
+    );
+
+    if (docRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    const filePath = docRes.rows[0].file_path;
+    await query(
+      'DELETE FROM employee_documents WHERE id = $1 AND employee_id = $2',
+      [docId, id]
+    );
+
+    // Delete file from disk if exists
+    if (filePath) {
+      const fullPath = path.join(baseUploadPath, 'docs', filePath);
+      if (fs.existsSync(fullPath)) {
+        try { fs.unlinkSync(fullPath); } catch (_) {}
+      }
+    }
+
+    res.json({ success: true, message: 'Document deleted successfully' });
+  } catch (error) {
+    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
+    logger.error('Delete document error:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to delete document' });
+  }
+});
+
 module.exports = router;

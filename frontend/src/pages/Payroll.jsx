@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { FileText, CheckCircle, XCircle, Zap, Clock, Banknote, Plus, CheckSquare, X, Eye, Calendar, User } from 'lucide-react';
+import { FileText, CheckCircle, XCircle, Zap, Clock, Banknote, Plus, CheckSquare, X, Eye, Calendar, User, Download } from 'lucide-react';
 import api from '../services/api';
+import { toast, confirmDialog } from '../context/ToastContext';
 import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
 import { format } from 'date-fns';
@@ -77,14 +78,22 @@ export default function Payroll() {
   // ─── Actions ─────────────────────────────────────────────────────────────────
 
   const handleBatchGenerate = async () => {
-    if (!window.confirm(`Generate all missing salary slips for ${filterMonth}?`)) return;
+    const confirmed = await confirmDialog({
+      title: 'Batch Generate Salary Slips',
+      message: `Generate all missing salary slips for ${filterMonth}?`,
+      confirmText: 'Generate All',
+      variant: 'teal'
+    });
+    if (!confirmed) return;
+
     setGenerating(true);
     try {
       const res = await api.post('/salary-slips/batch-generate', { payroll_month: filterMonth });
-      alert(`Generated: ${res.data.generated}\nSkipped (exists): ${res.data.skipped}\nErrors: ${res.data.errors}`);
+      const resData = res.data || res;
+      toast.success(`Generated: ${resData.generated || 0} | Skipped: ${resData.skipped || 0} | Errors: ${resData.errors || 0}`);
       fetchSlips();
     } catch (err) {
-      alert(err.response?.data?.message || err.message || 'Failed to generate');
+      toast.error(err.response?.data?.message || err.message || 'Failed to generate');
     } finally {
       setGenerating(false);
     }
@@ -93,7 +102,7 @@ export default function Payroll() {
   const handleSingleGenerate = async (e) => {
     e.preventDefault();
     if (!singleGenForm.employee_id) {
-      alert('Please select an employee');
+      toast.warning('Please select an employee');
       return;
     }
     setGenerating(true);
@@ -105,22 +114,30 @@ export default function Payroll() {
       });
       setIsGenerateOpen(false);
       fetchSlips();
-      alert('Salary slip generated successfully!');
+      toast.success('Salary slip generated successfully!');
     } catch (err) {
-      alert(err.response?.data?.message || err.message || 'Failed to generate salary slip');
+      toast.error(err.response?.data?.message || err.message || 'Failed to generate salary slip');
     } finally {
       setGenerating(false);
     }
   };
 
   const handleBulkApprove = async () => {
-    if (!window.confirm(`Approve ALL pending salary slips for ${filterMonth}?`)) return;
+    const confirmed = await confirmDialog({
+      title: 'Bulk Approve Slips',
+      message: `Approve ALL pending salary slips for ${filterMonth}?`,
+      confirmText: 'Approve All',
+      variant: 'teal'
+    });
+    if (!confirmed) return;
+
     try {
       const res = await api.post('/salary-slips/bulk-approve', { payroll_month: filterMonth });
-      alert(`Approved ${res.data.approved} slips.`);
+      const resData = res.data || res;
+      toast.success(`Approved ${resData.approved || 0} slips.`);
       fetchSlips();
     } catch (err) {
-      alert(err.response?.data?.message || err.message || 'Failed to approve');
+      toast.error(err.response?.data?.message || err.message || 'Failed to approve');
     }
   };
 
@@ -130,10 +147,11 @@ export default function Payroll() {
       fetchSlips();
       if (isViewOpen && selectedSlip?.id === id) {
         const res = await api.get(`/salary-slips/${id}`);
-        setSelectedSlip(res.data);
+        setSelectedSlip(res.data || res);
       }
+      toast.success(`Salary slip ${action}d successfully`);
     } catch (err) {
-      alert(err.response?.data?.message || err.message || `Failed to ${action}`);
+      toast.error(err.response?.data?.message || err.message || `Failed to ${action}`);
     }
   };
 
@@ -145,21 +163,21 @@ export default function Payroll() {
       fetchSlips();
       if (isViewOpen) {
         const res = await api.get(`/salary-slips/${selectedSlip.id}`);
-        setSelectedSlip(res.data);
+        setSelectedSlip(res.data || res);
       }
-      alert('Salary slip marked as paid successfully!');
+      toast.success('Salary slip marked as paid successfully!');
     } catch (err) {
-      alert(err.response?.data?.message || err.message || 'Failed to mark as paid');
+      toast.error(err.response?.data?.message || err.message || 'Failed to mark as paid');
     }
   };
 
   const openView = async (id) => {
     try {
       const res = await api.get(`/salary-slips/${id}`);
-      setSelectedSlip(res.data);
+      setSelectedSlip(res.data || res);
       setIsViewOpen(true);
     } catch (err) {
-      alert('Failed to load slip details');
+      toast.error('Failed to load slip details');
     }
   };
 
@@ -171,6 +189,32 @@ export default function Payroll() {
       payment_date: format(new Date(), 'yyyy-MM-dd')
     });
     setIsPayOpen(true);
+  };
+
+  const [downloadingId, setDownloadingId] = useState(null);
+
+  const handleDownloadPdf = async (id, empName, month) => {
+    try {
+      setDownloadingId(id);
+      toast.info('Generating Payslip PDF...');
+      const response = await api.get(`/salary-slips/${id}/pdf`, { responseType: 'blob' });
+      const blob = new Blob([response], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const safeEmpName = (empName || 'Employee').replace(/\s+/g, '_');
+      link.download = `Payslip-${safeEmpName}-${month || 'month'}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      toast.success('Payslip PDF downloaded successfully!');
+    } catch (err) {
+      console.error('Failed to download payslip PDF', err);
+      toast.error('Failed to download payslip PDF');
+    } finally {
+      setDownloadingId(null);
+    }
   };
 
   const inputCls = "w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-800 text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all";
@@ -333,6 +377,7 @@ export default function Payroll() {
                     <td className="p-4">
                       <div className="flex items-center justify-end gap-1.5">
                         <button onClick={() => openView(s.id)} title="View Slip" className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors"><Eye className="w-4 h-4" /></button>
+                        <button onClick={() => handleDownloadPdf(s.id, s.employee_name, s.payroll_month)} title="Download Payslip PDF" disabled={downloadingId === s.id} className="p-1.5 rounded-lg hover:bg-teal-50 text-teal-600 hover:text-teal-700 transition-colors"><Download className="w-4 h-4" /></button>
                         
                         {s.status === 'draft' && (
                           <button onClick={() => handleAction(s.id, 'submit')} title="Submit for Approval" className="p-1.5 rounded-lg hover:bg-amber-100 text-amber-700 transition-colors"><Clock className="w-4 h-4" /></button>
@@ -519,12 +564,21 @@ export default function Payroll() {
             </div>
 
             {/* Modal Actions Footer */}
-            <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2.5">
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => handleDownloadPdf(selectedSlip.id, selectedSlip.employee_name, selectedSlip.payroll_month)}
+                disabled={downloadingId === selectedSlip.id}
+                className="bg-teal-600 hover:bg-teal-700 text-white font-bold px-4 py-2 rounded-lg text-sm transition-colors flex items-center gap-1.5 shadow-sm"
+              >
+                <Download className="w-4 h-4" />
+                <span>{downloadingId === selectedSlip.id ? 'Generating...' : 'Download Payslip PDF'}</span>
+              </button>
               {selectedSlip.status === 'draft' && (
                 <button onClick={() => handleAction(selectedSlip.id, 'submit')} className="bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 py-2 rounded-lg text-sm transition-colors">Submit for Approval</button>
               )}
               {selectedSlip.status === 'pending' && (
-                <button onClick={() => handleAction(selectedSlip.id, 'approve')} className="bg-teal-600 hover:bg-teal-700 text-white font-bold px-4 py-2 rounded-lg text-sm transition-colors">Approve</button>
+                <button onClick={() => handleAction(selectedSlip.id, 'approve')} className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2 rounded-lg text-sm transition-colors">Approve</button>
               )}
               {selectedSlip.status !== 'paid' && selectedSlip.status !== 'cancelled' && (
                 <button onClick={() => openPay(selectedSlip)} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-lg text-sm transition-colors">Mark as Paid</button>

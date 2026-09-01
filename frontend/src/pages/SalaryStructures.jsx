@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Layers, Plus, Users, Zap, X, Edit, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 import api from '../services/api';
 import TableSkeleton from '../components/TableSkeleton';
+import { toast, confirmDialog } from '../context/ToastContext';
 
 const TEMPLATE_TYPES = {
   custom: { label: 'Custom', color: 'bg-gray-500/20 text-gray-400' },
@@ -89,22 +90,29 @@ export default function SalaryStructures() {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Deactivate this salary structure?')) return;
+    const confirmed = await confirmDialog({
+      title: 'Deactivate Structure',
+      message: 'Deactivate this salary structure?',
+      confirmText: 'Deactivate',
+      variant: 'danger'
+    });
+    if (!confirmed) return;
     try {
       await api.delete(`/salary-structures/${id}`);
+      toast.success('Salary structure deactivated');
       fetchStructures();
     } catch (err) {
-      alert(err.message || 'Failed to delete');
+      toast.error(err.message || 'Failed to delete');
     }
   };
 
   const handleSeedTemplates = async () => {
     try {
       const res = await api.get('/salary-structures/templates/seed');
-      alert(res.message || 'Templates seeded');
+      toast.success(res.message || 'Templates seeded successfully');
       fetchStructures();
     } catch (err) {
-      alert(err.message || 'Failed to seed');
+      toast.error(err.message || 'Failed to seed');
     }
   };
 

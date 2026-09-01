@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import api from '../services/api';
 import { getServerBaseUrl } from '../utils/apiUrl';
 import { format } from 'date-fns';
+import { toast, confirmDialog } from '../context/ToastContext';
 import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
 
@@ -186,12 +187,20 @@ export default function Expenses() {
   };
 
   const handleApprove = async (id) => {
-    if (!window.confirm("Are you sure you want to approve this expense?")) return;
+    const confirmed = await confirmDialog({
+      title: 'Approve Expense',
+      message: 'Are you sure you want to approve this expense?',
+      confirmText: 'Approve',
+      variant: 'teal'
+    });
+    if (!confirmed) return;
     try {
       await api.put(`/expenses/${id}/approve`, { approval_notes: '' });
+      toast.success('Expense approved successfully!');
       fetchExpenses();
     } catch (err) {
       console.error('Failed to approve expense', err);
+      toast.error(err.response?.data?.message || err.message || 'Failed to approve expense');
     }
   };
 
@@ -206,10 +215,11 @@ export default function Expenses() {
     try {
       await api.put(`/expenses/${rejectModal.id}/reject`, { approval_notes: rejectModal.reason || '' });
       setRejectModal({ open: false, id: null, reason: '' });
+      toast.success('Expense rejected');
       fetchExpenses();
     } catch (err) {
       console.error('Failed to reject expense', err);
-      alert(err.response?.data?.message || err.message || 'Failed to reject expense');
+      toast.error(err.response?.data?.message || err.message || 'Failed to reject expense');
     } finally {
       setRejecting(false);
     }
@@ -221,22 +231,30 @@ export default function Expenses() {
     try {
       await api.post(`/expenses/${payModalExpense.id}/pay`, payFormData);
       setPayModalExpense(null);
+      toast.success('Payment recorded successfully!');
       fetchExpenses();
     } catch (err) {
-      alert(err.response?.data?.message || err.message || 'Failed to record payment');
+      toast.error(err.response?.data?.message || err.message || 'Failed to record payment');
     } finally {
       setPaying(false);
     }
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this expense permanently?")) return;
+    const confirmed = await confirmDialog({
+      title: 'Delete Expense',
+      message: 'Are you sure you want to delete this expense permanently?',
+      confirmText: 'Delete',
+      variant: 'danger'
+    });
+    if (!confirmed) return;
     try {
       await api.delete(`/expenses/${id}`);
+      toast.success('Expense deleted permanently');
       fetchExpenses();
     } catch (err) {
       console.error('Failed to delete expense', err);
-      alert('Failed to delete expense');
+      toast.error(err.response?.data?.message || err.message || 'Failed to delete expense');
     }
   };
 

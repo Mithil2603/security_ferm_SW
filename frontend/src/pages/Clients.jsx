@@ -7,6 +7,7 @@ import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
 import ImportModal from '../components/shared/ImportModal';
 import Toast from '../components/Toast';
+import { toast, confirmDialog } from '../context/ToastContext';
 import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
 
 const emptyForm = {
@@ -218,10 +219,11 @@ export default function Clients() {
     try {
       await api.delete(`/clients/${id}`);
       setConfirmDelete(null);
+      toast.success('Client status updated');
       fetchClients();
     } catch (err) {
       console.error('Failed to deactivate client', err);
-      alert(err.response?.data?.message || 'Failed to deactivate client');
+      toast.error(err.response?.data?.message || 'Failed to deactivate client');
     }
   };
 
@@ -229,9 +231,10 @@ export default function Clients() {
     try {
       await api.delete(`/clients/${id}/hard`);
       setConfirmDelete(null);
+      toast.success('Client permanently deleted');
       fetchClients();
     } catch (err) {
-      alert(err.response?.data?.message || 'Failed to permanently delete client');
+      toast.error(err.response?.data?.message || 'Failed to permanently delete client');
       console.error('Failed to permanently delete client', err);
     }
   };
@@ -256,9 +259,10 @@ export default function Clients() {
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Clients");
       XLSX.writeFile(wb, `Clients_Export_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
+      toast.success('Client list exported successfully');
     } catch (err) {
       console.error('Failed to export clients', err);
-      alert('Export failed. Please try again.');
+      toast.error('Export failed. Please try again.');
     }
   };
 

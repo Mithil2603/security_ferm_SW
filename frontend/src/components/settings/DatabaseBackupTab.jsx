@@ -10,6 +10,7 @@ import { useAuth } from '../../context/AuthContext';
 
 import { getApiBaseUrl } from '../../utils/apiUrl';
 import Toast from '../Toast';
+import { toast, confirmDialog } from '../../context/ToastContext';
 
 export default function DatabaseBackupTab() {
   const { user } = useAuth();
@@ -171,16 +172,19 @@ export default function DatabaseBackupTab() {
   };
 
   const handleDeleteBackup = async (filename) => {
-    if (!window.confirm(`Are you sure you want to delete backup "${filename}"?`)) return;
+    const confirmed = await confirmDialog({
+      title: 'Delete Backup',
+      message: `Are you sure you want to delete backup "${filename}"?`,
+      confirmText: 'Delete',
+      variant: 'danger'
+    });
+    if (!confirmed) return;
     try {
       await api.delete(`/backups/${filename}`);
-      setMessage({ type: 'success', text: `Backup ${filename} deleted.` });
+      toast.success(`Backup ${filename} deleted.`);
       setBackups(prev => prev.filter(b => b.filename !== filename));
     } catch (err) {
-      setMessage({
-        type: 'error',
-        text: err.response?.data?.message || err.message || 'Failed to delete backup'
-      });
+      toast.error(err.response?.data?.message || err.message || 'Failed to delete backup');
     }
   };
 

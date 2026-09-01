@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Download, RefreshCw, X, CheckCircle, Loader2 } from 'lucide-react';
+import { confirmDialog } from '../context/ToastContext';
 
 export default function UpdateNotification() {
   const [updateInfo, setUpdateInfo] = useState(null);
@@ -23,9 +24,12 @@ export default function UpdateNotification() {
   }, []);
 
   const handleInstall = async () => {
-    const confirmed = window.confirm(
-      'The app will restart to install the update.\n\nAny unsaved work (forms, uploads) will be lost.\n\nContinue?'
-    );
+    const confirmed = await confirmDialog({
+      title: 'Install Update & Restart',
+      message: 'The app will restart to install the update.\n\nAny unsaved work will be lost. Continue?',
+      confirmText: 'Restart & Install',
+      variant: 'teal'
+    });
     if (!confirmed) return;
 
     setInstalling(true);

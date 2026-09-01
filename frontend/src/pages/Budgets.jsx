@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Target, TrendingUp, AlertTriangle, Plus, Trash2, X } from 'lucide-react';
 import api from '../services/api';
-import { toast } from '../context/ToastContext';
+import { toast, confirmDialog } from '../context/ToastContext';
 
 export default function Budgets() {
   const [budgets, setBudgets] = useState([]);
@@ -21,6 +21,7 @@ export default function Budgets() {
 
   const [clients, setClients] = useState([]);
   const [vendors, setVendors] = useState([]);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     fetchData();
@@ -29,16 +30,19 @@ export default function Budgets() {
   const fetchData = async () => {
     try {
       setLoading(true);
+      setError(null);
       const [budRes, cliRes, venRes] = await Promise.allSettled([
         api.get('/budgets/vs-actual'),
-        api.get('/clients'),
-        api.get('/vendors')
+        api.get('/clients?limit=200'),
+        api.get('/vendors?limit=200')
       ]);
       if (budRes.status === 'fulfilled') setBudgets(budRes.value.data || []);
       if (cliRes.status === 'fulfilled') setClients(cliRes.value.data || []);
       if (venRes.status === 'fulfilled') setVendors(venRes.value.data || []);
     } catch (err) {
       console.error('Failed to fetch budget data:', err);
+      setError('Failed to load budget data');
+      toast.error('Failed to load budget data');
     } finally {
       setLoading(false);
     }
@@ -69,7 +73,13 @@ export default function Budgets() {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this budget?')) return;
+    const confirmed = await confirmDialog({
+      title: 'Delete Budget',
+      message: 'Are you sure you want to delete this budget?',
+      confirmText: 'Delete',
+      variant: 'danger'
+    });
+    if (!confirmed) return;
     try {
       await api.delete(`/budgets/${id}`);
       toast.success('Budget deleted successfully!');

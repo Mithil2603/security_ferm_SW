@@ -7,6 +7,7 @@ import TableSkeleton from '../components/TableSkeleton';
 import EventInvoiceModal from '../components/EventInvoiceModal';
 import EditInvoiceModal from '../components/EditInvoiceModal';
 import { getApiBaseUrl } from '../utils/apiUrl';
+import { toast, confirmDialog } from '../context/ToastContext';
 
 export default function Invoices() {
   const [invoices, setInvoices] = useState([]);
@@ -140,10 +141,10 @@ export default function Invoices() {
           // Skip other clients that fail
         }
       }
-      alert(`Successfully generated ${created} new invoices. Skipped ${skipped} clients that were already billed for this month.`);
+      toast.success(`Generated ${created} new invoices.${skipped > 0 ? ` Skipped ${skipped} already billed.` : ''}`);
       fetchInvoices();
     } catch (err) {
-      alert('Failed to auto-generate invoices');
+      toast.error('Failed to auto-generate invoices');
     } finally {
       setSubmitting(false);
     }
@@ -153,13 +154,13 @@ export default function Invoices() {
     setSelectedInvoice(inv);
     const remaining = parseFloat(inv.final_amount) - parseFloat(inv.payment_received || 0) - parseFloat(inv.tds_deducted || 0);
     setPaymentForm({
-      amount_paid: remaining > 0 ? remaining.toFixed(2) : '',
-      tds_deducted: '0',
-      payment_method: 'bank_transfer',
+      amount: remaining > 0 ? remaining : '',
       payment_date: format(new Date(), 'yyyy-MM-dd'),
-      transaction_reference: '', notes: ''
+      payment_method: 'bank_transfer',
+      reference_number: '',
+      tds_deducted: 0,
+      notes: ''
     });
-    setError('');
     setIsPaymentOpen(true);
   };
 
@@ -183,27 +184,41 @@ export default function Invoices() {
   };
 
   const handleDeleteInvoice = async (inv) => {
-    if (!window.confirm(`Are you sure you want to completely delete invoice ${inv.invoice_number}? This action cannot be undone.`)) return;
+    const confirmed = await confirmDialog({
+      title: 'Delete Invoice',
+      message: `Are you sure you want to completely delete invoice ${inv.invoice_number}? This action cannot be undone.`,
+      confirmText: 'Delete',
+      variant: 'danger'
+    });
+    if (!confirmed) return;
+
     try {
       setLoading(true);
       await api.delete(`/invoices/${inv.id}`);
+      toast.success(`Invoice ${inv.invoice_number} deleted successfully`);
       fetchInvoices();
     } catch (err) {
-      alert(err.message || 'Failed to delete invoice');
+      toast.error(err.message || 'Failed to delete invoice');
       setLoading(false);
     }
   };
 
   const handleEmailInvoice = async (inv) => {
-    if (!window.confirm(`Are you sure you want to email invoice ${inv.invoice_number} to ${inv.client_name}?`)) return;
+    const confirmed = await confirmDialog({
+      title: 'Email Invoice',
+      message: `Are you sure you want to email invoice ${inv.invoice_number} to ${inv.client_name}?`,
+      confirmText: 'Send Email',
+      variant: 'teal'
+    });
+    if (!confirmed) return;
     
     try {
       setLoading(true);
       const res = await api.post(`/invoices/${inv.id}/email`);
-      alert(res.message || 'Invoice emailed successfully!');
+      toast.success(res.message || 'Invoice emailed successfully!');
       fetchInvoices();
     } catch (err) {
-      alert(err.message || 'Failed to email invoice. Please ensure the client has an email address and SMTP is configured.');
+      toast.error(err.message || 'Failed to email invoice. Please ensure the client has an email address and SMTP is configured.');
     } finally {
       setLoading(false);
     }
@@ -211,32 +226,28 @@ export default function Invoices() {
 
   const handleDownloadPDF = async (inv) => {
     try {
+      toast.info('Preparing invoice PDF...');
       const res = await api.get(`/invoices/${inv.id}/pdf`, {
         responseType: 'blob'
       });
-      // Handle response.data vs res from Axios interceptor
-      const rawData = (res && res.data !== undefined) ? res.data : res;
-      const blob = rawData instanceof Blob 
-        ? rawData 
-        : new Blob([rawData], { type: 'application/pdf' });
-
+      const blob = new Blob([res], { type: 'application/pdf' });
       const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `Invoice-${inv.invoice_number || inv.id}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Invoice-${inv.invoice_number}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
+      toast.success(`Invoice ${inv.invoice_number} downloaded`);
     } catch (err) {
-      console.error('Blob PDF download failed, trying direct fallback:', err);
-      try {
-        const token = localStorage.getItem('token');
-        const baseUrl = getApiBaseUrl();
-        const url = `${baseUrl}/invoices/${inv.id}/pdf?token=${token}`;
-        window.open(url, '_blank');
-      } catch (fallbackErr) {
-        alert('Failed to download invoice PDF');
+      console.error('Download error:', err);
+      // Fallback: window.open
+      const token = localStorage.getItem('token') || sessionStorage.getItem('token');
+      if (token) {
+        window.open(`${getApiBaseUrl()}/invoices/${inv.id}/pdf?token=${token}`, '_blank');
+      } else {
+        toast.error('Failed to download invoice PDF');
       }
     }
   };

@@ -4,6 +4,7 @@ import api from '../services/api';
 import { getApiBaseUrl } from '../utils/apiUrl';
 import * as XLSX from 'xlsx';
 import StatementViewerModal from '../components/StatementViewerModal';
+import { toast, confirmDialog } from '../context/ToastContext';
 
 const DOMAINS = [
   { key: 'all', label: 'All', icon: <Archive className="w-4 h-4" />, color: 'text-slate-600 bg-slate-100 border-slate-200' },
@@ -98,13 +99,20 @@ export default function StatementArchive() {
   };
 
   const handleDelete = async (stmt) => {
-    if (!window.confirm(`Archive this statement "${stmt.statement_number}"? It will be hidden from the list.`)) return;
+    const confirmed = await confirmDialog({
+      title: 'Archive Statement',
+      message: `Archive this statement "${stmt.statement_number}"? It will be hidden from the list.`,
+      confirmText: 'Archive',
+      variant: 'danger'
+    });
+    if (!confirmed) return;
     try {
       await api.delete(`/statements/${stmt.id}`);
+      toast.success('Statement archived');
       fetchStatements(pagination.page);
       fetchDomainCounts();
     } catch (err) {
-      alert('Failed to archive statement');
+      toast.error('Failed to archive statement');
     }
   };
 

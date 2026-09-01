@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { getServerBaseUrl, getApiBaseUrl } from '../utils/apiUrl';
 import Toast from '../components/Toast';
+import { toast, confirmDialog } from '../context/ToastContext';
 import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
 
 import DatabaseBackupTab from '../components/settings/DatabaseBackupTab';
@@ -1433,9 +1434,16 @@ function PayrollAdjustmentsTab() {
     setNewCat({ name: '', type: 'deduction' });
   };
 
-  const handleDelete = (name) => {
-    if (!window.confirm(`Delete ${name}?`)) return;
+  const handleDelete = async (name) => {
+    const confirmed = await confirmDialog({
+      title: 'Delete Category',
+      message: `Delete category "${name}"?`,
+      confirmText: 'Delete',
+      variant: 'danger'
+    });
+    if (!confirmed) return;
     saveCategories(categories.filter(c => c.name !== name));
+    toast.success(`Category "${name}" deleted`);
   };
 
   if (loading) return <div className="p-8 text-center text-slate-500">Loading...</div>;
@@ -1666,12 +1674,20 @@ function RecurringExpensesTab() {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm("Delete this recurring expense?")) return;
+    const confirmed = await confirmDialog({
+      title: 'Delete Recurring Expense',
+      message: 'Delete this recurring expense?',
+      confirmText: 'Delete',
+      variant: 'danger'
+    });
+    if (!confirmed) return;
     try {
       await api.delete(`/recurring-expenses/${id}`);
+      toast.success('Recurring expense deleted');
       fetchData();
     } catch (err) {
       console.error(err);
+      toast.error('Failed to delete recurring expense');
     }
   };
 
