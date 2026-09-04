@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Building2, Plus, Search, MapPin, Mail, Phone, Edit2, Trash2, CheckCircle2, XCircle, X, CalendarDays, AlertCircle, FileEdit, FileText, Download, Upload, FileSpreadsheet } from 'lucide-react';
+import { Building2, Plus, Search, MapPin, Mail, Phone, Edit2, Trash2, CheckCircle2, XCircle, X, CalendarDays, AlertCircle, FileEdit, FileText, Download, Upload, FileSpreadsheet, Printer, ExternalLink, BookOpen } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { format } from 'date-fns';
 import * as XLSX from 'xlsx';
@@ -17,6 +18,7 @@ const emptyForm = {
 };
 
 export default function Clients() {
+  const navigate = useNavigate();
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -169,15 +171,19 @@ export default function Clients() {
   const fetchStatement = async (clientId, from = '', to = '') => {
     try {
       setStatementLoading(true);
-      const params = new URLSearchParams();
-      if (from) params.append('from_date', from);
-      if (to) params.append('to_date', to);
-      const res = await api.get(`/clients/${clientId}/statement?${params.toString()}`);
-      if (res.data) {
-        setStatementData(res.data);
+      const params = new URLSearchParams({
+        party_type: 'client',
+        party_id: clientId,
+        from_date: from || '',
+        to_date: to || ''
+      });
+      const res = await api.get(`/account-ledger?${params.toString()}`);
+      const payload = res?.data?.segments ? res.data : (res?.segments ? res : res?.data);
+      if (payload) {
+        setStatementData(payload);
       }
     } catch (err) {
-      alert('Failed to load statement');
+      toast.error('Failed to load ledger statement');
     } finally {
       setStatementLoading(false);
     }
@@ -190,29 +196,60 @@ export default function Clients() {
   };
 
   const downloadStatementExcel = () => {
-    if (!statementData) return;
-    const wb = XLSX.utils.book_new();
+    if (!statementData || !statementData.segments) return;
     const rows = [
-      ['STATEMENT OF ACCOUNT', '', '', '', '', ''],
-      [`Client: ${statementData.client.name}`, '', '', '', '', ''],
-      [`Address: ${statementData.client.address}, ${statementData.client.city}`, '', '', '', '', ''],
-      [`Period: ${statementData.period.from || 'All time'} to ${statementData.period.to || 'Present'}`, '', '', '', '', ''],
-      ['', '', '', '', '', ''],
-      ['DATE', 'REFERENCE', 'TYPE', 'DEBIT (₹)', 'CREDIT (₹)', 'BALANCE (₹)'],
-      ...statementData.transactions.map(t => [
-        format(new Date(t.date + 'T00:00:00'), 'dd MMM yyyy'),
-        t.reference,
-        t.type,
-        t.debit ? parseFloat(t.debit) : '',
-        t.credit ? parseFloat(t.credit) : '',
-        parseFloat(t.balance || 0)
-      ]),
-      ['', '', '', '', 'FINAL BALANCE', parseFloat(statementData.final_balance || 0)]
+      [statementData.agency?.name || 'KHETLAJI INDUSTRIES'],
+      [statementData.agency?.address || ''],
+      [],
+      [statementData.party?.name || statementClient?.name || 'Client Ledger'],
+      ['Ledger Account'],
+      [`Period: ${statementData.period?.display || ''}`],
+      [],
+      ['Date', 'Particulars', 'Vch Type', 'Vch No.', 'Debit', 'Credit']
     ];
+
+    statementData.segments.forEach(seg => {
+      if (seg.opening_balance) {
+        rows.push([
+          seg.opening_balance.date_formatted,
+          seg.opening_balance.particulars,
+          '',
+          '',
+          seg.opening_balance.side === 'debit' ? seg.opening_balance.amount : '',
+          seg.opening_balance.side === 'credit' ? seg.opening_balance.amount : ''
+        ]);
+      }
+      seg.rows.forEach(r => {
+        rows.push([
+          r.date_formatted,
+          r.particulars,
+          r.vch_type,
+          r.vch_no,
+          r.debit > 0 ? r.debit : '',
+          r.credit > 0 ? r.credit : ''
+        ]);
+      });
+      rows.push(['', '', '', 'Subtotal', seg.subtotal_debit, seg.subtotal_credit]);
+      if (seg.closing_balance) {
+        rows.push([
+          '',
+          seg.closing_balance.particulars,
+          '',
+          '',
+          seg.closing_balance.side === 'debit' ? seg.closing_balance.amount : '',
+          seg.closing_balance.side === 'credit' ? seg.closing_balance.amount : ''
+        ]);
+      }
+      rows.push(['', '', '', 'Total', seg.equalized_total, seg.equalized_total]);
+      rows.push([]);
+    });
+
     const ws = XLSX.utils.aoa_to_sheet(rows);
-    ws['!cols'] = [{wch: 15}, {wch: 20}, {wch: 15}, {wch: 15}, {wch: 15}, {wch: 15}];
-    XLSX.utils.book_append_sheet(wb, ws, 'Statement');
-    XLSX.writeFile(wb, `Statement_${statementData.client.name.replace(/\s+/g, '_')}.xlsx`);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Ledger');
+    const safeName = (statementClient?.name || 'Client').replace(/[^a-zA-Z0-9]/g, '_');
+    XLSX.writeFile(wb, `Ledger_${safeName}.xlsx`);
+    toast.success('Ledger exported to Excel');
   };
 
   const handleDeactivate = async (id) => {
@@ -701,57 +738,174 @@ export default function Clients() {
                   Filter
                 </button>
               </div>
-              <button onClick={downloadStatementExcel} disabled={!statementData || statementData.transactions.length === 0} className="bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50">
-                <Download className="w-4 h-4" />
-                Download Excel
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const url = `/account-ledger?type=client&id=${statementClient.id}${statementDates.from ? `&from=${statementDates.from}` : ''}${statementDates.to ? `&to=${statementDates.to}` : ''}`;
+                    navigate(url);
+                  }}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+                  title="Open in dedicated Party Ledger page"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Full Ledger View
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  disabled={!statementData || !statementData.segments || statementData.segments.length === 0}
+                  className="bg-slate-800 hover:bg-slate-900 text-white px-3 py-2 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  Print
+                </button>
+                <button
+                  type="button"
+                  onClick={downloadStatementExcel}
+                  disabled={!statementData || !statementData.segments || statementData.segments.length === 0}
+                  className="bg-teal-50 text-teal-700 hover:bg-teal-100 border border-teal-200 px-3 py-2 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Export Excel
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50 min-h-0">
               {statementLoading ? (
-                <div className="flex justify-center p-8"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div></div>
-              ) : statementData ? (
-                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-                  <table className="w-full text-sm text-left">
-                    <thead className="bg-slate-50 text-xs uppercase text-slate-500 border-b border-slate-200">
-                      <tr>
-                        <th className="px-4 py-3 font-semibold">Date</th>
-                        <th className="px-4 py-3 font-semibold">Reference</th>
-                        <th className="px-4 py-3 font-semibold">Type</th>
-                        <th className="px-4 py-3 font-semibold text-right">Debit (₹)</th>
-                        <th className="px-4 py-3 font-semibold text-right">Credit (₹)</th>
-                        <th className="px-4 py-3 font-semibold text-right">Balance (₹)</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {statementData.transactions.length === 0 ? (
-                        <tr><td colSpan="6" className="text-center py-8 text-slate-500">No transactions found</td></tr>
-                      ) : (
-                        statementData.transactions.map((t, idx) => (
-                          <tr key={idx} className="hover:bg-slate-50">
-                            <td className="px-4 py-3 whitespace-nowrap">{format(new Date(t.date + 'T00:00:00'), 'dd MMM yyyy')}</td>
-                            <td className="px-4 py-3 font-medium text-slate-700">{t.reference}</td>
-                            <td className="px-4 py-3">
-                              <span className={`px-2 py-1 rounded text-xs font-medium ${t.type === 'Invoice' ? 'bg-blue-50 text-blue-600' : 'bg-emerald-50 text-emerald-600'}`}>
-                                {t.type}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-right text-slate-600">{t.debit ? parseFloat(t.debit || 0).toLocaleString('en-IN') : '-'}</td>
-                            <td className="px-4 py-3 text-right text-emerald-600">{t.credit ? parseFloat(t.credit || 0).toLocaleString('en-IN') : '-'}</td>
-                            <td className="px-4 py-3 text-right font-bold text-slate-800">{parseFloat(t.balance || 0).toLocaleString('en-IN')}</td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                    {statementData.transactions.length > 0 && (
-                      <tfoot className="bg-slate-50 border-t border-slate-200 font-bold">
-                        <tr>
-                          <td colSpan="5" className="px-4 py-3 text-right text-slate-600">Closing Balance:</td>
-                          <td className="px-4 py-3 text-right text-indigo-700">₹{parseFloat(statementData.final_balance || 0).toLocaleString('en-IN')}</td>
+                <div className="flex justify-center p-8"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600"></div></div>
+              ) : statementData && statementData.segments ? (
+                <div className="space-y-4">
+                  {/* Summary Bar */}
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div>
+                      <span className="text-slate-500 font-medium">Period: </span>
+                      <span className="text-slate-800 font-bold">{statementData.period?.display || 'All Time'}</span>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div>
+                        <span className="text-slate-500 font-medium">Net Closing: </span>
+                        <span className={`font-bold ${statementData.net_side === 'debit' ? 'text-amber-700' : 'text-emerald-700'}`}>
+                          ₹{Number(statementData.net_balance || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })} {statementData.net_side === 'debit' ? 'Dr (Receivable)' : 'Cr (Advance)'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Standard 6-Column Tally Ledger Table */}
+                  <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+                    <table className="w-full text-xs text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-100 text-slate-800 font-bold border-b border-slate-300">
+                          <th className="py-2.5 px-3 text-left w-24">Date</th>
+                          <th className="py-2.5 px-3 text-left">Particulars</th>
+                          <th className="py-2.5 px-3 text-left w-24">Vch Type</th>
+                          <th className="py-2.5 px-3 text-left w-24">Vch No.</th>
+                          <th className="py-2.5 px-3 text-right w-28">Debit (₹)</th>
+                          <th className="py-2.5 px-3 text-right w-28">Credit (₹)</th>
                         </tr>
-                      </tfoot>
-                    )}
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {statementData.segments.length === 0 || statementData.segments.every(s => (!s.rows || s.rows.length === 0) && !s.opening_balance) ? (
+                          <tr><td colSpan="6" className="text-center py-8 text-slate-400 font-medium">No transactions recorded for this period</td></tr>
+                        ) : (
+                          statementData.segments.map((seg, sIdx) => {
+                            const fmtVal = (val) => (!val || Number(val) === 0 ? '' : Number(val).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+                            return (
+                              <div key={sIdx} style={{ display: 'contents' }}>
+                                {statementData.segments.length > 1 && (
+                                  <tr className="bg-slate-50 font-bold text-slate-700">
+                                    <td colSpan="6" className="py-1.5 px-3 text-left text-[11px] bg-slate-100/70">
+                                      FY {seg.financial_year} ({seg.period_display})
+                                    </td>
+                                  </tr>
+                                )}
+
+                                {/* Opening Balance */}
+                                {seg.opening_balance && (
+                                  <tr className="font-semibold text-slate-900 bg-amber-50/20">
+                                    <td className="py-2 px-3 whitespace-nowrap">{seg.opening_balance.date_formatted}</td>
+                                    <td className="py-2 px-3 font-bold">{seg.opening_balance.particulars}</td>
+                                    <td className="py-2 px-3"></td>
+                                    <td className="py-2 px-3"></td>
+                                    <td className="py-2 px-3 text-right font-mono font-bold">
+                                      {seg.opening_balance.side === 'debit' ? fmtVal(seg.opening_balance.amount) : ''}
+                                    </td>
+                                    <td className="py-2 px-3 text-right font-mono font-bold">
+                                      {seg.opening_balance.side === 'credit' ? fmtVal(seg.opening_balance.amount) : ''}
+                                    </td>
+                                  </tr>
+                                )}
+
+                                {/* Rows */}
+                                {seg.rows && seg.rows.map((r, rIdx) => (
+                                  <tr key={rIdx} className="hover:bg-slate-50/80 transition-colors">
+                                    <td className="py-2 px-3 whitespace-nowrap text-slate-800 font-medium">{r.date_formatted}</td>
+                                    <td className="py-2 px-3 font-medium text-slate-900">{r.particulars}</td>
+                                    <td className="py-2 px-3">
+                                      <span className={`px-1.5 py-0.5 rounded text-[11px] font-semibold ${
+                                        r.vch_type === 'Sales' ? 'bg-blue-50 text-blue-700' :
+                                        r.vch_type === 'Receipt' ? 'bg-emerald-50 text-emerald-700' :
+                                        'bg-slate-100 text-slate-700'
+                                      }`}>
+                                        {r.vch_type}
+                                      </span>
+                                    </td>
+                                    <td className="py-2 px-3 font-mono text-slate-700">{r.vch_no || '-'}</td>
+                                    <td className="py-2 px-3 text-right font-mono font-medium text-slate-900">
+                                      {r.debit > 0 ? fmtVal(r.debit) : ''}
+                                    </td>
+                                    <td className="py-2 px-3 text-right font-mono font-medium text-slate-900">
+                                      {r.credit > 0 ? fmtVal(r.credit) : ''}
+                                    </td>
+                                  </tr>
+                                ))}
+
+                                {/* Subtotal */}
+                                <tr className="border-t border-slate-300 font-semibold text-slate-600 bg-slate-50/40">
+                                  <td className="py-2 px-3" colSpan="4"></td>
+                                  <td className="py-2 px-3 text-right font-mono text-slate-800">
+                                    {fmtVal(seg.subtotal_debit)}
+                                  </td>
+                                  <td className="py-2 px-3 text-right font-mono text-slate-800">
+                                    {fmtVal(seg.subtotal_credit)}
+                                  </td>
+                                </tr>
+
+                                {/* Closing Balance */}
+                                {seg.closing_balance && seg.closing_balance.amount > 0 && (
+                                  <tr className="font-semibold text-slate-900 bg-amber-50/20">
+                                    <td className="py-2 px-3"></td>
+                                    <td className="py-2 px-3 font-bold">{seg.closing_balance.particulars}</td>
+                                    <td className="py-2 px-3"></td>
+                                    <td className="py-2 px-3"></td>
+                                    <td className="py-2 px-3 text-right font-mono font-bold">
+                                      {seg.closing_balance.side === 'debit' ? fmtVal(seg.closing_balance.amount) : ''}
+                                    </td>
+                                    <td className="py-2 px-3 text-right font-mono font-bold">
+                                      {seg.closing_balance.side === 'credit' ? fmtVal(seg.closing_balance.amount) : ''}
+                                    </td>
+                                  </tr>
+                                )}
+
+                                {/* Equalized Grand Total */}
+                                <tr className="border-t border-b-4 border-double border-slate-900 font-bold bg-slate-50">
+                                  <td className="py-2 px-3" colSpan="4"></td>
+                                  <td className="py-2 px-3 text-right font-mono font-black text-slate-950">
+                                    {fmtVal(seg.equalized_total)}
+                                  </td>
+                                  <td className="py-2 px-3 text-right font-mono font-black text-slate-950">
+                                    {fmtVal(seg.equalized_total)}
+                                  </td>
+                                </tr>
+                              </div>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               ) : null}
             </div>

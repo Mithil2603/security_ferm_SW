@@ -18,7 +18,12 @@ if (!fs.existsSync(tempDir)) {
 const upload = multer({ dest: tempDir });
 
 router.use(authMiddleware);
-router.use(requirePermission('manage_employees'));
+router.use((req, res, next) => {
+  if (req.user && ['admin', 'manager', 'accountant'].includes(req.user.role)) {
+    return next();
+  }
+  return requirePermission('manage_employees', 'manage_payroll')(req, res, next);
+});
 
 // GET /api/attendance
 router.get('/', async (req, res) => {
@@ -134,7 +139,7 @@ router.post('/bulk', validate(schemas.bulkAttendance), async (req, res) => {
         );
         successCount++;
       } catch (err) {
-    logError(err, typeof req !== 'undefined' ? req : {}, { feature: 'attendance' });
+        logError(err, typeof req !== 'undefined' ? req : {}, { feature: 'attendance' });
         errors.push({ record, error: err.message });
       }
     }
@@ -177,6 +182,20 @@ router.get('/summary/:employee_id/:month', async (req, res) => {
 
 const ExcelJS = require('exceljs');
 
+function extractCellText(cell) {
+  if (!cell || cell.value === null || cell.value === undefined) return '';
+  const val = cell.value;
+  if (typeof val === 'string') return val.trim();
+  if (typeof val === 'number') return String(val);
+  if (val instanceof Date) return val.toISOString().split('T')[0];
+  if (typeof val === 'object') {
+    if (val.text) return String(val.text).trim();
+    if (val.result !== undefined && val.result !== null) return String(val.result).trim();
+    if (Array.isArray(val.richText)) return val.richText.map(t => t.text || '').join('').trim();
+  }
+  return String(val).trim();
+}
+
 function parseDateString(dateVal) {
   if (!dateVal) return null;
   if (dateVal instanceof Date) return dateVal.toISOString().split('T')[0];
@@ -206,6 +225,7 @@ function parseDateString(dateVal) {
     const y = parts[2];
     return `${y}-${m}-${d}`;
   }
+  // DD-MMM-YYYY (e.g. 04-Sep-2026 or 4-Aug-2026)
   const d = new Date(str);
   if (!isNaN(d.getTime())) {
     return d.toISOString().split('T')[0];
@@ -246,11 +266,11 @@ function parseTimeString(timeVal) {
 function normalizeStatus(statusVal) {
   if (!statusVal) return 'present';
   const s = String(statusVal).trim().toLowerCase();
-  if (s === 'p' || s === 'present') return 'present';
-  if (s === 'a' || s === 'absent') return 'absent';
-  if (s === 'hd' || s === 'half_day' || s === 'half day' || s === 'half-day') return 'half_day';
-  if (s === 'l' || s === 'leave') return 'leave';
-  if (s === 'h' || s === 'holiday') return 'holiday';
+  if (['p', 'present', 'pr', 'fullday', 'full_day', 'full', 'd', 'day', 'night', 'yes'].includes(s)) return 'present';
+  if (['a', 'absent', 'ab', 'no'].includes(s)) return 'absent';
+  if (['hd', 'half_day', 'half day', 'half-day', 'half', 'h/d'].includes(s)) return 'half_day';
+  if (['l', 'leave', 'cl', 'pl', 'sl', 'el', 'paid_leave'].includes(s)) return 'leave';
+  if (['h', 'holiday', 'wo', 'week_off', 'week-off', 'weekoff', 'off'].includes(s)) return 'holiday';
   return 'present';
 }
 
@@ -264,30 +284,46 @@ async function parseAttendanceRows(filePath, originalname) {
     const worksheet = workbook.worksheets[0];
     if (!worksheet) return rows;
 
-    const headers = [];
-    worksheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) {
-        row.eachCell((cell, colNumber) => {
-          let val = String(cell.value || '').trim().toLowerCase().replace(/[\s_-]+/g, '_');
-          headers[colNumber] = val;
-        });
-      } else {
-        const rowData = {};
-        row.eachCell((cell, colNumber) => {
-          const header = headers[colNumber];
-          if (header) {
-            let val = cell.value;
-            if (val instanceof Date) {
-              val = val.toISOString().split('T')[0];
-            } else if (typeof val === 'object' && val !== null) {
-              val = val.text || val.result || (val.richText ? val.richText.map(t => t.text).join('') : '');
-            }
-            rowData[header] = typeof val === 'string' ? val.trim() : val;
-          }
-        });
-        if (Object.keys(rowData).length > 0) {
-          rows.push(rowData);
+    // Detect header row dynamically (in case row 1 is a title or empty)
+    let headerRowNumber = 1;
+    for (let r = 1; r <= Math.min(10, worksheet.rowCount || 10); r++) {
+      const row = worksheet.getRow(r);
+      let matchCount = 0;
+      row.eachCell((cell) => {
+        const txt = extractCellText(cell).toLowerCase();
+        if (txt.includes('employee') || txt.includes('name') || txt.includes('date') || txt.includes('status') || txt.includes('emp') || txt.includes('guard') || txt.includes('check')) {
+          matchCount++;
         }
+      });
+      if (matchCount >= 2) {
+        headerRowNumber = r;
+        break;
+      }
+    }
+
+    const headers = [];
+    const headerRow = worksheet.getRow(headerRowNumber);
+    headerRow.eachCell((cell, colNumber) => {
+      headers[colNumber] = extractCellText(cell).toLowerCase().replace(/[\s_-]+/g, '_');
+    });
+
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber <= headerRowNumber) return;
+      const rowData = {};
+      row.eachCell((cell, colNumber) => {
+        const header = headers[colNumber];
+        if (header) {
+          let val = cell.value;
+          if (val instanceof Date) {
+            val = val.toISOString().split('T')[0];
+          } else if (typeof val === 'object' && val !== null) {
+            val = val.text || val.result || (val.richText ? val.richText.map(t => t.text).join('') : '');
+          }
+          rowData[header] = typeof val === 'string' ? val.trim() : val;
+        }
+      });
+      if (Object.keys(rowData).length > 0) {
+        rows.push(rowData);
       }
     });
   } else {
@@ -316,49 +352,104 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
 
   const errors = [];
   let successCount = 0;
+  const datesMarked = new Set();
+  const employeesMarked = new Set();
 
   try {
     const rawRows = await parseAttendanceRows(req.file.path, req.file.originalname);
     
-    // Fetch all employees for quick matching by id, employee_id, or full_name
+    // Fetch all employees for resilient matching across ID, normalized ID, and full name
     const employeesRes = await query('SELECT id, employee_id, full_name FROM employees');
-    const empMap = new Map();
+    
+    const byId = new Map();
+    const byExactCode = new Map();
+    const byNormCode = new Map();
+    const byDigits = new Map();
+    const byExactName = new Map();
+    const byNormName = new Map();
+
     for (const emp of employeesRes.rows) {
-      if (emp.id) empMap.set(String(emp.id).toLowerCase(), emp.id);
-      if (emp.employee_id) empMap.set(String(emp.employee_id).toLowerCase(), emp.id);
-      if (emp.full_name) empMap.set(String(emp.full_name).toLowerCase(), emp.id);
+      byId.set(String(emp.id), emp.id);
+      if (emp.employee_id) {
+        const c = String(emp.employee_id).trim().toLowerCase();
+        byExactCode.set(c, emp.id);
+        const norm = c.replace(/[^a-z0-9]/g, '');
+        if (norm) byNormCode.set(norm, emp.id);
+        const digits = c.replace(/\D/g, '');
+        if (digits) byDigits.set(parseInt(digits, 10), emp.id);
+      }
+      if (emp.full_name) {
+        const n = String(emp.full_name).trim().toLowerCase();
+        byExactName.set(n, emp.id);
+        const norm = n.replace(/\s+/g, ' ');
+        byNormName.set(norm, emp.id);
+      }
     }
 
     let lineIdx = 1;
     for (const row of rawRows) {
       lineIdx++;
       try {
-        const empKey = row.employee_id || row.empid || row.emp_id || row.employee_code || row.id || row.employee_name || row.name || row.full_name;
-        if (!empKey) {
+        const rawId = row.employee_id || row.empid || row.emp_id || row.employee_code || row.emp_code || row.id || row.code || row.staff_id || row.employee_no || row.emp_no || row.badge_no || row.badge_number;
+        const rawName = row.employee_name || row.emp_name || row.empname || row.full_name || row.name || row.guard_name || row.staff_name || row.worker_name || row.personnel_name || row.employee;
+
+        if (!rawId && !rawName) {
           errors.push({ line: lineIdx, row, error: 'Employee ID or Name missing' });
           continue;
         }
 
-        const matchedEmpId = empMap.get(String(empKey).trim().toLowerCase());
+        let matchedEmpId = null;
+
+        // 1. Try matching by ID/code (exact, alphanumeric normalized, or numeric digits)
+        if (rawId !== undefined && rawId !== null && String(rawId).trim() !== '') {
+          const idStr = String(rawId).trim();
+          const idLower = idStr.toLowerCase();
+          const idNorm = idLower.replace(/[^a-z0-9]/g, '');
+          const idDigits = idLower.replace(/\D/g, '');
+
+          if (byId.has(idStr)) matchedEmpId = byId.get(idStr);
+          else if (byExactCode.has(idLower)) matchedEmpId = byExactCode.get(idLower);
+          else if (idNorm && byNormCode.has(idNorm)) matchedEmpId = byNormCode.get(idNorm);
+          else if (idDigits && byDigits.has(parseInt(idDigits, 10))) matchedEmpId = byDigits.get(parseInt(idDigits, 10));
+        }
+
+        // 2. Fallback to matching by Employee Name if ID didn't match or was omitted
+        if (!matchedEmpId && rawName) {
+          const nameStr = String(rawName).trim().toLowerCase();
+          const nameNorm = nameStr.replace(/\s+/g, ' ');
+          if (byExactName.has(nameStr)) matchedEmpId = byExactName.get(nameStr);
+          else if (byNormName.has(nameNorm)) matchedEmpId = byNormName.get(nameNorm);
+          else {
+            const cleanName = nameNorm.replace(/^(mr\.?|mrs\.?|ms\.?|shri\.?|smt\.?)\s+/i, '').trim();
+            for (const [key, empId] of byNormName.entries()) {
+              const cleanKey = key.replace(/^(mr\.?|mrs\.?|ms\.?|shri\.?|smt\.?)\s+/i, '').trim();
+              if (cleanKey === cleanName || (cleanName.length > 4 && (cleanKey.includes(cleanName) || cleanName.includes(cleanKey)))) {
+                matchedEmpId = empId;
+                break;
+              }
+            }
+          }
+        }
+
         if (!matchedEmpId) {
-          errors.push({ line: lineIdx, row, error: `Employee not found: "${empKey}"` });
+          errors.push({ line: lineIdx, row, error: `Employee not found: "${rawId || rawName}"` });
           continue;
         }
 
-        const rawDate = row.date || row.attendance_date || row.attendance_day || row.day;
+        const rawDate = row.date || row.attendance_date || row.attendance_day || row.day || row.shift_date || row.duty_date;
         const attendance_date = parseDateString(rawDate);
         if (!attendance_date) {
           errors.push({ line: lineIdx, row, error: `Invalid date format: "${rawDate || ''}"` });
           continue;
         }
 
-        const rawCheckIn = row.check_in || row.check_in_time || row.in_time || row.in;
-        const rawCheckOut = row.check_out || row.check_out_time || row.out_time || row.out;
+        const rawCheckIn = row.check_in || row.check_in_time || row.in_time || row.in || row.punch_in || row.start_time;
+        const rawCheckOut = row.check_out || row.check_out_time || row.out_time || row.out || row.punch_out || row.end_time;
         const check_in_time = parseTimeString(rawCheckIn);
         const check_out_time = parseTimeString(rawCheckOut);
 
-        const status = normalizeStatus(row.status || row.attendance_status);
-        const notes = row.notes || row.remarks || row.remark || '';
+        const status = normalizeStatus(row.status || row.attendance_status || row.presence);
+        const notes = row.notes || row.remarks || row.remark || row.shift || '';
 
         let hours_worked = null;
         if (check_in_time && check_out_time) {
@@ -377,18 +468,25 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
              hours_worked=VALUES(hours_worked), status=VALUES(status), notes=VALUES(notes), updated_at=CURRENT_TIMESTAMP`,
           [matchedEmpId, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, req.user?.userId || null]
         );
+
         successCount++;
+        datesMarked.add(attendance_date);
+        employeesMarked.add(matchedEmpId);
       } catch (err) {
         logError(err, typeof req !== 'undefined' ? req : {}, { feature: 'attendance' });
         errors.push({ line: lineIdx, row, error: err.message });
       }
     }
 
+    const sortedDates = Array.from(datesMarked).sort();
+
     res.json({
       success: true,
-      message: `Bulk upload completed. ${successCount} record(s) processed successfully.${errors.length > 0 ? ` ${errors.length} row(s) had issues.` : ''}`,
+      message: `Bulk upload completed. ${successCount} attendance record(s) processed successfully across ${datesMarked.size} date(s).${errors.length > 0 ? ` ${errors.length} row(s) had issues.` : ''}`,
       successCount,
       totalRows: rawRows.length,
+      datesMarked: sortedDates,
+      employeesCount: employeesMarked.size,
       errors
     });
   } catch (err) {

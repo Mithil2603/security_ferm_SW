@@ -7,7 +7,7 @@ const { saveStatement } = require('../utils/statementSaver');
 const { logError } = require('../utils/errorLogger');
 
 router.use(authMiddleware);
-router.use(requirePermission('view_pl_account'));
+router.use(requirePermission('view_pl_account', 'manage_payroll', 'view_reports'));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/pl-account — Generate full Profit & Loss statement

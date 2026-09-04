@@ -26,7 +26,8 @@ router.get('/', async (req, res) => {
       trendResult,
       recentInvoices,
       topClients,
-      expByCategory
+      expByCategory,
+      attendanceResult
     ] = await Promise.all([
       // 1. Revenue this month
       query(
@@ -106,12 +107,24 @@ router.get('/', async (req, res) => {
          FROM expenses WHERE expense_date >= $1 AND status IN ('approved', 'paid')
          GROUP BY category ORDER BY total DESC`,
         [monthStart]
+      ),
+
+      // 10. Today's attendance summary
+      query(
+        `SELECT 
+          COUNT(*) as total_marked,
+          COALESCE(SUM(CASE WHEN status = 'present' THEN 1 ELSE 0 END), 0) as present_count,
+          COALESCE(SUM(CASE WHEN status = 'absent' THEN 1 ELSE 0 END), 0) as absent_count,
+          COALESCE(SUM(CASE WHEN status = 'half_day' THEN 1 ELSE 0 END), 0) as half_day_count,
+          COALESCE(SUM(CASE WHEN status = 'leave' THEN 1 ELSE 0 END), 0) as leave_count
+         FROM attendance WHERE attendance_date = CURDATE()`
       )
     ]);
 
     const revenue = revenueResult.rows[0];
     const employees = empResult.rows[0];
     const clients = clientResult.rows[0];
+    const attRow = attendanceResult.rows[0] || {};
 
     res.json({
       success: true,
@@ -131,6 +144,13 @@ router.get('/', async (req, res) => {
           clients: {
             total: parseInt(clients.total_clients),
             active: parseInt(clients.active_clients)
+          },
+          attendance: {
+            total_marked: parseInt(attRow.total_marked || 0),
+            present: parseInt(attRow.present_count || 0),
+            absent: parseInt(attRow.absent_count || 0),
+            half_day: parseInt(attRow.half_day_count || 0),
+            leave: parseInt(attRow.leave_count || 0)
           },
           expenses: parseFloat(expenseResult.rows[0].total_expenses),
           payroll: {

@@ -7,7 +7,7 @@ const Joi = require('joi');
 const { logError } = require('../utils/errorLogger');
 
 router.use(authMiddleware);
-router.use(requirePermission('manage_vouchers'));
+router.use(requirePermission('manage_vouchers', 'view_vouchers', 'create_vouchers', 'edit_vouchers', 'delete_vouchers', 'approve_vouchers', 'manage_payroll', 'manage_expenses'));
 
 // ─── Voucher Type Prefixes ──────────────────────────────────────────────────
 const VOUCHER_PREFIXES = {
@@ -335,7 +335,7 @@ router.get('/:id', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/vouchers — Create a new voucher
 // ─────────────────────────────────────────────────────────────────────────────
-router.post('/', async (req, res) => {
+router.post('/', requirePermission('manage_vouchers', 'create_vouchers', 'manage_payroll', 'manage_expenses'), async (req, res) => {
   try {
     const { error, value } = voucherSchema.validate(req.body);
     if (error) {
@@ -419,7 +419,7 @@ router.post('/', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // PUT /api/vouchers/:id — Edit a draft/pending voucher
 // ─────────────────────────────────────────────────────────────────────────────
-router.put('/:id', async (req, res) => {
+router.put('/:id', requirePermission('manage_vouchers', 'edit_vouchers'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -474,7 +474,7 @@ router.put('/:id', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/vouchers/:id/approve — Approve and post a voucher
 // ─────────────────────────────────────────────────────────────────────────────
-router.post('/:id/approve', async (req, res) => {
+router.post('/:id/approve', requirePermission('manage_vouchers', 'approve_vouchers'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -510,7 +510,7 @@ router.post('/:id/approve', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/vouchers/:id/cancel — Cancel a voucher
 // ─────────────────────────────────────────────────────────────────────────────
-router.post('/:id/cancel', async (req, res) => {
+router.post('/:id/cancel', requirePermission('manage_vouchers', 'delete_vouchers'), async (req, res) => {
   try {
     const { id } = req.params;
     const { reason } = req.body;
@@ -552,7 +552,7 @@ router.post('/:id/cancel', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/vouchers/bulk-approve — Approve multiple vouchers
 // ─────────────────────────────────────────────────────────────────────────────
-router.post('/bulk-approve', async (req, res) => {
+router.post('/bulk-approve', requirePermission('manage_vouchers', 'approve_vouchers'), async (req, res) => {
   try {
     const { voucher_ids } = req.body;
     if (!Array.isArray(voucher_ids) || voucher_ids.length === 0) {
@@ -582,7 +582,7 @@ router.post('/bulk-approve', async (req, res) => {
 });
 
 // Make Voucher Recurring
-router.post('/:id/recurring', async (req, res, next) => {
+router.post('/:id/recurring', requirePermission('manage_vouchers', 'create_vouchers'), async (req, res, next) => {
   try {
     const { frequency, next_run_date } = req.body;
     if (!frequency || !next_run_date) {

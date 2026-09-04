@@ -9,16 +9,16 @@ let confirmResolver = null;
 const confirmListeners = new Set();
 
 export const toast = {
-  success: (message, duration = 4000) => {
+  success: (message, duration = 3500) => {
     toastListeners.forEach(listener => listener({ id: ++toastId, message, type: 'success', duration }));
   },
-  error: (message, duration = 5000) => {
+  error: (message, duration = 4000) => {
     toastListeners.forEach(listener => listener({ id: ++toastId, message, type: 'error', duration }));
   },
-  info: (message, duration = 4000) => {
+  info: (message, duration = 3500) => {
     toastListeners.forEach(listener => listener({ id: ++toastId, message, type: 'info', duration }));
   },
-  warning: (message, duration = 4500) => {
+  warning: (message, duration = 3500) => {
     toastListeners.forEach(listener => listener({ id: ++toastId, message, type: 'warning', duration }));
   }
 };
@@ -68,7 +68,15 @@ export function ToastProvider({ children }) {
   const [confirmConfig, setConfirmConfig] = useState(null);
 
   const addToast = useCallback((toastItem) => {
+    const id = toastItem.id;
+    const duration = toastItem.duration || 3500;
     setToasts(prev => [...prev, toastItem]);
+
+    if (duration > 0) {
+      setTimeout(() => {
+        setToasts(prev => prev.filter(t => t.id !== id));
+      }, duration);
+    }
   }, []);
 
   const removeToast = useCallback((id) => {
@@ -177,20 +185,41 @@ function ToastContainer({ toasts, onRemove }) {
 }
 
 function ToastItem({ item, onDismiss }) {
+  const [visible, setVisible] = useState(true);
+  const onDismissRef = React.useRef(onDismiss);
+  onDismissRef.current = onDismiss;
+
   useEffect(() => {
-    if (!item.duration) return;
-    const timer = setTimeout(() => {
-      onDismiss();
-    }, item.duration);
-    return () => clearTimeout(timer);
-  }, [item.duration, onDismiss]);
+    const dur = item.duration || 3500;
+    const fadeTimer = setTimeout(() => {
+      setVisible(false);
+    }, Math.max(dur - 200, 500));
+
+    const dismissTimer = setTimeout(() => {
+      onDismissRef.current?.();
+    }, dur);
+
+    return () => {
+      clearTimeout(fadeTimer);
+      clearTimeout(dismissTimer);
+    };
+  }, [item.id, item.duration]);
 
   const isSuccess = item.type === 'success';
   const isError = item.type === 'error';
   const isWarning = item.type === 'warning';
 
+  const handleManualDismiss = () => {
+    setVisible(false);
+    setTimeout(() => {
+      onDismissRef.current?.();
+    }, 150);
+  };
+
   return (
-    <div className="pointer-events-auto transition-all animate-slide-up shadow-2xl rounded-2xl border overflow-hidden">
+    <div className={`pointer-events-auto transition-all duration-200 shadow-2xl rounded-2xl border overflow-hidden ${
+      visible ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-2 scale-95 pointer-events-none'
+    }`}>
       <div className={`p-4 rounded-2xl flex items-start gap-3 border ${
         isSuccess
           ? 'bg-slate-900/95 text-emerald-300 border-emerald-500/40 shadow-emerald-950/40 backdrop-blur-md'
@@ -211,8 +240,9 @@ function ToastItem({ item, onDismiss }) {
         </div>
         <button
           type="button"
-          onClick={onDismiss}
-          className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors shrink-0"
+          onClick={handleManualDismiss}
+          className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
+          title="Dismiss"
         >
           <X className="w-4 h-4" />
         </button>

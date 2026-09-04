@@ -94,12 +94,15 @@ export default function ImportModal({ isOpen, onClose, entityName, endpoint, onI
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       
-      if (res.data.success) {
-        setResult(res.data);
-        if (onImportSuccess) onImportSuccess();
+      const payload = res?.success !== undefined ? res : (res?.data || res);
+      if (payload?.success) {
+        setResult(payload);
+        if (onImportSuccess) onImportSuccess(payload);
+      } else {
+        setError(payload?.message || 'Upload failed. Please check the file format.');
       }
     } catch (err) {
-      setError(err.response?.data?.message || 'Upload failed. Please check the file format.');
+      setError(err.response?.data?.message || err.message || 'Upload failed. Please check the file format.');
     } finally {
       setIsUploading(false);
     }
@@ -184,7 +187,7 @@ export default function ImportModal({ isOpen, onClose, entityName, endpoint, onI
                 </div>
                 <div className="bg-amber-50 rounded-lg p-3 w-28 border border-amber-100">
                   <div className="text-2xl font-black text-amber-600">{result.data?.skipped || 0}</div>
-                  <div className="text-[10px] uppercase font-bold text-amber-800/60 mt-1">Skipped</div>
+                  <div className="text-[10px] uppercase font-bold text-amber-800/60 mt-1">Skipped / Duplicates</div>
                 </div>
               </div>
             </div>

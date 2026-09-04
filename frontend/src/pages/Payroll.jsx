@@ -5,6 +5,7 @@ import { toast, confirmDialog } from '../context/ToastContext';
 import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
 import { format } from 'date-fns';
+import { formatAadhar } from '../utils/formatters';
 
 const STATUS_STYLES = {
   draft: 'bg-slate-100 text-slate-700 border border-slate-300',
@@ -513,7 +514,7 @@ export default function Payroll() {
                 <div>
                   <p className="text-slate-400 text-xs mb-0.5 font-medium uppercase tracking-wider">Tax / KYC</p>
                   <p className="text-slate-900 text-xs font-medium">PAN: {selectedSlip.pan_number || 'N/A'}</p>
-                  <p className="text-slate-500 text-xs mt-0.5">Aadhar: {selectedSlip.aadhar_number || 'N/A'}</p>
+                  <p className="text-slate-500 text-xs mt-0.5">Aadhar: {formatAadhar(selectedSlip.aadhar_number) || 'N/A'}</p>
                 </div>
               </div>
 

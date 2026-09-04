@@ -7,7 +7,7 @@ const Joi = require('joi');
 const { logError } = require('../utils/errorLogger');
 
 router.use(authMiddleware);
-router.use(requirePermission('manage_bank_accounts'));
+router.use(requirePermission('manage_bank_accounts', 'manage_payroll', 'manage_expenses'));
 
 // Validation schemas
 const bankAccountSchema = Joi.object({

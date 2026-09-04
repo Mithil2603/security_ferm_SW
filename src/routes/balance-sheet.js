@@ -7,7 +7,7 @@ const { saveStatement } = require('../utils/statementSaver');
 const { logError } = require('../utils/errorLogger');
 
 router.use(authMiddleware);
-router.use(requirePermission('view_balance_sheet'));
+router.use(requirePermission('view_balance_sheet', 'manage_payroll', 'view_reports'));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/balance-sheet — Generate Balance Sheet as on a given date

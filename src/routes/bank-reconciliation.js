@@ -6,7 +6,7 @@ const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { logError } = require('../utils/errorLogger');
 
 router.use(authMiddleware);
-router.use(requirePermission('manage_bank_reconciliation'));
+router.use(requirePermission('manage_bank_reconciliation', 'manage_payroll', 'manage_expenses', 'view_balance_sheet'));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/bank-reconciliation/:accountId — Get entries for reconciliation

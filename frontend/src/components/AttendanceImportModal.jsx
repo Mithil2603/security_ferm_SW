@@ -1,11 +1,14 @@
 import { useState, useRef } from 'react';
-import { Upload, X, FileSpreadsheet, CheckCircle2, AlertCircle, Download, FileText, Check, Clock } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Upload, X, FileSpreadsheet, CheckCircle2, AlertCircle, Download, FileText, Check, Clock, ArrowRight } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import api from '../services/api';
 
 export default function AttendanceImportModal({ isOpen, onClose, onImportSuccess }) {
+  const navigate = useNavigate();
   const [file, setFile] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isDownloadingSample, setIsDownloadingSample] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
   const [previewRows, setPreviewRows] = useState([]);
@@ -52,24 +55,58 @@ export default function AttendanceImportModal({ isOpen, onClose, onImportSuccess
     }
   ];
 
-  const handleDownloadSampleExcel = () => {
-    const worksheet = XLSX.utils.json_to_sheet(sampleData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Attendance_Sample");
-    XLSX.writeFile(workbook, "Sample_Attendance_Upload_Template.xlsx");
+  const fetchActiveEmployeesForTemplate = async () => {
+    try {
+      const res = await api.get('/employees?is_active=true&limit=200');
+      const emps = res?.data || [];
+      if (Array.isArray(emps) && emps.length > 0) {
+        const todayStr = new Date().toISOString().split('T')[0];
+        return emps.map(emp => ({
+          "Employee ID": emp.employee_id || `EMP-${emp.id}`,
+          "Employee Name": emp.full_name,
+          "Date": todayStr,
+          "Status": "present",
+          "Check In": "08:00",
+          "Check Out": "20:00",
+          "Notes": "Day Shift"
+        }));
+      }
+    } catch (_) {}
+    return sampleData;
   };
 
-  const handleDownloadSampleCSV = () => {
-    const worksheet = XLSX.utils.json_to_sheet(sampleData);
-    const csvOutput = XLSX.utils.sheet_to_csv(worksheet);
-    const blob = new Blob([csvOutput], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", "Sample_Attendance_Upload_Template.csv");
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const handleDownloadSampleExcel = async () => {
+    setIsDownloadingSample(true);
+    try {
+      const data = await fetchActiveEmployeesForTemplate();
+      const worksheet = XLSX.utils.json_to_sheet(data);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Attendance");
+      const todayStr = new Date().toISOString().split('T')[0];
+      XLSX.writeFile(workbook, `Attendance_Template_${todayStr}.xlsx`);
+    } finally {
+      setIsDownloadingSample(false);
+    }
+  };
+
+  const handleDownloadSampleCSV = async () => {
+    setIsDownloadingSample(true);
+    try {
+      const data = await fetchActiveEmployeesForTemplate();
+      const worksheet = XLSX.utils.json_to_sheet(data);
+      const csvOutput = XLSX.utils.sheet_to_csv(worksheet);
+      const blob = new Blob([csvOutput], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement("a");
+      const url = URL.createObjectURL(blob);
+      link.setAttribute("href", url);
+      const todayStr = new Date().toISOString().split('T')[0];
+      link.setAttribute("download", `Attendance_Template_${todayStr}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } finally {
+      setIsDownloadingSample(false);
+    }
   };
 
   const formatPreviewCell = (val) => {
@@ -142,7 +179,7 @@ export default function AttendanceImportModal({ isOpen, onClose, onImportSuccess
       const resData = res?.data || res;
       if (resData && (resData.success || resData.successCount !== undefined)) {
         setResult(resData);
-        if (onImportSuccess) onImportSuccess();
+        if (onImportSuccess) onImportSuccess(resData);
       } else {
         setError(resData?.message || 'Upload failed');
       }
@@ -159,6 +196,13 @@ export default function AttendanceImportModal({ isOpen, onClose, onImportSuccess
     setError('');
     setPreviewRows([]);
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleNavigateToAttendance = () => {
+    const targetDate = result?.datesMarked?.[0] || '';
+    resetForm();
+    onClose();
+    navigate('/attendance' + (targetDate ? `?date=${targetDate}` : ''));
   };
 
   return (
@@ -193,22 +237,26 @@ export default function AttendanceImportModal({ isOpen, onClose, onImportSuccess
               </div>
               <div>
                 <h4 className="text-sm font-bold text-emerald-900">Need the template format?</h4>
-                <p className="text-xs text-emerald-700 mt-0.5">Download our pre-formatted template with employee columns and sample data.</p>
+                <p className="text-xs text-emerald-700 mt-0.5">
+                  Downloads a template pre-filled with your registered active watchmen and today's date.
+                </p>
               </div>
             </div>
             <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
               <button
                 type="button"
+                disabled={isDownloadingSample}
                 onClick={handleDownloadSampleExcel}
-                className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors"
+                className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors disabled:opacity-50"
               >
                 <Download className="w-3.5 h-3.5" />
                 Excel (.xlsx)
               </button>
               <button
                 type="button"
+                disabled={isDownloadingSample}
                 onClick={handleDownloadSampleCSV}
-                className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 bg-white border border-emerald-300 hover:bg-emerald-100 text-emerald-800 rounded-lg text-xs font-semibold shadow-sm transition-colors"
+                className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 bg-white border border-emerald-300 hover:bg-emerald-100 text-emerald-800 rounded-lg text-xs font-semibold shadow-sm transition-colors disabled:opacity-50"
               >
                 <Download className="w-3.5 h-3.5" />
                 CSV (.csv)
@@ -225,17 +273,32 @@ export default function AttendanceImportModal({ isOpen, onClose, onImportSuccess
           )}
 
           {result && (
-            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-900 space-y-2 animate-fade-in">
-              <div className="flex items-center gap-2 font-bold text-emerald-800">
+            <div className="p-5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-900 space-y-3 animate-fade-in">
+              <div className="flex items-center gap-2 font-bold text-emerald-800 text-base">
                 <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                {result.message || 'Import completed successfully!'}
+                {result.message || 'Attendance records filled successfully!'}
               </div>
-              <div className="text-xs text-emerald-700">
-                Processed <strong>{result.successCount ?? 0}</strong> record(s) successfully.
+              <div className="text-sm text-emerald-700 space-y-1">
+                <p>• Successfully marked <strong>{result.successCount ?? 0}</strong> record(s) for <strong>{result.employeesCount || result.successCount}</strong> watchmen.</p>
+                {result.datesMarked && result.datesMarked.length > 0 && (
+                  <p>• Dates recorded: <strong>{result.datesMarked.join(', ')}</strong></p>
+                )}
               </div>
+
+              <div className="pt-2 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleNavigateToAttendance}
+                  className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-sm transition-colors"
+                >
+                  <span>Go to Attendance Tracker</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
               {result.errors && result.errors.length > 0 && (
                 <div className="mt-3 pt-3 border-t border-emerald-200/60 max-h-36 overflow-y-auto space-y-1">
-                  <div className="text-xs font-semibold text-red-700">Row Issues:</div>
+                  <div className="text-xs font-semibold text-red-700">Row Issues ({result.errors.length}):</div>
                   {result.errors.map((e, idx) => (
                     <div key={idx} className="text-xs text-red-600 flex items-center gap-1">
                       <span>• Line {e.line || idx + 1}:</span> {e.error}

@@ -16,7 +16,6 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 router.use(authMiddleware);
-router.use(requirePermission('manage_settings'));
 
 // ═══════════════════════════════════════════════════════════════════
 //  SALARY STRUCTURES CRUD
@@ -40,7 +39,7 @@ router.get('/salary-structures', async (req, res) => {
 });
 
 // POST /api/settings/salary-structures
-router.post('/salary-structures', async (req, res) => {
+router.post('/salary-structures', requirePermission('manage_settings', 'manage_payroll'), async (req, res) => {
   try {
     const {
       name, base_salary, dearness_allowance = 0, house_rent_allowance = 0,
@@ -71,7 +70,7 @@ router.post('/salary-structures', async (req, res) => {
 });
 
 // PUT /api/settings/salary-structures/:id
-router.put('/salary-structures/:id', async (req, res) => {
+router.put('/salary-structures/:id', requirePermission('manage_settings', 'manage_payroll'), async (req, res) => {
   try {
     const {
       name, base_salary, dearness_allowance, house_rent_allowance,
@@ -110,7 +109,7 @@ router.put('/salary-structures/:id', async (req, res) => {
 });
 
 // DELETE /api/settings/salary-structures/:id (soft-disable or delete if no active guards)
-router.delete('/salary-structures/:id', async (req, res) => {
+router.delete('/salary-structures/:id', requirePermission('manage_settings', 'manage_payroll'), async (req, res) => {
   try {
     // Check if any active employees are on this structure
     const check = await query(
@@ -138,7 +137,7 @@ router.delete('/salary-structures/:id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 
 // GET /api/settings/team
-router.get('/team', async (req, res) => {
+router.get('/team', requirePermission('manage_settings'), async (req, res) => {
   try {
     const result = await query(
       `SELECT id, username, email, full_name, role, is_active, created_at, last_login, permissions
@@ -153,7 +152,7 @@ router.get('/team', async (req, res) => {
 });
 
 // PUT /api/settings/users/:id or /api/settings/team/:id/permissions
-router.put(['/users/:id', '/team/:id/permissions'], async (req, res) => {
+router.put(['/users/:id', '/team/:id/permissions'], requirePermission('manage_settings'), async (req, res) => {
   try {
     const { permissions, role, full_name, phone } = req.body;
     const userId = req.params.id;
@@ -198,7 +197,13 @@ router.put(['/users/:id', '/team/:id/permissions'], async (req, res) => {
     if (checkUser.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-    res.json({ success: true, data: checkUser.rows[0], message: 'User updated successfully' });
+    const returnUserData = checkUser.rows[0];
+    if (typeof returnUserData.permissions === 'string') {
+      try {
+        returnUserData.permissions = JSON.parse(returnUserData.permissions);
+      } catch (_) {}
+    }
+    res.json({ success: true, data: returnUserData, message: 'User updated successfully' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
     logger.error('Update user error:', error);
@@ -207,7 +212,7 @@ router.put(['/users/:id', '/team/:id/permissions'], async (req, res) => {
 });
 
 // PATCH /api/settings/users/:id/toggle
-router.patch('/users/:id/toggle', async (req, res) => {
+router.patch('/users/:id/toggle', requirePermission('manage_settings'), async (req, res) => {
   try {
     const userId = parseInt(req.params.id);
     if (userId === req.user.userId) {
@@ -231,7 +236,7 @@ router.patch('/users/:id/toggle', async (req, res) => {
 });
 
 // POST /api/settings/users/:id/reset-password
-router.post('/users/:id/reset-password', async (req, res) => {
+router.post('/users/:id/reset-password', requirePermission('manage_settings'), async (req, res) => {
   try {
     const { new_password } = req.body;
     if (!new_password || new_password.length < 6) {
@@ -254,7 +259,7 @@ router.post('/users/:id/reset-password', async (req, res) => {
 });
 
 // PUT /api/settings/team/:id/status
-router.put('/team/:id/status', async (req, res) => {
+router.put('/team/:id/status', requirePermission('manage_settings'), async (req, res) => {
   try {
     const { is_active } = req.body;
     if (typeof is_active !== 'boolean' && typeof is_active !== 'number') {
@@ -304,7 +309,7 @@ router.get('/system/:key', async (req, res) => {
 });
 
 // PUT /api/settings/system/:key
-router.put('/system/:key', async (req, res) => {
+router.put('/system/:key', requirePermission('manage_settings'), async (req, res) => {
   try {
     const { value } = req.body;
     if (value === undefined) {
@@ -332,7 +337,7 @@ router.put('/system/:key', async (req, res) => {
 });
 
 // POST /api/settings/system/agency_logo
-router.post('/system/agency_logo', upload.single('logo'), async (req, res) => {
+router.post('/system/agency_logo', requirePermission('manage_settings'), upload.single('logo'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No file uploaded' });
@@ -366,7 +371,7 @@ router.post('/system/agency_logo', upload.single('logo'), async (req, res) => {
 });
 
 // DELETE /api/settings/system/agency_logo
-router.delete('/system/agency_logo', async (req, res) => {
+router.delete('/system/agency_logo', requirePermission('manage_settings'), async (req, res) => {
   try {
     const currentSettingsRes = await query(`SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'`);
     if (currentSettingsRes.rows.length > 0) {
@@ -406,7 +411,7 @@ router.get('/expense-categories', async (req, res) => {
 });
 
 // POST /api/settings/expense-categories
-router.post('/expense-categories', async (req, res) => {
+router.post('/expense-categories', requirePermission('manage_settings', 'manage_expenses'), async (req, res) => {
   try {
     const { name } = req.body;
     if (!name) return res.status(400).json({ success: false, message: 'Category name is required' });
@@ -427,7 +432,7 @@ router.post('/expense-categories', async (req, res) => {
 });
 
 // PUT /api/settings/expense-categories/:id
-router.put('/expense-categories/:id', async (req, res) => {
+router.put('/expense-categories/:id', requirePermission('manage_settings', 'manage_expenses'), async (req, res) => {
   try {
     const { name, is_active } = req.body;
     const result = await query(

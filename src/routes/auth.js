@@ -394,7 +394,18 @@ router.get('/users', authMiddleware, requireRole('admin'), async (req, res) => {
     const result = await query(
       'SELECT id, email, full_name, role, phone, is_active, last_login, created_at, permissions FROM users ORDER BY created_at DESC'
     );
-    res.json({ success: true, data: result.rows });
+    const { ROLE_PERMISSIONS } = require('../middleware/auth');
+    const rows = result.rows.map(u => {
+      let parsed = [];
+      if (Array.isArray(u.permissions)) parsed = u.permissions;
+      else if (typeof u.permissions === 'string') {
+        try { parsed = JSON.parse(u.permissions); } catch (_) {}
+      }
+      const roleDefaults = ROLE_PERMISSIONS[u.role] || [];
+      u.permissions = parsed.length > 0 ? parsed : roleDefaults;
+      return u;
+    });
+    res.json({ success: true, data: rows });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'auth' });
     res.status(500).json({ success: false, message: 'Failed to fetch users' });
@@ -424,7 +435,16 @@ router.post('/users', authMiddleware, requireRole('admin'), async (req, res) => 
       [email.toLowerCase(), hash, full_name, role, phone, req.user.userId, permsJson]
     );
 
-    res.status(201).json({ success: true, data: result.rows[0], message: 'User created successfully' });
+    let createdUser = result.rows && result.rows[0];
+    if (!createdUser) {
+      const fetchRes = await query('SELECT id, email, full_name, role, permissions FROM users WHERE email = $1', [email.toLowerCase()]);
+      createdUser = fetchRes.rows[0];
+    }
+    if (createdUser && typeof createdUser.permissions === 'string') {
+      try { createdUser.permissions = JSON.parse(createdUser.permissions); } catch (_) {}
+    }
+
+    res.status(201).json({ success: true, data: createdUser, message: 'User created successfully' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'auth' });
     if (error.code === 'ER_DUP_ENTRY' || error.errno === 1062 || error.sqlState === '23000' || error.code === '23505' || error.code === 'SQLITE_CONSTRAINT_UNIQUE' || (error.message && (error.message.includes('Duplicate') || error.message.includes('UNIQUE')))) {

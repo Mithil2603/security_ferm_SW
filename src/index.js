@@ -151,6 +151,7 @@ app.use('/api/expenses', expensesRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/ledger', ledgerRoutes);
+app.use('/api/account-ledger', require('./routes/account-ledger'));
 app.use('/api/vendors', vendorsRoutes);
 app.use('/api/recurring-expenses', require('./routes/recurring_expenses'));
 app.use('/api/errors', require('./routes/errors'));

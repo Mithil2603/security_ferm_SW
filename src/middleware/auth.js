@@ -36,9 +36,16 @@ const ROLE_PERMISSIONS = {
     'manage_expenses',
     'view_reports',
     'view_vouchers',
+    'create_vouchers',
+    'edit_vouchers',
+    'approve_vouchers',
+    'manage_vouchers',
     'manage_payroll',
     'view_balance_sheet',
-    'view_pl_account'
+    'view_pl_account',
+    'manage_bank_accounts',
+    'manage_bank_reconciliation',
+    'manage_budgets'
   ],
   accountant: [
     'manage_invoices',
@@ -47,7 +54,9 @@ const ROLE_PERMISSIONS = {
     'view_vouchers',
     'create_vouchers',
     'edit_vouchers',
+    'delete_vouchers',
     'approve_vouchers',
+    'manage_vouchers',
     'view_reports',
     'view_pl_account',
     'view_balance_sheet',

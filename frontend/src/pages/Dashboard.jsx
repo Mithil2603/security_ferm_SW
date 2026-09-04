@@ -18,8 +18,10 @@ import {
   CheckSquare, 
   Receipt, 
   UserPlus,
-  FileSpreadsheet
+  FileSpreadsheet,
+  CalendarCheck
 } from 'lucide-react';
+import { toast } from '../context/ToastContext';
 import AttendanceImportModal from '../components/AttendanceImportModal';
 import { 
   AreaChart, 
@@ -212,8 +214,8 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* KPI Cards - Row 2 (Staff & Clients) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {/* KPI Cards - Row 2 (Staff, Clients & Attendance) */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <StatCard 
           title="Active Watchmen & Employees" 
           value={kpis?.employees?.active ?? 0} 
@@ -226,6 +228,14 @@ export default function Dashboard() {
           icon={Building2} 
           subtitle={`Total Contracts: ${kpis?.clients?.total ?? 0}`}
         />
+        <Link to="/attendance" className="block transition-transform hover:-translate-y-0.5">
+          <StatCard 
+            title="Today's Attendance" 
+            value={kpis?.attendance ? `${kpis.attendance.present} / ${kpis?.employees?.active ?? 0}` : '0 / 0'} 
+            icon={CalendarCheck} 
+            subtitle={`${kpis?.attendance?.absent ? `${kpis.attendance.absent} Absent • ` : ''}${kpis?.attendance?.total_marked ?? 0} marked today`}
+          />
+        </Link>
       </div>
 
       {/* Quick Actions */}
@@ -421,8 +431,11 @@ export default function Dashboard() {
       <AttendanceImportModal 
         isOpen={isAttendanceUploadOpen} 
         onClose={() => setIsAttendanceUploadOpen(false)} 
-        onImportSuccess={() => {
+        onImportSuccess={(info) => {
           fetchDashboard(true);
+          if (info && info.successCount) {
+            toast.success(`Attendance filled: ${info.successCount} record(s) marked successfully!`);
+          }
         }} 
       />
     </div>

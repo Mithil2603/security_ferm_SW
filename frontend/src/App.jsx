@@ -17,6 +17,7 @@ import Attendance from './pages/Attendance';
 import Invoices from './pages/Invoices';
 import Payroll from './pages/Payroll';
 import Ledger from './pages/Ledger';
+import AccountLedger from './pages/AccountLedger';
 import Expenses from './pages/Expenses';
 import VendorStatements from './pages/VendorStatements';
 import Reports from './pages/Reports';
@@ -288,6 +289,8 @@ function App() {
             <Route path="/invoices" element={<Invoices />} />
             <Route path="/payroll" element={<Payroll />} />
             <Route path="/ledger" element={<Ledger />} />
+            <Route path="/account-ledger" element={<AccountLedger />} />
+            <Route path="/party-ledger" element={<Navigate to="/account-ledger" replace />} />
             <Route path="/expenses" element={<Expenses />} />
             <Route path="/vendor-statements" element={<VendorStatements />} />
             <Route path="/vendor-ledger" element={<Navigate to="/vendor-statements" replace />} />

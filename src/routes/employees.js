@@ -48,7 +48,7 @@ router.use(requirePermission('manage_employees'));
 // GET /api/employees
 router.get('/', async (req, res) => {
   try {
-    const { search, is_active, client_id, page = 1, limit = 50 } = req.query;
+    const { search, is_active, client_id, sort_by = 'name', order = 'asc', page = 1, limit = 50 } = req.query;
     let conditions = [];
     let params = [];
     let pc = 1;
@@ -69,6 +69,17 @@ router.get('/', async (req, res) => {
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
+    // Dynamic sorting support (joining_date, name, created_at)
+    const sortDir = (order && order.toLowerCase() === 'desc') ? 'DESC' : 'ASC';
+    let orderBy = 'e.is_active DESC, e.full_name ASC';
+    if (sort_by === 'joining_date' || sort_by === 'date_of_joining') {
+      orderBy = `e.date_of_joining ${sortDir}, e.full_name ASC`;
+    } else if (sort_by === 'name') {
+      orderBy = `e.is_active DESC, e.full_name ${sortDir}`;
+    } else if (sort_by === 'created_at') {
+      orderBy = `e.created_at ${sortDir}`;
+    }
+
     const result = await query(
       `SELECT e.*, 
         ss.base_salary, ss.dearness_allowance, ss.house_rent_allowance, ss.pf_percentage,
@@ -78,7 +89,7 @@ router.get('/', async (req, res) => {
        LEFT JOIN clients c ON e.assigned_client_id = c.id
        LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
        ${where}
-       ORDER BY e.is_active DESC, e.full_name ASC
+       ORDER BY ${orderBy}
        LIMIT $${pc} OFFSET $${pc + 1}`,
       [...params, parseInt(limit), offset]
     );
@@ -175,62 +186,154 @@ router.post('/import', upload.single('file'), async (req, res) => {
       return res.status(400).json({ success: false, message: 'No file uploaded' });
     }
 
+    const filePath = req.file.path;
     const workbook = new exceljs.Workbook();
-    await workbook.xlsx.readFile(req.file.path);
-    const worksheet = workbook.getWorksheet(1);
-
+    await workbook.xlsx.readFile(filePath);
+    
+    const worksheet = workbook.getWorksheet(1); // Get first sheet
     if (!worksheet) {
-      return res.status(400).json({ success: false, message: 'No sheet found in Excel file' });
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.status(400).json({ success: false, message: 'Invalid or empty Excel file' });
     }
 
-    const rows = [];
-    worksheet.eachRow((row, rowNumber) => {
-      if (rowNumber > 1) { // Skip header
-        rows.push(row.values);
+    let importedCount = 0;
+    let skippedCount = 0;
+
+    let nameCol = 1;
+    let phoneCol = 2;
+    let emailCol = 3;
+    let addressCol = 4;
+    let cityCol = 5;
+    let aadharCol = null;
+    let panCol = null;
+
+    // Detect column headers from row 1 if available
+    const headerRow = worksheet.getRow(1);
+    if (headerRow) {
+      headerRow.eachCell((cell, colNumber) => {
+        const headerText = String(cell.value?.text || cell.value || '').trim().toLowerCase();
+        if (headerText.includes('name')) nameCol = colNumber;
+        else if (headerText.includes('phone') || headerText.includes('mobile') || headerText.includes('contact')) phoneCol = colNumber;
+        else if (headerText.includes('email') || headerText.includes('mail')) emailCol = colNumber;
+        else if (headerText.includes('address')) addressCol = colNumber;
+        else if (headerText.includes('city') || headerText.includes('town')) cityCol = colNumber;
+        else if (headerText.includes('aadhar') || headerText.includes('adhar')) aadharCol = colNumber;
+        else if (headerText.includes('pan')) panCol = colNumber;
+      });
+    }
+
+    const getCellText = (cell) => {
+      if (!cell || cell.value === null || cell.value === undefined) return '';
+      const v = cell.value;
+      if (typeof v === 'string') return v.trim();
+      if (typeof v === 'number') return String(v);
+      if (typeof v === 'object') {
+        if (v.text) return String(v.text).trim();
+        if (v.result !== undefined && v.result !== null) return String(v.result).trim();
+        if (Array.isArray(v.richText)) return v.richText.map(t => t.text || '').join('').trim();
+      }
+      return String(v).trim();
+    };
+
+    const rowsToProcess = [];
+    worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber === 1) return; // Skip headers
+
+      const full_name = getCellText(row.getCell(nameCol));
+      let phone = getCellText(row.getCell(phoneCol));
+      const email = getCellText(row.getCell(emailCol));
+      const address = getCellText(row.getCell(addressCol));
+      const city = getCellText(row.getCell(cityCol));
+      let aadhar_number = aadharCol ? getCellText(row.getCell(aadharCol)).replace(/\D/g, '') : null;
+      let pan_number = panCol ? getCellText(row.getCell(panCol)).trim().toUpperCase() : null;
+
+      if (phone) {
+        phone = phone.replace(/\D/g, '');
+      }
+
+      if (full_name && phone) {
+        rowsToProcess.push({ full_name, phone, email, address, city, aadhar_number, pan_number });
+      } else {
+        skippedCount++;
       }
     });
 
-    let successCount = 0;
-    let errorCount = 0;
-
-    for (const r of rows) {
-      // Basic extraction
-      const full_name = r[1];
-      const phone = r[2] ? String(r[2]) : '';
-      const designation = r[3] || 'Watchman';
-      const date_of_joining = r[4] ? new Date(r[4]).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
-      const aadhar_number = r[5] ? String(r[5]).replace(/\D/g, '') : null;
-      const pan_number = r[6] ? String(r[6]).toUpperCase() : null;
-
-      if (!full_name || !phone) {
-        errorCount++;
-        continue;
-      }
-
-      const crypto = require('crypto');
-      const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase();
-      const employee_id = `EMP-${randomHex}`;
-
+    const seenInBatch = new Set();
+    for (const r of rowsToProcess) {
       try {
-        await query(
-          `INSERT INTO employees (employee_id, full_name, phone, designation, date_of_joining, aadhar_number, pan_number)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [employee_id, full_name, phone, designation, date_of_joining, aadhar_number, pan_number]
+        const last10 = r.phone.length >= 10 ? r.phone.slice(-10) : r.phone;
+        
+        // Prevent redundant/duplicate records within same batch
+        if (seenInBatch.has(last10)) {
+          skippedCount++;
+          continue;
+        }
+
+        // Prevent redundant/duplicate records already existing in database
+        const existingEmp = await query(
+          `SELECT id, employee_id FROM employees 
+           WHERE phone = $1 OR phone LIKE $2 OR (full_name = $3 AND (phone LIKE $2 OR phone = $1))`,
+          [r.phone, `%${last10}`, r.full_name]
         );
-        successCount++;
-      } catch (err) {
-        errorCount++;
+
+        if (existingEmp.rows.length > 0) {
+          skippedCount++;
+          seenInBatch.add(last10);
+          continue;
+        }
+
+        if (r.aadhar_number && r.aadhar_number.length === 12) {
+          const existingAadhar = await query('SELECT id FROM employees WHERE aadhar_number = $1', [r.aadhar_number]);
+          if (existingAadhar.rows.length > 0) {
+            skippedCount++;
+            seenInBatch.add(last10);
+            continue;
+          }
+        }
+
+        seenInBatch.add(last10);
+
+        const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase();
+        const employee_id = `EMP-${randomHex}`;
+        const date_of_joining = new Date().toISOString().split('T')[0];
+
+        if (r.aadhar_number || r.pan_number) {
+          await query(
+            `INSERT INTO employees (employee_id, full_name, phone, email, address, city, date_of_joining, aadhar_number, pan_number)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [employee_id, r.full_name, r.phone, r.email || null, r.address || null, r.city || null, date_of_joining, r.aadhar_number || null, r.pan_number || null]
+          );
+        } else {
+          await query(
+            `INSERT INTO employees (employee_id, full_name, phone, email, address, city, date_of_joining)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [employee_id, r.full_name, r.phone, r.email || null, r.address || null, r.city || null, date_of_joining]
+          );
+        }
+        importedCount++;
+      } catch (e) {
+        logger.error('Import employee row error:', e);
+        skippedCount++;
       }
     }
 
-    // Clean up uploaded temp file
-    try { fs.unlinkSync(req.file.path); } catch (_) {}
+    // Cleanup the uploaded file
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+    await logAudit(req, 'employees', null, 'create', `Bulk imported ${importedCount} employees`);
 
-    res.json({ success: true, message: `Import complete: ${successCount} added, ${errorCount} skipped.` });
+    res.json({
+      success: true,
+      message: `Successfully imported ${importedCount} employees.${skippedCount > 0 ? ` Skipped ${skippedCount} duplicate/invalid rows.` : ''}`,
+      data: { imported: importedCount, skipped: skippedCount }
+    });
   } catch (error) {
-    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
-    logger.error('Import employees error:', error);
-    res.status(500).json({ success: false, message: error.message || 'Failed to import employees' });
+    logger.error('Import error:', error);
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    res.status(500).json({ success: false, message: 'Failed to process the import file' });
   }
 });
 

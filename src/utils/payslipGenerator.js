@@ -3,6 +3,24 @@ const PDFDocument = require('pdfkit');
 const path = require('path');
 const fs = require('fs');
 
+const formatAadhar = (val) => {
+  if (!val) return 'N/A';
+  const str = String(val).trim();
+  const digits = str.replace(/\D/g, '');
+  if (digits.length === 12) {
+    return `${digits.slice(0, 4)}-${digits.slice(4, 8)}-${digits.slice(8, 12)}`;
+  }
+  if (str.includes('X') || str.includes('x')) {
+    const clean = str.replace(/[^0-9a-zA-Z]/g, '').slice(0, 12);
+    const parts = [];
+    for (let i = 0; i < clean.length; i += 4) {
+      parts.push(clean.substring(i, i + 4));
+    }
+    return parts.join('-');
+  }
+  return str;
+};
+
 function generatePayslipPDF(payroll, employee, client, agencySettings, dataCallback, endCallback) {
   const doc = new PDFDocument({ margin: 50 });
   
@@ -76,7 +94,7 @@ function generatePayslipPDF(payroll, employee, client, agencySettings, dataCallb
     .text(`Employee ID: ${employee.employee_id}`, 50, empTop + 35)
     .text(`Designation: ${employee.designation}`, 50, empTop + 50)
     .text(`Assigned Site: ${client ? client.name : 'Unassigned'}`, 50, empTop + 65)
-    .text(`UAN / PF No: ${employee.aadhar_number || 'N/A'}`, 50, empTop + 80)
+    .text(`Aadhar No: ${formatAadhar(employee.aadhar_number)}`, 50, empTop + 80)
     .text(`PAN: ${employee.pan_number || 'N/A'}`, 50, empTop + 95);
 
   // Attendance Details (Right)

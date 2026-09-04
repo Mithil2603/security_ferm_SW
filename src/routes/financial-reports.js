@@ -15,7 +15,7 @@ const reportService = require('../services/reports/financialReportingService');
 const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/errorLogger');
 
 router.use(authMiddleware);
-router.use(requirePermission('manage_payroll'));
+router.use(requirePermission('manage_payroll', 'view_reports', 'view_pl_account', 'view_balance_sheet'));
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Cash Flow Statement

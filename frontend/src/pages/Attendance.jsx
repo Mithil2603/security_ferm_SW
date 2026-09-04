@@ -1,22 +1,31 @@
-import { useState, useEffect, useRef } from 'react';
-import { CalendarCheck, CalendarDays, Check, X, Clock, AlertCircle, Users, X as XIcon, Upload, FileSpreadsheet } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { CalendarCheck, CalendarDays, Check, X, Clock, AlertCircle, Users, X as XIcon, FileSpreadsheet } from 'lucide-react';
 import api from '../services/api';
 import { format } from 'date-fns';
 import AttendanceImportModal from '../components/AttendanceImportModal';
 
 export default function Attendance() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialDate = searchParams.get('date') || searchParams.get('from_date') || format(new Date(), 'yyyy-MM-dd');
+
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [dateFilter, setDateFilter] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [dateFilter, setDateFilter] = useState(initialDate);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [employees, setEmployees] = useState([]);
   const [bulkRecords, setBulkRecords] = useState([]);
-  const [bulkDate, setBulkDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [bulkDate, setBulkDate] = useState(initialDate);
   const [submitting, setSubmitting] = useState(false);
   const [bulkResult, setBulkResult] = useState(null);
-  const [uploadingCsv, setUploadingCsv] = useState(false);
-  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    const qDate = searchParams.get('date') || searchParams.get('from_date');
+    if (qDate && qDate !== dateFilter) {
+      setDateFilter(qDate);
+    }
+  }, [searchParams]);
 
   const fetchAttendance = async () => {
     try {
@@ -84,28 +93,6 @@ export default function Attendance() {
       setBulkResult({ success: false, message: err.message || 'Failed to submit bulk attendance' });
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const handleCSVUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    setUploadingCsv(true);
-    const formData = new FormData();
-    formData.append('file', file);
-
-    try {
-      const response = await api.post('/attendance/bulk-upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
-      alert(response.message || 'Upload successful');
-      fetchAttendance();
-    } catch (err) {
-      alert(err.message || 'Failed to upload CSV');
-    } finally {
-      setUploadingCsv(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -297,8 +284,12 @@ export default function Attendance() {
       <AttendanceImportModal 
         isOpen={isUploadModalOpen} 
         onClose={() => setIsUploadModalOpen(false)} 
-        onImportSuccess={() => {
-          fetchAttendance();
+        onImportSuccess={(info) => {
+          if (info && info.datesMarked && info.datesMarked.length > 0) {
+            setDateFilter(info.datesMarked[0]);
+          } else {
+            fetchAttendance();
+          }
         }} 
       />
     </div>

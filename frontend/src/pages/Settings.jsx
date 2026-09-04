@@ -436,24 +436,68 @@ function TeamManagementTab() {
   const [isPermissionsOpen, setIsPermissionsOpen] = useState(null); // holds the user object being edited
   const [selectedPermissions, setSelectedPermissions] = useState([]);
 
+  const ROLE_DEFAULTS = {
+    admin: ['*'],
+    manager: [
+      'manage_employees',
+      'manage_invoices',
+      'manage_expenses',
+      'view_reports',
+      'view_vouchers',
+      'create_vouchers',
+      'edit_vouchers',
+      'approve_vouchers',
+      'manage_payroll',
+      'view_balance_sheet',
+      'view_pl_account',
+      'manage_bank_accounts',
+      'manage_bank_reconciliation',
+      'manage_budgets'
+    ],
+    accountant: [
+      'manage_invoices',
+      'manage_payroll',
+      'manage_expenses',
+      'view_vouchers',
+      'create_vouchers',
+      'edit_vouchers',
+      'delete_vouchers',
+      'approve_vouchers',
+      'view_reports',
+      'view_pl_account',
+      'view_balance_sheet',
+      'manage_bank_accounts',
+      'manage_bank_reconciliation',
+      'manage_budgets'
+    ],
+    employee: [
+      'view_reports'
+    ]
+  };
+
   const AVAILABLE_PERMISSIONS = [
     { id: 'manage_invoices', label: 'Manage Invoices & Clients', desc: 'Create, edit, and delete invoices and client records' },
-    { id: 'manage_expenses', label: 'Manage Expenses', desc: 'Record and approve/reject company expenses' },
-    { id: 'manage_employees', label: 'Manage Employees', desc: 'Add, edit, and track attendance of security guards' },
-    { id: 'manage_payroll', label: 'Manage Payroll', desc: 'Generate and manage salary slips' },
+    { id: 'manage_expenses', label: 'Manage Expenses & Vendors', desc: 'Record and approve/reject company expenses, vendor statements' },
+    { id: 'manage_employees', label: 'Manage Employees & Attendance', desc: 'Add, edit, and track attendance of security guards' },
+    { id: 'manage_payroll', label: 'Manage Payroll & PF/Gratuity', desc: 'Generate and manage salary slips, PF/gratuity, employee ledger' },
     { id: 'view_vouchers', label: 'View Vouchers', desc: 'Can view the list of vouchers and details' },
     { id: 'create_vouchers', label: 'Create Vouchers', desc: 'Can create new vouchers (Draft state)' },
     { id: 'edit_vouchers', label: 'Edit Vouchers', desc: 'Can edit existing pending vouchers' },
-    { id: 'delete_vouchers', label: 'Delete Vouchers', desc: 'Can cancel or delete vouchers' },
+    { id: 'delete_vouchers', label: 'Delete/Cancel Vouchers', desc: 'Can cancel or delete vouchers' },
     { id: 'approve_vouchers', label: 'Approve Vouchers', desc: 'Can approve vouchers and post them to ledger' },
-    { id: 'view_reports', label: 'View Analytics & Reports', desc: 'Access advanced business analytics and reports' },
+    { id: 'view_reports', label: 'View Analytics & Reports', desc: 'Access advanced business analytics, tax reports, financial reports' },
     { id: 'view_pl_account', label: 'View Profit & Loss Account', desc: 'Access the P&L statement' },
-    { id: 'view_dev_errors', label: 'View Developer Error Console', desc: 'Access system diagnostics and error logs' },
-    { id: 'manage_settings', label: 'Manage System Settings', desc: 'Configure core agency settings and logo' }
+    { id: 'view_balance_sheet', label: 'View Balance Sheet', desc: 'Access the balance sheet statement' },
+    { id: 'manage_bank_accounts', label: 'Manage Bank Accounts', desc: 'Add and configure bank accounts' },
+    { id: 'manage_bank_reconciliation', label: 'Manage Bank Reconciliation', desc: 'Reconcile bank statements against ledger entries' },
+    { id: 'manage_budgets', label: 'Manage Budgets', desc: 'Configure budgets and monitor variance vs actuals' },
+    { id: 'manage_settings', label: 'Manage System Settings & Logs', desc: 'Configure core agency settings, logo, and view audit logs' },
+    { id: 'view_dev_errors', label: 'View Developer Error Console', desc: 'Access system diagnostics and error logs' }
   ];
 
   const [addForm, setAddForm] = useState({
-    full_name: '', email: '', password: '', role: 'manager', phone: ''
+    full_name: '', email: '', password: '', role: 'manager', phone: '',
+    permissions: [...ROLE_DEFAULTS.manager]
   });
   const [resetPwd, setResetPwd] = useState('');
   const [toast, setToast] = useState({ show: false, message: '', type: 'error' });
@@ -495,7 +539,7 @@ function TeamManagementTab() {
     try {
       await api.post('/auth/users', addForm);
       setIsAddOpen(false);
-      setAddForm({ full_name: '', email: '', password: '', role: 'manager', phone: '' });
+      setAddForm({ full_name: '', email: '', password: '', role: 'manager', phone: '', permissions: [...ROLE_DEFAULTS.manager] });
       showToast('Team member added successfully!', 'success');
       fetchUsers();
     } catch (err) {
@@ -572,7 +616,7 @@ function TeamManagementTab() {
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">Invite managers, accountants, and staff to SecurManage</p>
           </div>
-          <button onClick={() => { setIsAddOpen(true); setError(''); }} className="flex items-center gap-2 bg-teal-600 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-teal-700 transition-colors shadow-sm">
+          <button onClick={() => { setIsAddOpen(true); setAddForm({ full_name: '', email: '', password: '', role: 'manager', phone: '', permissions: [...ROLE_DEFAULTS.manager] }); setError(''); }} className="flex items-center gap-2 bg-teal-600 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-teal-700 transition-colors shadow-sm cursor-pointer">
             <UserPlus className="w-4 h-4" /> Add Team Member
           </button>
         </div>
@@ -636,7 +680,18 @@ function TeamManagementTab() {
                         <button onClick={() => toggleUser(u.id)} className={`p-1.5 rounded-lg transition-colors ${u.is_active ? 'text-slate-400 hover:text-red-600 hover:bg-red-50' : 'text-slate-400 hover:text-emerald-600 hover:bg-emerald-50'}`} title={u.is_active ? 'Disable' : 'Enable'}>
                           {u.is_active ? <ShieldOff className="w-4 h-4" /> : <ShieldCheck className="w-4 h-4" />}
                         </button>
-                        <button onClick={() => { setIsPermissionsOpen(u); setSelectedPermissions(u.permissions ? (typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions) : []); setError(''); }} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors" title="Permissions">
+                        <button onClick={() => {
+                          let initialPerms = [];
+                          if (u.permissions) {
+                            initialPerms = typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions;
+                          }
+                          if (!Array.isArray(initialPerms) || initialPerms.length === 0) {
+                            initialPerms = ROLE_DEFAULTS[u.role] || [];
+                          }
+                          setIsPermissionsOpen(u);
+                          setSelectedPermissions(initialPerms);
+                          setError('');
+                        }} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer" title="Permissions">
                           <Settings2 className="w-4 h-4" />
                         </button>
                         <button onClick={() => { setIsResetOpen(u.id); setResetPwd(''); setError(''); }} className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Reset Password">
@@ -682,7 +737,18 @@ function TeamManagementTab() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Role *</label>
-                  <select value={addForm.role} onChange={e => setAddForm({...addForm, role: e.target.value})} className={inputCls}>
+                  <select
+                    value={addForm.role}
+                    onChange={e => {
+                      const newRole = e.target.value;
+                      setAddForm(prev => ({
+                        ...prev,
+                        role: newRole,
+                        permissions: ROLE_DEFAULTS[newRole] ? [...ROLE_DEFAULTS[newRole]] : []
+                      }));
+                    }}
+                    className={inputCls}
+                  >
                     <option value="manager">Manager</option>
                     <option value="accountant">Accountant</option>
                     <option value="employee">Employee</option>
@@ -694,6 +760,56 @@ function TeamManagementTab() {
                   <input type="tel" maxLength="10" placeholder="10-digit number" value={addForm.phone} onChange={e => setAddForm(prev => ({ ...prev, phone: sanitizePhone(e.target.value) }))} className={inputCls} />
                 </div>
               </div>
+
+              {addForm.role !== 'admin' && (
+                <div className="pt-1">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Module Rights</label>
+                    <div className="flex gap-2 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setAddForm(prev => ({ ...prev, permissions: AVAILABLE_PERMISSIONS.map(p => p.id) }))}
+                        className="text-teal-600 hover:underline font-medium cursor-pointer"
+                      >
+                        Select All
+                      </button>
+                      <span className="text-slate-300">•</span>
+                      <button
+                        type="button"
+                        onClick={() => setAddForm(prev => ({ ...prev, permissions: ROLE_DEFAULTS[addForm.role] || [] }))}
+                        className="text-slate-500 hover:underline font-medium cursor-pointer"
+                      >
+                        Role Defaults
+                      </button>
+                    </div>
+                  </div>
+                  <div className="max-h-40 overflow-y-auto space-y-1.5 p-2 bg-slate-50 border border-slate-200 rounded-xl">
+                    {AVAILABLE_PERMISSIONS.map(p => {
+                      const isChecked = addForm.permissions?.includes(p.id);
+                      return (
+                        <label key={p.id} className={`flex items-start gap-2 p-2 rounded-lg border text-xs cursor-pointer transition-colors ${isChecked ? 'bg-teal-50/80 border-teal-200' : 'bg-white border-slate-200 hover:border-slate-300'}`}>
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 w-3.5 h-3.5 text-teal-600 rounded border-slate-300 focus:ring-teal-500"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setAddForm(prev => ({ ...prev, permissions: [...(prev.permissions || []), p.id] }));
+                              } else {
+                                setAddForm(prev => ({ ...prev, permissions: (prev.permissions || []).filter(id => id !== p.id) }));
+                              }
+                            }}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <span className={`font-medium ${isChecked ? 'text-teal-900' : 'text-slate-800'}`}>{p.label}</span>
+                            <p className="text-[10px] text-slate-400 truncate">{p.desc}</p>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <div className="flex justify-end gap-3 pt-2">
                 <button type="button" onClick={() => setIsAddOpen(false)} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
                 <button type="submit" disabled={submitting} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 shadow-sm disabled:opacity-50 flex items-center gap-2">
@@ -742,8 +858,27 @@ function TeamManagementTab() {
               <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2"><Settings2 className="w-5 h-5 text-indigo-600" /> Manage Permissions</h3>
               <button onClick={() => setIsPermissionsOpen(null)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
-            <div className="px-6 py-3 bg-indigo-50/50 border-b border-indigo-100/50 text-sm text-indigo-800 font-medium shrink-0">
-              Updating access for: {isPermissionsOpen.full_name} ({isPermissionsOpen.role})
+            <div className="px-6 py-3 bg-indigo-50/50 border-b border-indigo-100/50 text-sm text-indigo-800 font-medium shrink-0 flex flex-wrap justify-between items-center gap-2">
+              <div>
+                Access for: <span className="font-bold">{isPermissionsOpen.full_name}</span> ({isPermissionsOpen.role})
+              </div>
+              <div className="flex gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setSelectedPermissions(AVAILABLE_PERMISSIONS.map(p => p.id))}
+                  className="text-teal-700 hover:underline font-semibold cursor-pointer"
+                >
+                  Select All
+                </button>
+                <span className="text-indigo-300">•</span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedPermissions(ROLE_DEFAULTS[isPermissionsOpen.role] || [])}
+                  className="text-indigo-700 hover:underline font-semibold cursor-pointer"
+                >
+                  Role Defaults
+                </button>
+              </div>
             </div>
             
             <form onSubmit={handleUpdatePermissions} className="p-6 overflow-y-auto space-y-4 flex-1 min-h-0">

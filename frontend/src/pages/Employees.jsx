@@ -1,5 +1,10 @@
 import { useState, useEffect } from 'react';
-import { UserSquare2, Plus, Search, Edit2, Trash2, CheckCircle2, XCircle, ShieldCheck, X, Upload, FileText, Download, FileSpreadsheet, ExternalLink } from 'lucide-react';
+import { 
+  UserSquare2, Plus, Search, Edit2, Trash2, CheckCircle2, XCircle, 
+  ShieldCheck, X, Upload, FileText, Download, 
+  ExternalLink, Eye, Phone, Mail, MapPin, Calendar, CreditCard, Building, User,
+  ArrowUpDown, ArrowUp, ArrowDown
+} from 'lucide-react';
 import api from '../services/api';
 import { getServerBaseUrl, getApiBaseUrl } from '../utils/apiUrl';
 import { format } from 'date-fns';
@@ -11,6 +16,36 @@ import Toast from '../components/Toast';
 import { toast, confirmDialog } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
 import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
+import { formatAadhar, maskAadhar, maskPan, maskBankAccount } from '../utils/formatters';
+
+const formatSafeJoiningDate = (dateVal) => {
+  if (!dateVal) return { formatted: '—', tenure: '' };
+  try {
+    const d = new Date(dateVal);
+    if (isNaN(d.getTime())) return { formatted: '—', tenure: '' };
+    
+    const formatted = format(d, 'dd MMM yyyy');
+    
+    // Calculate tenure
+    const now = new Date();
+    const diffMonths = (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
+    let tenure = '';
+    if (diffMonths < 0) {
+      tenure = 'Joining upcoming';
+    } else if (diffMonths < 1) {
+      tenure = 'Joined this month';
+    } else if (diffMonths < 12) {
+      tenure = `${diffMonths} mo${diffMonths > 1 ? 's' : ''} service`;
+    } else {
+      const yrs = Math.floor(diffMonths / 12);
+      const remMonths = diffMonths % 12;
+      tenure = remMonths > 0 ? `${yrs}y ${remMonths}m service` : `${yrs} yr${yrs > 1 ? 's' : ''} service`;
+    }
+    return { formatted, tenure };
+  } catch {
+    return { formatted: '—', tenure: '' };
+  }
+};
 
 const emptyForm = {
   full_name: '', phone: '', email: '', date_of_birth: '', address: '', city: '',
@@ -26,10 +61,14 @@ export default function Employees() {
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [sortBy, setSortBy] = useState('name');
+  const [sortOrder, setSortOrder] = useState('asc');
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEmp, setEditingEmp] = useState(null);
+  const [viewingEmp, setViewingEmp] = useState(null);
+  const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [formData, setFormData] = useState({ ...emptyForm });
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -43,7 +82,7 @@ export default function Employees() {
   const fetchEmployees = async () => {
     try {
       setLoading(true);
-      const response = await api.get(`/employees?search=${searchTerm}&page=${page}&limit=20`);
+      const response = await api.get(`/employees?search=${searchTerm}&sort_by=${sortBy}&order=${sortOrder}&page=${page}&limit=20`);
       setEmployees(response.data || []);
       if (response.pagination) setPagination(response.pagination);
     } catch (err) {
@@ -75,9 +114,9 @@ export default function Employees() {
     }
   };
 
-  useEffect(() => { fetchEmployees(); }, [searchTerm, page]);
+  useEffect(() => { fetchEmployees(); }, [searchTerm, page, sortBy, sortOrder]);
 
-  useEffect(() => { setPage(1); }, [searchTerm]);
+  useEffect(() => { setPage(1); }, [searchTerm, sortBy, sortOrder]);
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -86,8 +125,8 @@ export default function Employees() {
       return;
     }
     if (name === 'aadhar_number') {
-      const cleanAadhar = value.replace(/\D/g, '').slice(0, 12);
-      setFormData(prev => ({ ...prev, aadhar_number: cleanAadhar }));
+      const formatted = formatAadhar(value);
+      setFormData(prev => ({ ...prev, aadhar_number: formatted }));
       return;
     }
     if (name === 'pan_number') {
@@ -96,6 +135,12 @@ export default function Employees() {
       return;
     }
     setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
+  };
+
+  const openViewModal = (emp) => {
+    setViewingEmp(emp);
+    fetchDocuments(emp.id);
+    setIsViewModalOpen(true);
   };
 
   const openCreateModal = () => {
@@ -112,7 +157,7 @@ export default function Employees() {
       full_name: emp.full_name || '', phone: emp.phone || '', email: emp.email || '',
       date_of_birth: emp.date_of_birth ? emp.date_of_birth.substring(0, 10) : '',
       address: emp.address || '', city: emp.city || '',
-      aadhar_number: emp.aadhar_number || '', pan_number: emp.pan_number || '',
+      aadhar_number: formatAadhar(emp.aadhar_number || ''), pan_number: emp.pan_number || '',
       bank_account_number: emp.bank_account_number || '', bank_ifsc_code: emp.bank_ifsc_code || '',
       bank_name: emp.bank_name || '', bank_account_holder_name: emp.bank_account_holder_name || '',
       date_of_joining: emp.date_of_joining ? emp.date_of_joining.substring(0, 10) : '',
@@ -153,7 +198,7 @@ export default function Employees() {
       if (formData.aadhar_number) {
         const cleanAadhar = formData.aadhar_number.replace(/\D/g, '');
         if (cleanAadhar.length > 0 && cleanAadhar.length !== 12 && !cleanAadhar.startsWith('X')) {
-          const msg = 'Aadhar number must be exactly 12 digits';
+          const msg = 'Aadhar number must be exactly 12 digits (e.g. 1234-1234-1234)';
           setError(msg);
           toast.error(msg);
           return;
@@ -265,7 +310,7 @@ export default function Employees() {
       console.error('Download error:', err);
       // Fallback: server attachment endpoint or direct anchor
       try {
-        const empId = editingEmp?.id || doc.employee_id;
+        const empId = viewingEmp?.id || editingEmp?.id || doc.employee_id;
         const downloadUrl = `${getApiBaseUrl()}/employees/${empId}/docs/${doc.id}/download`;
         const a = document.createElement('a');
         a.href = downloadUrl;
@@ -311,9 +356,9 @@ export default function Employees() {
       'Phone': e.phone,
       'Client Site': e.client_name || 'Unassigned',
       'Salary Structure': e.salary_structure_name || 'None',
-      'Joining Date': format(new Date(e.date_of_joining), 'yyyy-MM-dd'),
+      'Joining Date': formatSafeJoiningDate(e.date_of_joining).formatted,
       'Status': e.is_active ? 'Active' : 'Inactive',
-      'Aadhar': e.aadhar_number,
+      'Aadhar': formatAadhar(e.aadhar_number),
       'Bank Account': e.bank_account_number,
       'IFSC': e.bank_ifsc_code
     }));
@@ -321,29 +366,6 @@ export default function Employees() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Employees");
     XLSX.writeFile(wb, `Watchmen_Export_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
-  };
-
-  const handleDownloadSampleTemplate = () => {
-    const sampleData = [
-      {
-        "Full Name": "Rajesh Kumar",
-        "Phone": "9876500001",
-        "Email": "rajesh.kumar@example.com",
-        "Address": "12 Station Road",
-        "City": "Ahmedabad"
-      },
-      {
-        "Full Name": "Vikram Singh",
-        "Phone": "9876500002",
-        "Email": "vikram.singh@example.com",
-        "Address": "45 Green Park",
-        "City": "Ahmedabad"
-      }
-    ];
-    const worksheet = XLSX.utils.json_to_sheet(sampleData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Employees");
-    XLSX.writeFile(workbook, "Sample_Employees_Import_Template.xlsx");
   };
 
   const inputCls = "w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm";
@@ -359,14 +381,6 @@ export default function Employees() {
           <p className="text-slate-500 text-sm mt-1">Manage personnel, deployments, and salary structures.</p>
         </div>
         <div className="flex gap-2 flex-wrap justify-end">
-          <button
-            onClick={handleDownloadSampleTemplate}
-            className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2 border border-indigo-200"
-            title="Download pre-formatted Excel template for importing"
-          >
-            <FileSpreadsheet className="w-4 h-4 text-indigo-600" />
-            Sample Template
-          </button>
           <button onClick={() => setIsImportModalOpen(true)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2 border border-slate-300">
             <Upload className="w-4 h-4" />
             Import Excel
@@ -382,11 +396,31 @@ export default function Employees() {
         </div>
       </div>
 
-      <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col sm:flex-row gap-4">
+      <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between">
         <div className="relative flex-1">
           <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input type="text" placeholder="Search by name, ID, or phone..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all" />
+            className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm" />
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <label className="text-xs font-semibold text-slate-500 flex items-center gap-1.5 whitespace-nowrap">
+            <Calendar className="w-3.5 h-3.5 text-teal-600" />
+            Sort:
+          </label>
+          <select
+            value={`${sortBy}_${sortOrder}`}
+            onChange={(e) => {
+              const [sb, so] = e.target.value.split('_');
+              setSortBy(sb);
+              setSortOrder(so);
+            }}
+            className="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all shadow-xs"
+          >
+            <option value="name_asc">Name (A → Z)</option>
+            <option value="name_desc">Name (Z → A)</option>
+            <option value="joining_date_desc">Joining Date (Newest First)</option>
+            <option value="joining_date_asc">Joining Date (Oldest First)</option>
+          </select>
         </div>
       </div>
 
@@ -396,6 +430,27 @@ export default function Employees() {
             <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200">
               <tr>
                 <th className="px-6 py-4 font-semibold">Employee</th>
+                <th 
+                  className="px-6 py-4 font-semibold cursor-pointer hover:text-teal-600 transition-colors select-none group/th"
+                  onClick={() => {
+                    if (sortBy === 'joining_date') {
+                      setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc');
+                    } else {
+                      setSortBy('joining_date');
+                      setSortOrder('desc');
+                    }
+                  }}
+                  title="Click to sort by Joining Date"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span>Joining Date</span>
+                    {sortBy === 'joining_date' ? (
+                      sortOrder === 'desc' ? <ArrowDown className="w-3.5 h-3.5 text-teal-600" /> : <ArrowUp className="w-3.5 h-3.5 text-teal-600" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 opacity-50 group-hover/th:opacity-100 transition-opacity" />
+                    )}
+                  </div>
+                </th>
                 <th className="px-6 py-4 font-semibold">Assignment</th>
                 <th className="px-6 py-4 font-semibold">Salary Structure</th>
                 <th className="px-6 py-4 font-semibold">Status</th>
@@ -405,12 +460,12 @@ export default function Employees() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan="5">
-                    <TableSkeleton columns={5} rows={10} />
+                  <td colSpan="6">
+                    <TableSkeleton columns={6} rows={10} />
                   </td>
                 </tr>
               ) : employees.length === 0 ? (
-                <tr><td colSpan="5" className="px-6 py-12 text-center text-slate-500">
+                <tr><td colSpan="6" className="px-6 py-12 text-center text-slate-500">
                   <div className="flex justify-center mb-3"><UserSquare2 className="w-10 h-10 text-slate-300" /></div>
                   <p className="font-medium text-slate-600 mb-1">No employees found</p>
                 </td></tr>
@@ -418,17 +473,39 @@ export default function Employees() {
                 employees.map((emp) => (
                   <tr key={emp.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 font-bold border border-slate-200">
+                      <div 
+                        className="flex items-center gap-3 cursor-pointer group/emp"
+                        onClick={() => openViewModal(emp)}
+                        title="Click to view details"
+                      >
+                        <div className="w-10 h-10 rounded-full bg-slate-100 group-hover/emp:bg-teal-100 group-hover/emp:text-teal-700 flex items-center justify-center text-slate-600 font-bold border border-slate-200 transition-colors">
                           {emp.full_name.charAt(0)}
                         </div>
                         <div>
-                          <div className="font-semibold text-slate-900">{emp.full_name}</div>
+                          <div className="font-semibold text-slate-900 group-hover/emp:text-teal-600 transition-colors">{emp.full_name}</div>
                           <div className="text-slate-500 text-xs mt-0.5 flex items-center gap-1 font-mono">
                             <ShieldCheck className="w-3 h-3 text-teal-600" /> {emp.employee_id}
                           </div>
                         </div>
                       </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      {(() => {
+                        const { formatted, tenure } = formatSafeJoiningDate(emp.date_of_joining);
+                        return (
+                          <div>
+                            <div className="flex items-center gap-1.5 font-medium text-slate-800">
+                              <Calendar className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                              <span>{formatted}</span>
+                            </div>
+                            {tenure && (
+                              <div className="text-[11px] text-slate-500 mt-0.5 pl-5 font-normal">
+                                {tenure}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-6 py-4">
                       {emp.client_name ? (
@@ -463,6 +540,13 @@ export default function Employees() {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex justify-end gap-2">
+                        <button 
+                          onClick={() => openViewModal(emp)} 
+                          className="p-1.5 text-slate-400 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition-colors" 
+                          title="View Details"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
                         <button onClick={() => openEditModal(emp)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Edit">
                           <Edit2 className="w-4 h-4" />
                         </button>
@@ -568,8 +652,8 @@ export default function Employees() {
                     name="aadhar_number"
                     value={formData.aadhar_number}
                     onChange={handleInputChange}
-                    maxLength="12"
-                    placeholder="12-digit number"
+                    maxLength="14"
+                    placeholder="1234-1234-1234"
                     disabled={editingEmp && !isAdmin}
                     className={(editingEmp && !isAdmin) ? "w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-100 text-slate-700 font-mono cursor-not-allowed select-none" : inputCls}
                   />
@@ -612,8 +696,21 @@ export default function Employees() {
               <h4 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Employment Details</h4>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Joining Date *</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-sm font-medium text-slate-700">Joining Date *</label>
+                    <button
+                      type="button"
+                      onClick={() => setFormData(prev => ({ ...prev, date_of_joining: format(new Date(), 'yyyy-MM-dd') }))}
+                      className="text-[11px] font-semibold text-teal-600 hover:text-teal-700 hover:underline cursor-pointer"
+                      title="Set joining date to today"
+                    >
+                      Today
+                    </button>
+                  </div>
                   <input required type="date" name="date_of_joining" value={formData.date_of_joining} onChange={handleInputChange} className={inputCls} />
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Official date the watchman commences duty.
+                  </p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Designation</label>
@@ -773,14 +870,337 @@ export default function Employees() {
           </div>
         </div>
       )}
+
+      {/* View Employee Details Modal */}
+      {isViewModalOpen && viewingEmp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl overflow-hidden animate-slide-up max-h-[90vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
+              <div className="flex items-center gap-2">
+                <Eye className="w-5 h-5 text-teal-600" />
+                <h3 className="text-lg font-bold text-slate-800">Employee Details</h3>
+                <span className="text-xs font-mono text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
+                  {viewingEmp.employee_id}
+                </span>
+              </div>
+              <button 
+                onClick={() => { setIsViewModalOpen(false); setViewingEmp(null); }} 
+                className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 rounded-lg transition-colors"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto flex-1 min-h-0 space-y-6">
+              {/* Profile Card Banner */}
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl bg-gradient-to-r from-teal-50/80 via-slate-50 to-indigo-50/50 border border-teal-100/80">
+                <div className="flex items-center gap-4">
+                  <div className="w-14 h-14 rounded-2xl bg-teal-600 text-white flex items-center justify-center text-2xl font-bold shadow-sm shadow-teal-600/30 shrink-0">
+                    {viewingEmp.full_name?.charAt(0) || 'E'}
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-slate-900">{viewingEmp.full_name}</h2>
+                    <div className="flex flex-wrap items-center gap-2 mt-1">
+                      <span className="text-xs font-medium text-slate-600 bg-white px-2 py-0.5 rounded-md border border-slate-200">
+                        {viewingEmp.designation || 'Watchman'}
+                      </span>
+                      {viewingEmp.client_name ? (
+                        <span className="text-xs font-medium text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200 flex items-center gap-1">
+                          <Building className="w-3 h-3" /> {viewingEmp.client_name}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-slate-400 italic bg-white px-2 py-0.5 rounded-md border border-slate-200">
+                          Unassigned
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex sm:flex-col items-center sm:items-end gap-2 w-full sm:w-auto justify-between border-t sm:border-t-0 pt-3 sm:pt-0 border-slate-200/60">
+                  {viewingEmp.is_active ? (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 border border-emerald-200">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Active
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
+                      <XCircle className="w-3.5 h-3.5" /> Inactive
+                    </span>
+                  )}
+                  {(() => {
+                    const { formatted, tenure } = formatSafeJoiningDate(viewingEmp.date_of_joining);
+                    return (
+                      <div className="flex flex-col items-start sm:items-end">
+                        <span className="text-xs text-slate-600 font-medium flex items-center gap-1">
+                          <Calendar className="w-3.5 h-3.5 text-teal-600" />
+                          Joined {formatted}
+                        </span>
+                        {tenure && (
+                          <span className="text-[10px] text-teal-700 font-semibold bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200 mt-0.5">
+                            {tenure}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* KYC & Identity Section (Aadhaar & PAN Masked) */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-teal-600" />
+                    KYC & Identity
+                  </h4>
+                  <span className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full font-medium flex items-center gap-1">
+                    🔒 Masked (Last 4 digits shown)
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">Aadhar Card Number</span>
+                    <div className="font-mono text-base font-bold text-slate-800 tracking-wider">
+                      {maskAadhar(viewingEmp.aadhar_number)}
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">PAN Card Number</span>
+                    <div className="font-mono text-base font-bold text-slate-800 tracking-wider">
+                      {maskPan(viewingEmp.pan_number)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Personal Information */}
+              <div>
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3 flex items-center gap-1.5">
+                  <User className="w-4 h-4 text-teal-600" />
+                  Personal Information
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">Phone Number</span>
+                    <span className="text-sm font-semibold text-slate-800 flex items-center gap-1.5 font-mono">
+                      <Phone className="w-3.5 h-3.5 text-slate-400" />
+                      {viewingEmp.phone || '—'}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">Email Address</span>
+                    <span className="text-sm font-semibold text-slate-800 flex items-center gap-1.5 truncate">
+                      <Mail className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      <span className="truncate">{viewingEmp.email || '—'}</span>
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">Date of Birth</span>
+                    <span className="text-sm font-semibold text-slate-800">
+                      {viewingEmp.date_of_birth ? format(new Date(viewingEmp.date_of_birth), 'dd MMM yyyy') : '—'}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">City</span>
+                    <span className="text-sm font-semibold text-slate-800">{viewingEmp.city || '—'}</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 sm:col-span-2">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">Residential Address</span>
+                    <span className="text-sm font-medium text-slate-800 flex items-start gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-slate-400 mt-0.5 shrink-0" />
+                      <span>{viewingEmp.address || '—'}</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Employment & Deployment */}
+              <div>
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3 flex items-center gap-1.5">
+                  <Building className="w-4 h-4 text-teal-600" />
+                  Employment & Compensation
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">Designation</span>
+                    <span className="text-sm font-semibold text-slate-800">{viewingEmp.designation || 'Watchman'}</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">Assigned Client Site</span>
+                    <span className="text-sm font-semibold text-slate-800">{viewingEmp.client_name || 'Unassigned'}</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">Salary Structure</span>
+                    <span className="text-sm font-semibold text-slate-800">{viewingEmp.salary_structure_name || 'None'}</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">Base Monthly Salary</span>
+                    <span className="text-sm font-bold text-teal-700">
+                      {viewingEmp.base_salary ? `₹${parseFloat(viewingEmp.base_salary).toLocaleString('en-IN')}` : '—'}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 sm:col-span-2">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">Date of Joining</span>
+                    {(() => {
+                      const { formatted, tenure } = formatSafeJoiningDate(viewingEmp.date_of_joining);
+                      return (
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                          <span className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
+                            <Calendar className="w-4 h-4 text-teal-600" />
+                            {formatted}
+                          </span>
+                          {tenure && (
+                            <span className="text-xs font-medium text-teal-700 bg-teal-50 px-2 py-0.5 rounded-md border border-teal-200">
+                              {tenure}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              </div>
+
+              {/* Bank Details */}
+              <div>
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3 flex items-center gap-1.5">
+                  <CreditCard className="w-4 h-4 text-teal-600" />
+                  Bank Details
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">Bank Name</span>
+                    <span className="text-sm font-semibold text-slate-800">{viewingEmp.bank_name || '—'}</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">Account Number</span>
+                    <span className="text-sm font-mono font-semibold text-slate-800">
+                      {maskBankAccount(viewingEmp.bank_account_number)}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">IFSC Code</span>
+                    <span className="text-sm font-mono font-semibold text-slate-800">{viewingEmp.bank_ifsc_code || '—'}</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">Account Holder</span>
+                    <span className="text-sm font-semibold text-slate-800">{viewingEmp.bank_account_holder_name || '—'}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Emergency Contact & Notes */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-500 block mb-2">Emergency Contact</span>
+                  <div className="space-y-1">
+                    <div className="text-sm font-semibold text-slate-800">{viewingEmp.emergency_contact_name || 'No contact provided'}</div>
+                    {viewingEmp.emergency_contact_phone && (
+                      <div className="text-xs text-slate-600 font-mono flex items-center gap-1.5">
+                        <Phone className="w-3 h-3 text-slate-400" />
+                        {viewingEmp.emergency_contact_phone}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-500 block mb-2">Notes</span>
+                  <p className="text-xs text-slate-600 italic whitespace-pre-line">
+                    {viewingEmp.notes || 'No notes added for this employee.'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Uploaded Documents */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                    <FileText className="w-4 h-4 text-teal-600" />
+                    Uploaded Documents ({documents.length})
+                  </h4>
+                </div>
+                {documents.length === 0 ? (
+                  <div className="text-sm text-slate-500 italic py-4 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                    No documents uploaded for this employee.
+                  </div>
+                ) : (
+                  <ul className="space-y-2">
+                    {documents.map(doc => (
+                      <li 
+                        key={doc.id} 
+                        className="flex justify-between items-center p-3 border border-slate-200 rounded-xl bg-white shadow-sm hover:shadow-md hover:border-slate-300 transition-all group"
+                      >
+                        <div 
+                          className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
+                          onClick={() => window.open(`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`, '_blank')}
+                          title="Click to view document in new window"
+                        >
+                          <div className="p-2 bg-slate-100 group-hover:bg-teal-50 group-hover:text-teal-600 rounded-lg text-slate-500 transition-colors shrink-0">
+                            <FileText className="w-4 h-4" />
+                          </div>
+                          <div className="truncate">
+                            <div className="flex items-center gap-1.5">
+                              <p className="text-sm font-medium text-slate-800 group-hover:text-teal-600 transition-colors truncate">{doc.file_name}</p>
+                              <ExternalLink className="w-3.5 h-3.5 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                            </div>
+                            <p className="text-xs text-slate-400">Uploaded {format(new Date(doc.uploaded_at), 'MMM dd, yyyy')}</p>
+                          </div>
+                        </div>
+                        <button 
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDownloadDocument(doc);
+                          }}
+                          className="p-2 text-teal-600 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer shrink-0 ml-2"
+                          title="Download Document"
+                        >
+                          <Download className="w-4 h-4" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 border-t border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
+              <button 
+                type="button" 
+                onClick={() => { setIsViewModalOpen(false); setViewingEmp(null); }} 
+                className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                Close
+              </button>
+              <button 
+                type="button"
+                onClick={() => {
+                  const empToEdit = viewingEmp;
+                  setIsViewModalOpen(false);
+                  setViewingEmp(null);
+                  openEditModal(empToEdit);
+                }}
+                className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors shadow-sm flex items-center gap-2"
+              >
+                <Edit2 className="w-4 h-4" />
+                Edit Employee
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       
       <ImportModal
         isOpen={isImportModalOpen}
         onClose={() => setIsImportModalOpen(false)}
         entityName="Employees"
         endpoint="/employees/import"
-        onImportSuccess={() => {
+        onImportSuccess={(data) => {
           fetchEmployees();
+          toast.success(data?.message || 'Employees imported successfully!');
         }}
       />
 

@@ -31,28 +31,30 @@ import classNames from 'classnames';
 
 const navItems = [
   { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['admin', 'manager', 'accountant', 'employee'] },
-  { name: 'Clients', path: '/clients', icon: Users, roles: ['admin', 'manager'] },
-  { name: 'Employees', path: '/employees', icon: UserSquare2, roles: ['admin', 'manager'] },
-  { name: 'Invoicing', path: '/invoices', icon: FileText, roles: ['admin', 'accountant'] },
-  { name: 'Payroll', path: '/payroll', icon: Banknote, roles: ['admin', 'accountant'] },
-  { name: 'Employee Ledger', path: '/ledger', icon: Banknote, roles: ['admin', 'accountant', 'manager'] },
-  { name: 'Expenses', path: '/expenses', icon: Receipt, roles: ['admin', 'accountant', 'manager'] },
-  { name: 'Vendor Ledger', path: '/vendor-statements', icon: FileText, roles: ['admin', 'accountant', 'manager'] },
-  { name: 'Reports', path: '/reports', icon: PieChart, roles: ['admin', 'manager', 'accountant'] },
-  { name: 'Tax Reports', path: '/tax-reports', icon: Receipt, roles: ['admin', 'manager', 'accountant'] },
-  { name: 'PF & Gratuity', path: '/pf-gratuity', icon: Shield, roles: ['admin', 'accountant'] },
-  { name: 'GST Compliance', path: '/gst-compliance', icon: FileText, roles: ['admin', 'accountant'] },
-  { name: 'Financial Reports', path: '/financial-reports', icon: BarChart3, roles: ['admin', 'accountant'] },
+  { name: 'Clients', path: '/clients', icon: Users, roles: ['admin', 'manager'], permission: 'manage_invoices' },
+  { name: 'Employees', path: '/employees', icon: UserSquare2, roles: ['admin', 'manager'], permission: 'manage_employees' },
+  { name: 'Attendance', path: '/attendance', icon: CalendarCheck, roles: ['admin', 'manager', 'accountant', 'employee'] },
+  { name: 'Invoicing', path: '/invoices', icon: FileText, roles: ['admin', 'accountant'], permission: 'manage_invoices' },
+  { name: 'Payroll', path: '/payroll', icon: Banknote, roles: ['admin', 'accountant'], permission: 'manage_payroll' },
+  { name: 'Employee Ledger', path: '/ledger', icon: Banknote, roles: ['admin', 'accountant', 'manager'], permission: 'manage_payroll' },
+  { name: 'Expenses', path: '/expenses', icon: Receipt, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },
+  { name: 'Vendor Ledger', path: '/vendor-statements', icon: FileText, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },
+  { name: 'Party Ledger', path: '/account-ledger', icon: BookOpen, roles: ['admin', 'accountant', 'manager'], permission: 'view_reports' },
+  { name: 'Reports', path: '/reports', icon: PieChart, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
+  { name: 'Tax Reports', path: '/tax-reports', icon: Receipt, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
+  { name: 'PF & Gratuity', path: '/pf-gratuity', icon: Shield, roles: ['admin', 'accountant'], permission: 'manage_payroll' },
+  { name: 'GST Compliance', path: '/gst-compliance', icon: FileText, roles: ['admin', 'accountant'], permission: 'manage_payroll' },
+  { name: 'Financial Reports', path: '/financial-reports', icon: BarChart3, roles: ['admin', 'accountant'], permission: 'view_reports' },
   { name: 'Workflows', path: '/workflows', icon: Zap, roles: ['admin'] },
-  { name: 'Statement Archive', path: '/statements', icon: Archive, roles: ['admin', 'manager', 'accountant'] },
-  { name: 'P&L Account', path: '/pl-account', icon: Wallet, roles: ['admin'] },
-  { name: 'Balance Sheet', path: '/balance-sheet', icon: BarChart3, roles: ['admin', 'accountant'] },
-  { name: 'Vouchers', path: '/vouchers', icon: BookOpen, roles: ['admin', 'accountant'] },
-  { name: 'Bank Reconciliation', path: '/bank-reconciliation', icon: Landmark, roles: ['admin', 'accountant'] },
-  { name: 'Budgets vs Actuals', path: '/budgets', icon: Target, roles: ['admin', 'accountant'] },
+  { name: 'Statement Archive', path: '/statements', icon: Archive, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
+  { name: 'P&L Account', path: '/pl-account', icon: Wallet, roles: ['admin'], permission: 'view_pl_account' },
+  { name: 'Balance Sheet', path: '/balance-sheet', icon: BarChart3, roles: ['admin', 'accountant'], permission: 'view_balance_sheet' },
+  { name: 'Vouchers', path: '/vouchers', icon: BookOpen, roles: ['admin', 'accountant'], permission: 'view_vouchers' },
+  { name: 'Bank Reconciliation', path: '/bank-reconciliation', icon: Landmark, roles: ['admin', 'accountant'], permission: 'manage_bank_reconciliation' },
+  { name: 'Budgets vs Actuals', path: '/budgets', icon: Target, roles: ['admin', 'accountant'], permission: 'manage_budgets' },
   { name: 'divider' },
-  { name: 'Audit Logs', path: '/audit-logs', icon: Activity, roles: ['admin'] },
-  { name: 'Settings', path: '/settings', icon: Settings, roles: ['admin'] },
+  { name: 'Audit Logs', path: '/audit-logs', icon: Activity, roles: ['admin'], permission: 'manage_settings' },
+  { name: 'Settings', path: '/settings', icon: Settings, roles: ['admin'], permission: 'manage_settings' },
   { name: 'Help', path: '/help', icon: HelpCircle, roles: ['admin', 'manager', 'accountant', 'employee'] },
 ];
 
@@ -60,7 +62,25 @@ export default function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  const filteredNav = navItems.filter(item => item.name === 'divider' || item.roles.includes(user?.role));
+  const userPerms = Array.isArray(user?.permissions)
+    ? user.permissions
+    : (typeof user?.permissions === 'string' ? (() => { try { return JSON.parse(user.permissions); } catch (_) { return []; } })() : []);
+
+  const hasAccess = (item) => {
+    if (item.name === 'divider') return true;
+    if (!user) return false;
+    if (user.role === 'admin' || userPerms.includes('*')) return true;
+
+    // Check custom or granted permission
+    if (item.permission && userPerms.includes(item.permission)) return true;
+
+    // Check role default
+    if (item.roles && item.roles.includes(user.role)) return true;
+
+    return false;
+  };
+
+  const filteredNav = navItems.filter(hasAccess);
 
   const [appVersion, setAppVersion] = useState('');
   useEffect(() => {

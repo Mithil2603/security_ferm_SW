@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Building2, FileText, IndianRupee, Printer, TrendingDown, Clock, Search, AlertCircle, ArrowUpRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Building2, FileText, IndianRupee, Printer, TrendingDown, Clock, Search, AlertCircle, ArrowUpRight, BookOpen } from 'lucide-react';
 import api from '../services/api';
 import { getServerBaseUrl } from '../utils/apiUrl';
 import { format } from 'date-fns';
@@ -23,6 +24,7 @@ function formatDateSafe(val) {
 }
 
 export default function VendorStatements() {
+  const navigate = useNavigate();
   const [vendors, setVendors] = useState([]);
   const [selectedVendorId, setSelectedVendorId] = useState('');
   const [statement, setStatement] = useState(null);
@@ -149,9 +151,18 @@ export default function VendorStatements() {
             </select>
           </div>
           <button
+            onClick={() => navigate(`/account-ledger?type=vendor&id=${selectedVendorId}`)}
+            disabled={!selectedVendorId}
+            className="flex items-center gap-2 px-3.5 py-2 bg-teal-50 border border-teal-200 text-teal-700 rounded-xl hover:bg-teal-100 transition-colors shadow-xs disabled:opacity-50 font-medium text-sm cursor-pointer"
+            title="View Tally-standard Double-Entry Ledger"
+          >
+            <BookOpen className="w-4 h-4" />
+            <span className="hidden sm:inline">Formal Ledger</span>
+          </button>
+          <button
             onClick={handlePrint}
             disabled={!statement}
-            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-xl hover:bg-slate-50 transition-colors shadow-sm disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-xl hover:bg-slate-50 transition-colors shadow-sm disabled:opacity-50 cursor-pointer"
           >
             <Printer className="w-4 h-4" />
             <span className="hidden sm:inline">Print</span>
