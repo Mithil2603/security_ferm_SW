@@ -80,8 +80,9 @@ const createClientSchema = Joi.object({
     .max(50)
     .optional().allow('', null)
     .label('GST number'),
-  monthly_rate: positiveDecimal.required().label('Monthly rate'),
-  contract_start_date: Joi.date().iso().required().label('Contract start date'),
+  client_type: Joi.string().valid('regular', 'event').default('regular').optional().label('Client type'),
+  monthly_rate: Joi.number().min(0).optional().allow('', null).label('Monthly rate'),
+  contract_start_date: Joi.date().iso().optional().allow('', null).label('Contract start date'),
   contract_end_date: Joi.date().iso().min(Joi.ref('contract_start_date')).optional().allow('', null)
     .messages({ 'date.min': 'Contract end date must be after start date' })
     .label('Contract end date'),
@@ -101,8 +102,9 @@ const updateClientSchema = Joi.object({
   gst_number: Joi.string()
     .max(50)
     .optional().allow('', null),
-  monthly_rate: positiveDecimal.optional(),
-  contract_start_date: Joi.date().iso().optional(),
+  client_type: Joi.string().valid('regular', 'event').optional().label('Client type'),
+  monthly_rate: Joi.number().min(0).optional().allow('', null),
+  contract_start_date: Joi.date().iso().optional().allow('', null),
   contract_end_date: Joi.date().iso().optional().allow('', null),
   notes: Joi.string().max(2000).optional().allow('', null),
   is_active: Joi.alternatives().try(Joi.boolean(), Joi.number().valid(0, 1)).optional(),
@@ -160,6 +162,8 @@ const updateEmployeeSchema = createEmployeeSchema.fork(
 // POST /api/invoices
 const createInvoiceSchema = Joi.object({
   client_id: Joi.number().integer().positive().required().label('Client'),
+  invoice_type: Joi.string().valid('regular', 'event').optional().default('regular').label('Invoice type'),
+  is_ad_hoc: Joi.alternatives().try(Joi.boolean(), Joi.number().valid(0, 1)).optional(),
   invoice_date: Joi.date().iso().optional().allow('', null).label('Invoice date'),
   billing_period_start: Joi.date().iso().required().label('Billing period start'),
   billing_period_end: Joi.date().iso().min(Joi.ref('billing_period_start')).required()
@@ -169,6 +173,11 @@ const createInvoiceSchema = Joi.object({
   is_rcm_applicable: Joi.boolean().optional().label('Is RCM applicable'),
   tax_rate: Joi.number().min(0).max(100).optional().label('Tax rate (%)'),
   discount_amount: Joi.number().min(0).optional().allow(null, '').label('Discount amount'),
+  amount_subtotal: Joi.number().min(0).optional().allow(null, '').label('Subtotal amount'),
+  fixed_amount: Joi.number().min(0).optional().allow(null, '').label('Fixed event amount'),
+  guards_count: Joi.number().integer().min(1).optional().allow(null, '').label('Guards count'),
+  rate_per_guard: Joi.number().min(0).optional().allow(null, '').label('Rate per guard'),
+  duty_days_worked: Joi.number().integer().min(1).optional().allow(null, '').label('Duty days worked'),
   notes: Joi.string().max(2000).optional().allow('', null).label('Notes'),
 });
 

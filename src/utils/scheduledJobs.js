@@ -8,8 +8,10 @@ const startScheduledJobs = () => {
   cron.schedule('1 0 1 * *', async () => {
     logger.info('⏳ [CRON] Running monthly auto-invoice generation...');
     try {
-      // 1. Fetch active clients
-      const clientsResult = await query('SELECT * FROM clients WHERE is_active = true');
+      // 1. Fetch active regular clients (exclude event clients from auto-monthly generation)
+      const clientsResult = await query(
+        "SELECT * FROM clients WHERE is_active = true AND (client_type IS NULL OR client_type = 'regular')"
+      );
       const activeClients = clientsResult.rows;
 
       if (activeClients.length === 0) {

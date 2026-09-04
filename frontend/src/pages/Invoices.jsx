@@ -70,13 +70,18 @@ export default function Invoices() {
 
     setInvoiceForm({
       client_id: '',
+      invoice_type: 'regular',
       invoice_date: todayStr,
       billing_period_start: startOfMonth,
       billing_period_end: endOfMonth,
       tax_type: 'cgst_sgst',
       is_rcm_applicable: false,
       discount_amount: '0',
-      notes: ''
+      notes: '',
+      fixed_amount: '',
+      guards_count: '',
+      rate_per_guard: '',
+      duty_days_worked: ''
     });
     setError('');
     setIsCreateOpen(true);
@@ -99,10 +104,20 @@ export default function Invoices() {
     setError('');
     setSubmitting(true);
     try {
-      await api.post('/invoices', {
+      const payload = {
         ...invoiceForm,
         discount_amount: parseFloat(invoiceForm.discount_amount) || 0,
-      });
+      };
+      if (invoiceForm.invoice_type === 'event') {
+        payload.is_ad_hoc = 1;
+        if (invoiceForm.fixed_amount) {
+          payload.fixed_amount = parseFloat(invoiceForm.fixed_amount);
+        }
+        if (invoiceForm.guards_count) payload.guards_count = parseInt(invoiceForm.guards_count, 10);
+        if (invoiceForm.rate_per_guard) payload.rate_per_guard = parseFloat(invoiceForm.rate_per_guard);
+        if (invoiceForm.duty_days_worked) payload.duty_days_worked = parseInt(invoiceForm.duty_days_worked, 10);
+      }
+      await api.post('/invoices', payload);
       setIsCreateOpen(false);
       fetchInvoices();
     } catch (err) {
@@ -120,7 +135,8 @@ export default function Invoices() {
       const endOfMonth = format(new Date(now.getFullYear(), now.getMonth() + 1, 0), 'yyyy-MM-dd');
       
       const res = await api.get('/clients?limit=200');
-      const activeClients = (res.data || []).filter(c => c.is_active);
+      // Only generate monthly invoices for regular active clients (exclude event clients)
+      const activeClients = (res.data || []).filter(c => c.is_active && (!c.client_type || c.client_type === 'regular'));
       
       let created = 0;
       let skipped = 0;
@@ -312,7 +328,18 @@ export default function Invoices() {
                 invoices.map((inv) => (
                   <tr key={inv.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-6 py-4">
-                      <div className="font-semibold text-slate-900">{inv.invoice_number}</div>
+                      <div className="font-semibold text-slate-900 flex items-center gap-2">
+                        {inv.invoice_number}
+                        {inv.is_ad_hoc ? (
+                          <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                            Event
+                          </span>
+                        ) : (
+                          <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-teal-50 text-teal-700 border border-teal-200">
+                            Monthly
+                          </span>
+                        )}
+                      </div>
                       <div className="text-slate-500 text-xs mt-0.5">Date: {format(new Date(inv.invoice_date), 'MMM dd, yyyy')}</div>
                     </td>
                     <td className="px-6 py-4">
@@ -378,24 +405,63 @@ export default function Invoices() {
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-slide-up my-6 max-h-[90vh] flex flex-col">
             <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
               <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                <FileText className="w-5 h-5 text-teal-600" /> Create Monthly Invoice
+                <FileText className="w-5 h-5 text-teal-600" />
+                {invoiceForm.invoice_type === 'event' ? 'Create Event Invoice' : 'Create Monthly Invoice'}
               </h3>
               <button onClick={() => setIsCreateOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleCreateInvoice} className="p-6 overflow-y-auto flex-1 space-y-4">
               {error && <div className="p-3 bg-red-50 text-red-700 text-sm rounded-lg border border-red-100">{error}</div>}
               
+              {/* Type Switcher */}
+              <div className="flex rounded-lg border border-slate-200 p-1 bg-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setInvoiceForm(prev => ({ ...prev, invoice_type: 'regular' }))}
+                  className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                    invoiceForm.invoice_type === 'regular'
+                      ? 'bg-white text-teal-700 shadow-xs border border-slate-200'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Regular (Monthly Contract)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInvoiceForm(prev => ({ ...prev, invoice_type: 'event' }))}
+                  className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                    invoiceForm.invoice_type === 'event'
+                      ? 'bg-amber-500 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Event (Full Payment)
+                </button>
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Client *</label>
                 <select 
                   required 
                   name="client_id" 
                   value={invoiceForm.client_id} 
-                  onChange={(e) => setInvoiceForm(prev => ({ ...prev, client_id: e.target.value }))} 
+                  onChange={(e) => {
+                    const cid = e.target.value;
+                    const selected = clients.find(c => String(c.id) === String(cid));
+                    setInvoiceForm(prev => ({
+                      ...prev,
+                      client_id: cid,
+                      ...(selected?.client_type === 'event' ? { invoice_type: 'event' } : {})
+                    }));
+                  }} 
                   className={inputCls}
                 >
                   <option value="">-- Select Client --</option>
-                  {clients.map(c => <option key={c.id} value={c.id}>{c.name} (₹{parseFloat(c.monthly_rate).toLocaleString('en-IN')}/mo)</option>)}
+                  {clients.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} {c.client_type === 'event' ? '(Event Client)' : `(₹${parseFloat(c.monthly_rate).toLocaleString('en-IN')}/mo)`}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -412,11 +478,15 @@ export default function Invoices() {
 
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="block text-sm font-medium text-slate-700">Billing Period *</label>
-                  <div className="flex gap-1">
-                    <button type="button" onClick={() => setMonthPreset(0)} className="text-[11px] font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 px-2 py-0.5 rounded transition-colors">This Month</button>
-                    <button type="button" onClick={() => setMonthPreset(-1)} className="text-[11px] font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 px-2 py-0.5 rounded transition-colors">Last Month</button>
-                  </div>
+                  <label className="block text-sm font-medium text-slate-700">
+                    {invoiceForm.invoice_type === 'event' ? 'Event Duration *' : 'Billing Period *'}
+                  </label>
+                  {invoiceForm.invoice_type !== 'event' && (
+                    <div className="flex gap-1">
+                      <button type="button" onClick={() => setMonthPreset(0)} className="text-[11px] font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 px-2 py-0.5 rounded transition-colors">This Month</button>
+                      <button type="button" onClick={() => setMonthPreset(-1)} className="text-[11px] font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 px-2 py-0.5 rounded transition-colors">Last Month</button>
+                    </div>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
@@ -441,6 +511,67 @@ export default function Invoices() {
                   </div>
                 </div>
               </div>
+
+              {/* Event-specific Pricing */}
+              {invoiceForm.invoice_type === 'event' && (
+                <div className="bg-amber-50/70 p-3.5 rounded-xl border border-amber-200 space-y-3">
+                  <div className="text-xs font-bold text-amber-900 uppercase tracking-wide">
+                    Event Pricing (Full Payment - No Proration)
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">Fixed Lump-Sum Amount (₹)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="e.g. 50000"
+                        value={invoiceForm.fixed_amount || ''}
+                        onChange={e => setInvoiceForm(prev => ({ ...prev, fixed_amount: e.target.value }))}
+                        className={inputCls}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">Or Days Worked</label>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="e.g. 10"
+                        value={invoiceForm.duty_days_worked || ''}
+                        onChange={e => setInvoiceForm(prev => ({ ...prev, duty_days_worked: e.target.value }))}
+                        className={inputCls}
+                      />
+                    </div>
+                  </div>
+                  {(!invoiceForm.fixed_amount || parseFloat(invoiceForm.fixed_amount) <= 0) && (
+                    <div className="grid grid-cols-2 gap-3 pt-1 border-t border-amber-200/60">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-700 mb-1">Guards Count</label>
+                        <input
+                          type="number"
+                          min="1"
+                          placeholder="e.g. 2"
+                          value={invoiceForm.guards_count || ''}
+                          onChange={e => setInvoiceForm(prev => ({ ...prev, guards_count: e.target.value }))}
+                          className={inputCls}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-700 mb-1">Rate / Guard / Day (₹)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="e.g. 500"
+                          value={invoiceForm.rate_per_guard || ''}
+                          onChange={e => setInvoiceForm(prev => ({ ...prev, rate_per_guard: e.target.value }))}
+                          className={inputCls}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Tax Configuration */}
               <div>
@@ -498,9 +629,23 @@ export default function Invoices() {
               {/* Live Preview Summary */}
               {invoiceForm.client_id && (() => {
                 const selectedClient = clients.find(c => String(c.id) === String(invoiceForm.client_id));
-                const rate = parseFloat(selectedClient?.monthly_rate || 0);
+                const isEvent = invoiceForm.invoice_type === 'event';
+                
+                let baseAmount = 0;
+                if (isEvent) {
+                  if (invoiceForm.fixed_amount && parseFloat(invoiceForm.fixed_amount) > 0) {
+                    baseAmount = parseFloat(invoiceForm.fixed_amount);
+                  } else if (invoiceForm.guards_count && invoiceForm.rate_per_guard && invoiceForm.duty_days_worked) {
+                    baseAmount = parseFloat(invoiceForm.guards_count) * parseFloat(invoiceForm.rate_per_guard) * parseFloat(invoiceForm.duty_days_worked);
+                  } else {
+                    baseAmount = parseFloat(selectedClient?.monthly_rate || 0);
+                  }
+                } else {
+                  baseAmount = parseFloat(selectedClient?.monthly_rate || 0);
+                }
+
                 const disc = parseFloat(invoiceForm.discount_amount || 0);
-                const taxable = Math.max(0, rate - disc);
+                const taxable = Math.max(0, baseAmount - disc);
                 let tax = 0;
                 if (invoiceForm.tax_type === 'cgst_sgst' || invoiceForm.tax_type === 'igst') {
                   tax = taxable * 0.18;
@@ -508,24 +653,29 @@ export default function Invoices() {
                 const total = invoiceForm.is_rcm_applicable ? taxable : (taxable + tax);
 
                 return (
-                  <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs space-y-1.5">
-                    <div className="flex justify-between text-slate-600">
-                      <span>Contract Monthly Rate:</span>
-                      <span className="font-semibold text-slate-800">₹{rate.toLocaleString('en-IN')}</span>
+                  <div className={`p-3.5 rounded-xl border text-xs space-y-1.5 ${isEvent ? 'bg-amber-50/70 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
+                    <div className="flex justify-between items-center pb-1 border-b border-slate-200/80">
+                      <span className="font-bold text-slate-800">
+                        {isEvent ? '⚡ Full Event Payment:' : 'Contract Monthly Rate:'}
+                      </span>
+                      <span className="font-bold text-slate-900">
+                        ₹{baseAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        {isEvent && <span className="ml-1 text-[10px] text-amber-800 bg-amber-200 px-1 py-0.5 rounded font-normal">No Proration</span>}
+                      </span>
                     </div>
                     {disc > 0 && (
                       <div className="flex justify-between text-amber-700">
                         <span>Discount:</span>
-                        <span className="font-semibold">- ₹{disc.toLocaleString('en-IN')}</span>
+                        <span className="font-semibold">- ₹{disc.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
                     )}
                     <div className="flex justify-between text-slate-600">
                       <span>Tax ({invoiceForm.tax_type === 'cgst_sgst' ? '18% CGST+SGST' : invoiceForm.tax_type === 'igst' ? '18% IGST' : '0%'}):</span>
-                      <span className="font-semibold text-slate-800">{invoiceForm.is_rcm_applicable ? '₹0 (RCM)' : `₹${tax.toLocaleString('en-IN')}`}</span>
+                      <span className="font-semibold text-slate-800">{invoiceForm.is_rcm_applicable ? '₹0 (RCM)' : `₹${tax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}</span>
                     </div>
-                    <div className="flex justify-between text-sm font-bold text-teal-800 pt-1.5 border-t border-slate-200">
+                    <div className={`flex justify-between text-sm font-bold pt-1.5 border-t border-slate-200 ${isEvent ? 'text-amber-900' : 'text-teal-800'}`}>
                       <span>Billed Total:</span>
-                      <span>₹{total.toLocaleString('en-IN')}</span>
+                      <span>₹{total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                     </div>
                   </div>
                 );

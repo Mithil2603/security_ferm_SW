@@ -47,6 +47,11 @@ router.get('/', async (req, res) => {
       params.push(is_active === 'true');
       paramCount++;
     }
+    if (req.query.client_type) {
+      whereConditions.push(`c.client_type = $${paramCount}`);
+      params.push(req.query.client_type);
+      paramCount++;
+    }
 
     const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
     const offset = (parseInt(page) - 1) * parseInt(limit);
@@ -172,13 +177,19 @@ router.post('/import', upload.single('file'), async (req, res) => {
 // POST /api/clients
 router.post('/', validate(schemas.createClient), async (req, res) => {
   try {
-    const { name, address, city, state = 'Gujarat', postal_code, email, phone, contact_person, gst_number, monthly_rate, contract_start_date, contract_end_date, notes } = req.body;
-    if (!name || !address || !city || !monthly_rate || !contract_start_date) {
-      return res.status(400).json({ success: false, message: 'Name, address, city, monthly rate, and contract start date are required' });
+    const { name, address, city, state = 'Gujarat', postal_code, email, phone, contact_person, gst_number, client_type = 'regular', monthly_rate, contract_start_date, contract_end_date, notes } = req.body;
+    
+    if (!name || !address || !city) {
+      return res.status(400).json({ success: false, message: 'Name, address, and city are required' });
     }
-    if (parseFloat(monthly_rate) <= 0) {
-      return res.status(400).json({ success: false, message: 'Monthly rate must be positive' });
+
+    const isEvent = client_type === 'event';
+    if (!isEvent && (!monthly_rate || parseFloat(monthly_rate) <= 0)) {
+      return res.status(400).json({ success: false, message: 'Monthly rate must be positive for regular contract clients' });
     }
+
+    const finalMonthlyRate = isEvent ? (parseFloat(monthly_rate) || 0) : parseFloat(monthly_rate);
+    const finalStartDate = contract_start_date || new Date().toISOString().split('T')[0];
 
     // Check for duplicate client name
     const existingClient = await query(
@@ -190,12 +201,12 @@ router.post('/', validate(schemas.createClient), async (req, res) => {
     }
 
     const result = await query(
-      `INSERT INTO clients (name, address, city, state, postal_code, email, phone, contact_person, gst_number, monthly_rate, contract_start_date, contract_end_date, notes, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
-      [name, address, city, state, postal_code, email, phone, contact_person, gst_number, monthly_rate, contract_start_date, contract_end_date || null, notes, req.user.userId]
+      `INSERT INTO clients (name, address, city, state, postal_code, email, phone, contact_person, gst_number, client_type, monthly_rate, contract_start_date, contract_end_date, notes, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+      [name, address, city, state, postal_code, email, phone, contact_person, gst_number, client_type || 'regular', finalMonthlyRate, finalStartDate, contract_end_date || null, notes, req.user.userId]
     );
 
-    await logAudit(req, 'clients', result.rows[0].id, 'create', `Created client: ${name}`);
+    await logAudit(req, 'clients', result.rows[0].id, 'create', `Created client: ${name} (${client_type || 'regular'})`);
 
     res.status(201).json({ success: true, data: result.rows[0], message: 'Client created successfully' });
   } catch (error) {
@@ -207,16 +218,19 @@ router.post('/', validate(schemas.createClient), async (req, res) => {
 // PUT /api/clients/:id
 router.put('/:id', validate(schemas.updateClient), async (req, res) => {
   try {
-    const { name, address, city, state, postal_code, email, phone, contact_person, gst_number, monthly_rate, contract_start_date, contract_end_date, notes, is_active } = req.body;
+    const { name, address, city, state, postal_code, email, phone, contact_person, gst_number, client_type, monthly_rate, contract_start_date, contract_end_date, notes, is_active } = req.body;
 
     // Coerce is_active to boolean (SQLite returns 0/1 which round-trips through the form)
     const isActiveBool = is_active !== undefined ? Boolean(is_active) : true;
+    const isEvent = client_type === 'event';
+    const finalMonthlyRate = isEvent ? (parseFloat(monthly_rate) || 0) : (monthly_rate !== undefined ? parseFloat(monthly_rate) : 0);
+    const finalStartDate = contract_start_date || new Date().toISOString().split('T')[0];
 
     const result = await query(
       `UPDATE clients SET name=$1, address=$2, city=$3, state=$4, postal_code=$5, email=$6, phone=$7, contact_person=$8, 
-       gst_number=$9, monthly_rate=$10, contract_start_date=$11, contract_end_date=$12, notes=$13, is_active=$14, updated_at=CURRENT_TIMESTAMP
-       WHERE id=$15`,
-      [name, address, city, state, postal_code, email, phone, contact_person, gst_number, monthly_rate, contract_start_date, contract_end_date || null, notes, isActiveBool, req.params.id]
+       gst_number=$9, client_type=COALESCE($10, client_type), monthly_rate=$11, contract_start_date=$12, contract_end_date=$13, notes=$14, is_active=$15, updated_at=CURRENT_TIMESTAMP
+       WHERE id=$16`,
+      [name, address, city, state, postal_code, email, phone, contact_person, gst_number, client_type || null, finalMonthlyRate, finalStartDate, contract_end_date || null, notes, isActiveBool, req.params.id]
     );
 
     if (result.rowCount === 0) {

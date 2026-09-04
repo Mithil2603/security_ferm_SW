@@ -14,6 +14,7 @@ import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
 const emptyForm = {
   name: '', address: '', city: '', state: 'Gujarat', postal_code: '',
   email: '', phone: '', contact_person: '', gst_number: '',
+  client_type: 'regular',
   monthly_rate: '', contract_start_date: '', contract_end_date: '', notes: '', is_active: true
 };
 
@@ -100,7 +101,8 @@ export default function Clients() {
       phone: client.phone || '',
       contact_person: client.contact_person || '',
       gst_number: client.gst_number || '',
-      monthly_rate: client.monthly_rate || '',
+      client_type: client.client_type || 'regular',
+      monthly_rate: client.monthly_rate !== null && client.monthly_rate !== undefined ? client.monthly_rate : '',
       contract_start_date: client.contract_start_date ? client.contract_start_date.substring(0, 10) : '',
       contract_end_date: client.contract_end_date ? client.contract_end_date.substring(0, 10) : '',
       notes: client.notes || '',
@@ -124,11 +126,19 @@ export default function Clients() {
 
     setSubmitting(true);
     try {
+      const payload = { ...formData };
+      if (payload.client_type === 'event') {
+        payload.monthly_rate = parseFloat(payload.monthly_rate) || 0;
+        if (!payload.contract_start_date) {
+          payload.contract_start_date = format(new Date(), 'yyyy-MM-dd');
+        }
+      }
+
       if (editingClient) {
-        await api.put(`/clients/${editingClient.id}`, formData);
+        await api.put(`/clients/${editingClient.id}`, payload);
         showToast('Client updated successfully!', 'success');
       } else {
-        await api.post('/clients', formData);
+        await api.post('/clients', payload);
         showToast('Client created successfully!', 'success');
       }
       setIsModalOpen(false);
@@ -447,24 +457,35 @@ export default function Clients() {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="font-semibold text-slate-900">₹{parseFloat(client.monthly_rate || 0).toLocaleString('en-IN')}/mo</div>
-                      {client.contract_end_date ? (() => {
-                        const daysLeft = Math.ceil((new Date(client.contract_end_date + 'T00:00:00') - new Date()) / (1000 * 60 * 60 * 24));
-                        const isExpired = daysLeft < 0;
-                        const isExpiringSoon = daysLeft >= 0 && daysLeft <= 60;
-                        return (
-                          <div className={`text-xs mt-1 font-bold flex items-center gap-1 ${isExpired ? 'text-red-600' : isExpiringSoon ? 'text-amber-600' : 'text-slate-500'}`}>
-                            {isExpired || isExpiringSoon ? <AlertCircle className="w-3 h-3" /> : <CalendarDays className="w-3 h-3" />}
-                            {isExpired ? `Expired ${Math.abs(daysLeft)} days ago` : `Expires ${format(new Date(client.contract_end_date + 'T00:00:00'), 'dd MMM yyyy')}`}
-                            {isExpiringSoon && ` (${daysLeft} days left)`}
-                          </div>
-                        );
-                      })() : (
-                        <div className="text-slate-500 text-xs mt-1">
-                          {client.contract_start_date 
-                            ? `Since ${format(new Date(client.contract_start_date + 'T00:00:00'), 'MMM yyyy')}`
-                            : 'No start date'}
+                      {client.client_type === 'event' ? (
+                        <div>
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                            Event Client
+                          </span>
+                          <div className="text-slate-500 text-xs mt-1">Direct Event Billing</div>
                         </div>
+                      ) : (
+                        <>
+                          <div className="font-semibold text-slate-900">₹{parseFloat(client.monthly_rate || 0).toLocaleString('en-IN')}/mo</div>
+                          {client.contract_end_date ? (() => {
+                            const daysLeft = Math.ceil((new Date(client.contract_end_date + 'T00:00:00') - new Date()) / (1000 * 60 * 60 * 24));
+                            const isExpired = daysLeft < 0;
+                            const isExpiringSoon = daysLeft >= 0 && daysLeft <= 60;
+                            return (
+                              <div className={`text-xs mt-1 font-bold flex items-center gap-1 ${isExpired ? 'text-red-600' : isExpiringSoon ? 'text-amber-600' : 'text-slate-500'}`}>
+                                {isExpired || isExpiringSoon ? <AlertCircle className="w-3 h-3" /> : <CalendarDays className="w-3 h-3" />}
+                                {isExpired ? `Expired ${Math.abs(daysLeft)} days ago` : `Expires ${format(new Date(client.contract_end_date + 'T00:00:00'), 'dd MMM yyyy')}`}
+                                {isExpiringSoon && ` (${daysLeft} days left)`}
+                              </div>
+                            );
+                          })() : (
+                            <div className="text-slate-500 text-xs mt-1">
+                              {client.contract_start_date 
+                                ? `Since ${format(new Date(client.contract_start_date + 'T00:00:00'), 'MMM yyyy')}`
+                                : 'No start date'}
+                            </div>
+                          )}
+                        </>
                       )}
                     </td>
                     <td className="px-6 py-4">
@@ -623,8 +644,58 @@ export default function Clients() {
               {error && <div className="mb-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg">{error}</div>}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                {/* Client Type Selector */}
                 <div className="col-span-1 md:col-span-2">
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Society Name *</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Client Type *</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                      formData.client_type === 'regular'
+                        ? 'bg-teal-50 border-teal-500 ring-1 ring-teal-500'
+                        : 'bg-white border-slate-200 hover:bg-slate-50'
+                    }`}>
+                      <input
+                        type="radio"
+                        name="client_type"
+                        value="regular"
+                        checked={formData.client_type === 'regular'}
+                        onChange={handleInputChange}
+                        className="text-teal-600 focus:ring-teal-500 h-4 w-4"
+                      />
+                      <div>
+                        <span className="block text-sm font-semibold text-slate-900">Regular Contract</span>
+                        <span className="block text-xs text-slate-500">Monthly recurring billing with proration</span>
+                      </div>
+                    </label>
+
+                    <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                      formData.client_type === 'event'
+                        ? 'bg-amber-50 border-amber-500 ring-1 ring-amber-500'
+                        : 'bg-white border-slate-200 hover:bg-slate-50'
+                    }`}>
+                      <input
+                        type="radio"
+                        name="client_type"
+                        value="event"
+                        checked={formData.client_type === 'event'}
+                        onChange={handleInputChange}
+                        className="text-amber-600 focus:ring-amber-500 h-4 w-4"
+                      />
+                      <div>
+                        <span className="block text-sm font-semibold text-slate-900">Event / One-Time</span>
+                        <span className="block text-xs text-slate-500">Ad-hoc events, full payment (no monthly bills)</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                {formData.client_type === 'event' && (
+                  <div className="col-span-1 md:col-span-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">
+                    ⚡ <strong>Event Client Mode:</strong> This client will not receive automated monthly invoices. Invoices created for this client will be billed for the full event duration without monthly proration.
+                  </div>
+                )}
+
+                <div className="col-span-1 md:col-span-2">
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Company / Society Name *</label>
                   <input required type="text" name="name" value={formData.name} onChange={handleInputChange} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent" />
                 </div>
 
@@ -644,8 +715,20 @@ export default function Clients() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Monthly Rate (₹) *</label>
-                  <input required type="number" min="0" step="0.01" name="monthly_rate" value={formData.monthly_rate} onChange={handleInputChange} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent" />
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    Monthly Rate (₹) {formData.client_type === 'regular' ? '*' : '(Optional for Event clients)'}
+                  </label>
+                  <input 
+                    required={formData.client_type === 'regular'} 
+                    type="number" 
+                    min="0" 
+                    step="0.01" 
+                    name="monthly_rate" 
+                    value={formData.monthly_rate} 
+                    onChange={handleInputChange} 
+                    placeholder={formData.client_type === 'event' ? '0.00 (Lump-sum per event)' : 'Monthly contract rate'}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent" 
+                  />
                 </div>
 
                 <div>
@@ -669,12 +752,21 @@ export default function Clients() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Contract Start Date *</label>
-                  <input required type="date" name="contract_start_date" value={formData.contract_start_date} onChange={handleInputChange} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent" />
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    Contract Start Date {formData.client_type === 'regular' ? '*' : '(Optional)'}
+                  </label>
+                  <input 
+                    required={formData.client_type === 'regular'} 
+                    type="date" 
+                    name="contract_start_date" 
+                    value={formData.contract_start_date} 
+                    onChange={handleInputChange} 
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent" 
+                  />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Contract End Date</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Contract End Date (Optional)</label>
                   <input type="date" name="contract_end_date" value={formData.contract_end_date} onChange={handleInputChange} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent" />
                 </div>
 

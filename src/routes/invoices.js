@@ -168,7 +168,12 @@ router.get('/:id', async (req, res) => {
 // POST /api/invoices
 router.post('/', validate(schemas.createInvoice), async (req, res) => {
   try {
-    const { client_id, billing_period_start, billing_period_end, invoice_date, is_rcm_applicable, discount_amount, notes } = req.body;
+    const { 
+      client_id, billing_period_start, billing_period_end, invoice_date, 
+      is_rcm_applicable, discount_amount, notes,
+      invoice_type = 'regular', is_ad_hoc,
+      amount_subtotal, fixed_amount, guards_count, rate_per_guard, duty_days_worked
+    } = req.body;
     // Normalize tax_type: GST_18 is treated as cgst_sgst (18% split)
     const raw_tax_type = req.body.tax_type;
     const tax_type = (raw_tax_type === 'GST_18') ? 'cgst_sgst' : (raw_tax_type || 'none');
@@ -186,26 +191,79 @@ router.post('/', validate(schemas.createInvoice), async (req, res) => {
       return res.status(409).json({ success: false, message: 'An invoice already exists for this client for the specified billing period.' });
     }
 
-    // Get client monthly rate
+    // Get client details
     const clientResult = await query('SELECT * FROM clients WHERE id = $1 AND is_active = 1', [client_id]);
     if (clientResult.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Client not found or inactive' });
     }
     const client = clientResult.rows[0];
 
-    const amounts = calculateInvoiceAmounts(client.monthly_rate, billing_period_start, billing_period_end, tax_type, discount_amount, is_rcm_applicable);
+    const isEventInvoice = invoice_type === 'event' || Boolean(is_ad_hoc) || client.client_type === 'event';
+    let amounts;
+    let isAdhocVal = 0;
+    let finalDutyDays = null;
+
+    if (isEventInvoice) {
+      // EVENT INVOICE: Take FULL PAYMENT directly without monthly bifurcation
+      let sub = 0;
+      if (fixed_amount !== undefined && fixed_amount !== '' && fixed_amount !== null) {
+        sub = parseFloat(fixed_amount) || 0;
+      } else if (amount_subtotal !== undefined && amount_subtotal !== '' && amount_subtotal !== null) {
+        sub = parseFloat(amount_subtotal) || 0;
+      } else if (guards_count && rate_per_guard && duty_days_worked) {
+        sub = parseFloat(guards_count) * parseFloat(rate_per_guard) * parseFloat(duty_days_worked);
+      } else if (client.monthly_rate > 0) {
+        sub = parseFloat(client.monthly_rate);
+      }
+      sub = parseFloat(sub.toFixed(2));
+
+      const disc = parseFloat(discount_amount) || 0;
+      const taxable = Math.max(0, sub - disc);
+      let cgst = 0, sgst = 0, igst = 0;
+
+      if (tax_type === 'cgst_sgst') {
+        cgst = parseFloat((taxable * 0.09).toFixed(2));
+        sgst = parseFloat((taxable * 0.09).toFixed(2));
+      } else if (tax_type === 'igst') {
+        igst = parseFloat((taxable * 0.18).toFixed(2));
+      }
+
+      let total = taxable;
+      if (!is_rcm_applicable) {
+        total += cgst + sgst + igst;
+      }
+      total = parseFloat(total.toFixed(2));
+
+      amounts = {
+        amount_subtotal: sub,
+        cgst_amount: cgst,
+        sgst_amount: sgst,
+        igst_amount: igst,
+        total_amount: total,
+        final_amount: total
+      };
+      isAdhocVal = 1;
+      const daysCount = Math.ceil((new Date(billing_period_end) - new Date(billing_period_start)) / (1000 * 60 * 60 * 24)) + 1;
+      finalDutyDays = duty_days_worked ? parseInt(duty_days_worked) : daysCount;
+    } else {
+      // REGULAR INVOICE: Standard monthly contract with pro-rata bifurcation for partial calendar periods
+      amounts = calculateInvoiceAmounts(client.monthly_rate, billing_period_start, billing_period_end, tax_type, discount_amount, is_rcm_applicable);
+      isAdhocVal = 0;
+      finalDutyDays = null;
+    }
+
     const inv_date = invoice_date || new Date().toISOString().split('T')[0];
     const invoice_number = await generateInvoiceNumber(inv_date);
     const due_date = new Date(new Date(inv_date).getTime() + (parseInt(process.env.INVOICE_DUE_DAYS) || 30) * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
     const result = await query(
       `INSERT INTO invoices (invoice_number, client_id, invoice_date, due_date, billing_period_start, billing_period_end,
-        amount_subtotal, tax_type, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable, total_amount, discount_amount, final_amount, payment_due, notes, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
+        amount_subtotal, tax_type, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable, total_amount, discount_amount, final_amount, payment_due, notes, is_ad_hoc, duty_days_worked, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
       [invoice_number, client_id, inv_date, due_date, billing_period_start, billing_period_end,
         amounts.amount_subtotal, tax_type || 'none', amounts.cgst_amount, amounts.sgst_amount, amounts.igst_amount, 
-        is_rcm_applicable ? 1 : 0, amounts.total_amount, discount_amount,
-        amounts.final_amount, amounts.final_amount, notes, req.user.userId]
+        is_rcm_applicable ? 1 : 0, amounts.total_amount, discount_amount || 0,
+        amounts.final_amount, amounts.final_amount, notes, isAdhocVal, finalDutyDays, req.user.userId]
     );
 
     const createdInvoice = result.rows[0];
@@ -576,33 +634,45 @@ router.post('/:id/email', async (req, res) => {
 router.post('/event', async (req, res) => {
   try {
     const { 
+      client_id: reqClientId,
       client_name, phone, email, address, city, state, gst_number,
-      guards_count, rate_per_guard, days_worked,
+      guards_count, rate_per_guard, days_worked, fixed_amount,
       tax_type, is_rcm_applicable, notes,
       invoice_date, event_date, billing_period_start, billing_period_end
     } = req.body;
 
-    if (!client_name || !guards_count || !rate_per_guard || !days_worked) {
-      return res.status(400).json({ success: false, message: 'Client name, guards count, rate, and days are required' });
+    let client_id = reqClientId;
+
+    if (!client_id) {
+      if (!client_name) {
+        return res.status(400).json({ success: false, message: 'Client name or Client ID is required' });
+      }
+
+      // Check if client exists
+      const clientCheck = await query('SELECT id FROM clients WHERE name = $1 OR (phone = $2 AND phone IS NOT NULL AND phone != \'\')', [client_name, phone]);
+      
+      if (clientCheck.rows.length > 0) {
+        client_id = clientCheck.rows[0].id;
+      } else {
+        const newClient = await query(
+          `INSERT INTO clients (name, address, city, state, email, phone, gst_number, client_type, monthly_rate, contract_start_date) 
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'event', 0, CURRENT_DATE) RETURNING id`,
+          [client_name, address || 'N/A', city || 'N/A', state || 'Gujarat', email, phone, gst_number]
+        );
+        client_id = newClient.rows[0].id;
+      }
     }
 
-    // 1. Find or create client
-    let client_id;
-    const clientCheck = await query('SELECT id FROM clients WHERE name = $1 OR (phone = $2 AND phone IS NOT NULL AND phone != \'\')', [client_name, phone]);
-    
-    if (clientCheck.rows.length > 0) {
-      client_id = clientCheck.rows[0].id;
+    // Calculate full event payment without bifurcation
+    let amount_subtotal = 0;
+    if (fixed_amount !== undefined && fixed_amount !== '' && fixed_amount !== null) {
+      amount_subtotal = parseFloat(fixed_amount) || 0;
+    } else if (guards_count && rate_per_guard && days_worked) {
+      amount_subtotal = parseFloat((parseFloat(guards_count) * parseFloat(rate_per_guard) * parseFloat(days_worked)).toFixed(2));
     } else {
-      const newClient = await query(
-        `INSERT INTO clients (name, address, city, state, email, phone, gst_number, monthly_rate, contract_start_date) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_DATE) RETURNING id`,
-        [client_name, address || 'N/A', city || 'N/A', state || 'Gujarat', email, phone, gst_number, rate_per_guard * 30]
-      );
-      client_id = newClient.rows[0].id;
+      return res.status(400).json({ success: false, message: 'Either fixed amount or guards, rate, and days are required' });
     }
 
-    // 2. Calculate Math
-    const amount_subtotal = parseFloat((guards_count * rate_per_guard * days_worked).toFixed(2));
     let cgst_amount = 0, sgst_amount = 0, igst_amount = 0;
 
     if (tax_type === 'cgst_sgst') {
@@ -625,7 +695,7 @@ router.post('/event', async (req, res) => {
     const due_date = new Date(new Date(inv_date).getTime() + dueDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const invoice_number = await generateInvoiceNumber(inv_date);
     
-    // Create Invoice
+    // Create Invoice (Full payment, is_ad_hoc = 1)
     const result = await query(
       `INSERT INTO invoices (
         invoice_number, client_id, invoice_date, due_date, 
@@ -640,11 +710,33 @@ router.post('/event', async (req, res) => {
         b_start, b_end,
         amount_subtotal, total_amount, total_amount, total_amount,
         tax_type || 'none', cgst_amount, sgst_amount, igst_amount, is_rcm_applicable ? 1 : 0,
-        days_worked, notes, req.user.userId
+        days_worked || 1, notes, req.user.userId
       ]
     );
 
-    res.status(201).json({ success: true, message: 'Event invoice generated', data: result.rows[0] });
+    const createdInvoice = result.rows[0];
+
+    // Auto-save statement for accounting ledger
+    const cInfo = await query('SELECT * FROM clients WHERE id = $1', [client_id]);
+    const clientData = cInfo.rows[0] || {};
+
+    saveStatement({
+      domain: 'invoice',
+      statement_number: invoice_number,
+      title: `Event Invoice for ${clientData.name || client_name} - ${b_start} to ${b_end}`,
+      reference_id: createdInvoice.id,
+      reference_type: 'invoice',
+      statement_data: { ...createdInvoice, client_name: clientData.name || client_name, client_address: clientData.address, client_city: clientData.city, client_state: clientData.state, client_gst: clientData.gst_number, client_phone: clientData.phone, client_email: clientData.email },
+      total_amount: total_amount,
+      tax_amount: cgst_amount + sgst_amount + igst_amount,
+      period_from: b_start,
+      period_to: b_end,
+      party_name: clientData.name || client_name,
+      party_id: client_id,
+      generated_by: req.user.userId
+    });
+
+    res.status(201).json({ success: true, message: 'Event invoice generated', data: createdInvoice });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'invoices' });
     logger.error('Event invoice error:', error);

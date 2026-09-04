@@ -339,9 +339,18 @@ const query = async (text, params = []) => {
         if (tableMatch && tableMatch[1]) {
           const tableName = tableMatch[1].replace(/`/g, '');
           const returningMatch = text.match(/RETURNING\s+(.+)$/i);
-          const returnCols = returningMatch
-            ? returningMatch[1].split(',').map(c => `\`${c.trim()}\``).join(', ')
-            : 'id';
+          let returnCols = 'id';
+          if (returningMatch) {
+            const raw = returningMatch[1].trim();
+            if (raw === '*') {
+              returnCols = '*';
+            } else {
+              returnCols = raw.split(',').map(c => {
+                const col = c.trim().replace(/`/g, '');
+                return col === '*' ? '*' : `\`${col}\``;
+              }).join(', ');
+            }
+          }
           try {
             const [fetchRows] = await pool.execute(
               `SELECT ${returnCols} FROM \`${tableName}\` WHERE id = ?`,
