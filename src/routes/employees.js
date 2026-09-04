@@ -85,9 +85,10 @@ router.get('/', async (req, res) => {
 
     const countResult = await query(`SELECT COUNT(*) AS count FROM employees e ${where}`, params);
 
-    const canReveal = req.query.reveal === 'true' && (req.user.role === 'admin' || req.user.role === 'accountant');
+    const isAdmin = req.user && req.user.role === 'admin';
+    const canReveal = isAdmin || (req.query.reveal === 'true' && req.user.role === 'accountant');
     
-    if (canReveal && result.rows.length > 0) {
+    if (canReveal && !isAdmin && result.rows.length > 0) {
       logger.warn(`AUDIT: User ${req.user.userId} (${req.user.role}) revealed PII for employee list.`);
     }
 
@@ -101,6 +102,13 @@ router.get('/', async (req, res) => {
         }
         if (emp.bank_account_number && emp.bank_account_number.length >= 4) {
           emp.bank_account_number = 'XXXXX' + emp.bank_account_number.slice(-4);
+        }
+      } else {
+        if (emp.aadhar_number) {
+          const raw = String(emp.aadhar_number).replace(/\D/g, '');
+          if (raw.length === 12) {
+            emp.aadhar_number = `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}`;
+          }
         }
       }
       return emp;
@@ -135,14 +143,22 @@ router.get('/:id', async (req, res) => {
     }
 
     let emp = result.rows[0];
-    const canReveal = req.query.reveal === 'true' && (req.user.role === 'admin' || req.user.role === 'accountant');
+    const isAdmin = req.user && req.user.role === 'admin';
+    const canReveal = isAdmin || (req.query.reveal === 'true' && req.user.role === 'accountant');
     
-    if (canReveal) {
+    if (canReveal && !isAdmin) {
       logger.warn(`AUDIT: User ${req.user.userId} (${req.user.role}) revealed PII for employee ID ${emp.id}.`);
-    } else {
+    } else if (!canReveal) {
       if (emp.aadhar_number && emp.aadhar_number.length >= 4) emp.aadhar_number = 'XXXX-XXXX-' + emp.aadhar_number.slice(-4);
       if (emp.pan_number && emp.pan_number.length >= 4) emp.pan_number = 'XXXXX' + emp.pan_number.slice(-4);
       if (emp.bank_account_number && emp.bank_account_number.length >= 4) emp.bank_account_number = 'XXXXX' + emp.bank_account_number.slice(-4);
+    } else {
+      if (emp.aadhar_number) {
+        const raw = String(emp.aadhar_number).replace(/\D/g, '');
+        if (raw.length === 12) {
+          emp.aadhar_number = `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}`;
+        }
+      }
     }
 
     res.json({ success: true, data: emp });
@@ -159,65 +175,62 @@ router.post('/import', upload.single('file'), async (req, res) => {
       return res.status(400).json({ success: false, message: 'No file uploaded' });
     }
 
-    const filePath = req.file.path;
     const workbook = new exceljs.Workbook();
-    await workbook.xlsx.readFile(filePath);
-    
-    const worksheet = workbook.getWorksheet(1); // Get first sheet
+    await workbook.xlsx.readFile(req.file.path);
+    const worksheet = workbook.getWorksheet(1);
+
     if (!worksheet) {
-      fs.unlinkSync(filePath);
-      return res.status(400).json({ success: false, message: 'Invalid or empty Excel file' });
+      return res.status(400).json({ success: false, message: 'No sheet found in Excel file' });
     }
 
-    let importedCount = 0;
-    let skippedCount = 0;
-    
-    // Assume row 1 is headers. We'll read from row 2 onwards.
-    // Expected Columns: Name, Phone, Email, Address, City
-    worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-      if (rowNumber === 1) return; // Skip headers
-      
-      const full_name = row.getCell(1).value?.toString() || '';
-      const phone = row.getCell(2).value?.toString() || '';
-      const email = row.getCell(3).value?.toString() || '';
-      const address = row.getCell(4).value?.toString() || '';
-      const city = row.getCell(5).value?.toString() || '';
-      
-      if (full_name && phone) {
-        try {
-          const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase();
-          const employee_id = `EMP-${randomHex}`;
-          const date_of_joining = new Date().toISOString().split('T')[0];
-          
-          query(
-            `INSERT INTO employees (employee_id, full_name, phone, email, address, city, date_of_joining)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [employee_id, full_name, phone, email, address, city, date_of_joining]
-          );
-          importedCount++;
-        } catch (e) {
-          skippedCount++;
-        }
-      } else {
-        skippedCount++;
+    const rows = [];
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber > 1) { // Skip header
+        rows.push(row.values);
       }
     });
 
-    // Cleanup the uploaded file
-    fs.unlinkSync(filePath);
-    await logAudit(req, 'employees', null, 'create', `Bulk imported ${importedCount} employees`);
+    let successCount = 0;
+    let errorCount = 0;
 
-    res.json({
-      success: true,
-      message: `Successfully imported ${importedCount} employees. Skipped ${skippedCount} invalid rows.`,
-      data: { imported: importedCount, skipped: skippedCount }
-    });
-  } catch (error) {
-    logger.error('Import error:', error);
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
+    for (const r of rows) {
+      // Basic extraction
+      const full_name = r[1];
+      const phone = r[2] ? String(r[2]) : '';
+      const designation = r[3] || 'Watchman';
+      const date_of_joining = r[4] ? new Date(r[4]).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+      const aadhar_number = r[5] ? String(r[5]).replace(/\D/g, '') : null;
+      const pan_number = r[6] ? String(r[6]).toUpperCase() : null;
+
+      if (!full_name || !phone) {
+        errorCount++;
+        continue;
+      }
+
+      const crypto = require('crypto');
+      const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase();
+      const employee_id = `EMP-${randomHex}`;
+
+      try {
+        await query(
+          `INSERT INTO employees (employee_id, full_name, phone, designation, date_of_joining, aadhar_number, pan_number)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [employee_id, full_name, phone, designation, date_of_joining, aadhar_number, pan_number]
+        );
+        successCount++;
+      } catch (err) {
+        errorCount++;
+      }
     }
-    res.status(500).json({ success: false, message: 'Failed to process the import file' });
+
+    // Clean up uploaded temp file
+    try { fs.unlinkSync(req.file.path); } catch (_) {}
+
+    res.json({ success: true, message: `Import complete: ${successCount} added, ${errorCount} skipped.` });
+  } catch (error) {
+    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
+    logger.error('Import employees error:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to import employees' });
   }
 });
 
@@ -234,6 +247,9 @@ router.post('/', validate(schemas.createEmployee), async (req, res) => {
       return res.status(400).json({ success: false, message: 'Name, phone, and joining date are required' });
     }
 
+    const cleanAadhar = aadhar_number ? String(aadhar_number).replace(/\D/g, '') : null;
+    const cleanPan = pan_number ? String(pan_number).trim().toUpperCase() : null;
+
     // Generate employee ID using a collision-resistant approach
     const crypto = require('crypto');
     const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase();
@@ -245,7 +261,7 @@ router.post('/', validate(schemas.createEmployee), async (req, res) => {
         date_of_joining, designation, salary_structure_id, assigned_client_id, 
         emergency_contact_name, emergency_contact_phone, notes)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
-      [employee_id, full_name, phone, email, date_of_birth || null, address, city, aadhar_number, pan_number,
+      [employee_id, full_name, phone, email, date_of_birth || null, address, city, cleanAadhar, cleanPan,
         bank_account_number, bank_ifsc_code, bank_name, bank_account_holder_name,
         date_of_joining, designation, salary_structure_id || null, assigned_client_id || null,
         emergency_contact_name, emergency_contact_phone, notes]
@@ -274,14 +290,29 @@ router.put('/:id', validate(schemas.updateEmployee), async (req, res) => {
     const existingEmpRes = await query('SELECT aadhar_number, pan_number FROM employees WHERE id = $1', [req.params.id]);
     const existingEmp = existingEmpRes.rows[0];
 
+    const isAdmin = req.user && req.user.role === 'admin';
     let finalAadhar = existingEmp ? existingEmp.aadhar_number : null;
-    if (aadhar_number && !String(aadhar_number).startsWith('X') && String(aadhar_number).trim() !== '') {
-      finalAadhar = aadhar_number;
-    }
-
     let finalPan = existingEmp ? existingEmp.pan_number : null;
-    if (pan_number && !String(pan_number).startsWith('X') && String(pan_number).trim() !== '') {
-      finalPan = pan_number;
+
+    // Only admin can update Aadhar card and PAN card numbers
+    if (isAdmin) {
+      if (aadhar_number !== undefined && aadhar_number !== null) {
+        const cleanAadhar = String(aadhar_number).replace(/\D/g, '');
+        if (cleanAadhar !== '' && !cleanAadhar.startsWith('X')) {
+          finalAadhar = cleanAadhar;
+        } else if (String(aadhar_number).trim() === '') {
+          finalAadhar = null;
+        }
+      }
+
+      if (pan_number !== undefined && pan_number !== null) {
+        const cleanPan = String(pan_number).trim().toUpperCase();
+        if (cleanPan !== '' && !cleanPan.startsWith('X')) {
+          finalPan = cleanPan;
+        } else if (cleanPan === '') {
+          finalPan = null;
+        }
+      }
     }
 
     // Coerce is_active to boolean
@@ -432,6 +463,33 @@ router.delete('/:id/docs/:docId', async (req, res) => {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
     logger.error('Delete document error:', error);
     res.status(500).json({ success: false, message: error.message || 'Failed to delete document' });
+  }
+});
+
+// GET /api/employees/:id/docs/:docId/download
+router.get('/:id/docs/:docId/download', async (req, res) => {
+  try {
+    const { id, docId } = req.params;
+    const docRes = await query(
+      'SELECT file_name, file_path FROM employee_documents WHERE id = $1 AND employee_id = $2',
+      [docId, id]
+    );
+
+    if (docRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    const { file_name, file_path } = docRes.rows[0];
+    const fullPath = path.join(uploadDir, file_path);
+    if (!fs.existsSync(fullPath)) {
+      return res.status(404).json({ success: false, message: 'File not found on disk' });
+    }
+
+    res.download(fullPath, file_name);
+  } catch (error) {
+    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
+    logger.error('Download document error:', error);
+    res.status(500).json({ success: false, message: 'Failed to download document' });
   }
 });
 

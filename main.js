@@ -49,6 +49,7 @@ process.env.UPLOAD_DIR = validateAndSafePath('UPLOAD_DIR', path.join(userDataPat
 process.env.LOG_DIR = validateAndSafePath('LOG_DIR', path.join(userDataPath, 'logs'));
 process.env.NODE_ENV = 'production';
 process.env.PORT = process.env.PORT || '3000';
+process.env.USER_DATA_PATH = userDataPath;
 
 // === JWT SECRET MANAGEMENT ===
 const secretPath = path.join(userDataPath, 'secret.key');
@@ -186,31 +187,39 @@ ipcMain.handle('get-server-url', () => {
 // ── IPC: Save MySQL connection settings ─────────────────────────────
 ipcMain.handle('save-db-config', async (event, config) => {
   try {
-    const envPath = path.join(userDataPath, '.env');
-    let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
-
-    const set = (key, val) => {
-      const regex = new RegExp(`^${key}=.*$`, 'm');
-      if (regex.test(envContent)) {
-        envContent = envContent.replace(regex, `${key}=${val}`);
-      } else {
-        envContent += `\n${key}=${val}`;
-      }
-    };
+    const envPaths = [
+      path.join(userDataPath, '.env'),
+      path.join(__dirname, '.env'),
+      path.join(process.cwd(), '.env')
+    ];
 
     const host = config.host || 'localhost';
-    const port = config.port || '3306';
+    const port = String(config.port || '3306');
     const database = config.database || 'security_firm_db';
     const user = config.user || 'root';
-    const password = config.password || '';
+    const password = config.password !== undefined ? config.password : '';
 
-    set('DB_HOST', host);
-    set('DB_PORT', port);
-    set('DB_NAME', database);
-    set('DB_USER', user);
-    set('DB_PASSWORD', password);
-
-    fs.writeFileSync(envPath, envContent, 'utf8');
+    for (const envPath of envPaths) {
+      if (fs.existsSync(envPath)) {
+        try {
+          let envContent = fs.readFileSync(envPath, 'utf8');
+          const set = (key, val) => {
+            const regex = new RegExp(`^${key}=.*$`, 'm');
+            if (regex.test(envContent)) {
+              envContent = envContent.replace(regex, `${key}=${val}`);
+            } else {
+              envContent += `\n${key}=${val}`;
+            }
+          };
+          set('DB_HOST', host);
+          set('DB_PORT', port);
+          set('DB_NAME', database);
+          set('DB_USER', user);
+          set('DB_PASSWORD', password);
+          fs.writeFileSync(envPath, envContent, 'utf8');
+        } catch (_) {}
+      }
+    }
 
     // Update process.env in memory immediately
     process.env.DB_HOST = host;
@@ -219,8 +228,15 @@ ipcMain.handle('save-db-config', async (event, config) => {
     process.env.DB_USER = user;
     process.env.DB_PASSWORD = password;
 
+    // Live reconnect database connection pool
+    const { reconnectDB } = require('./src/database/connection');
+    if (typeof reconnectDB === 'function') {
+      await reconnectDB({ host, port, database, user, password });
+    }
+
     return { success: true };
   } catch (err) {
+    console.error('save-db-config error:', err.message);
     return { success: false, error: err.message };
   }
 });
@@ -251,7 +267,16 @@ ipcMain.handle('open-log-folder', async () => {
   if (!fs.existsSync(logDir)) {
     fs.mkdirSync(logDir, { recursive: true });
   }
-  shell.openPath(logDir);
+  try {
+    if (process.platform === 'win32') {
+      const { exec } = require('child_process');
+      exec(`explorer.exe "${logDir}"`);
+    } else {
+      await shell.openPath(logDir);
+    }
+  } catch (_) {
+    await shell.openPath(logDir);
+  }
   return { success: true, path: logDir };
 });
 

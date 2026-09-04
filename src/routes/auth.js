@@ -97,12 +97,20 @@ router.post('/login', loginLimiter, async (req, res) => {
     // Update last login
     await query('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = $1', [user.id]);
 
-    const parsedPermissions = user.permissions ? JSON.parse(user.permissions) : [];
+    const { ROLE_PERMISSIONS } = require('../middleware/auth');
+    let parsedPermissions = [];
+    if (Array.isArray(user.permissions)) {
+      parsedPermissions = user.permissions;
+    } else if (typeof user.permissions === 'string') {
+      try { parsedPermissions = JSON.parse(user.permissions); } catch (_) {}
+    }
+    const roleDefaults = ROLE_PERMISSIONS[user.role] || [];
+    const effectivePermissions = Array.from(new Set([...roleDefaults, ...parsedPermissions]));
     
     // Create JWT token (default 8h)
     const jwtExpiry = process.env.JWT_EXPIRY || process.env.JWT_EXPIRES_IN || process.env.JWT_ACCESS_EXPIRY || '8h';
     const token = jwt.sign(
-      { userId: user.id, email: user.email, role: user.role, name: user.full_name, permissions: parsedPermissions },
+      { userId: user.id, email: user.email, role: user.role, name: user.full_name, permissions: effectivePermissions },
       process.env.JWT_SECRET,
       { expiresIn: jwtExpiry }
     );
@@ -146,7 +154,7 @@ router.post('/login', loginLimiter, async (req, res) => {
           full_name: user.full_name,
           role: user.role,
           phone: user.phone,
-          permissions: parsedPermissions
+          permissions: effectivePermissions
         }
       }
     });
@@ -240,11 +248,19 @@ router.post('/refresh', async (req, res) => {
     }
 
     const user = userResult.rows[0];
-    const parsedPermissions = user.permissions ? JSON.parse(user.permissions) : [];
+    const { ROLE_PERMISSIONS } = require('../middleware/auth');
+    let parsedPermissions = [];
+    if (Array.isArray(user.permissions)) {
+      parsedPermissions = user.permissions;
+    } else if (typeof user.permissions === 'string') {
+      try { parsedPermissions = JSON.parse(user.permissions); } catch (_) {}
+    }
+    const roleDefaults = ROLE_PERMISSIONS[user.role] || [];
+    const effectivePermissions = Array.from(new Set([...roleDefaults, ...parsedPermissions]));
     
     const jwtExpiry = process.env.JWT_EXPIRY || process.env.JWT_EXPIRES_IN || process.env.JWT_ACCESS_EXPIRY || '8h';
     const token = jwt.sign(
-      { userId: user.id, email: user.email, role: user.role, name: user.full_name, permissions: parsedPermissions },
+      { userId: user.id, email: user.email, role: user.role, name: user.full_name, permissions: effectivePermissions },
       process.env.JWT_SECRET,
       { expiresIn: jwtExpiry }
     );
@@ -291,13 +307,23 @@ router.post('/refresh', async (req, res) => {
 router.get('/me', authMiddleware, async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, email, full_name, role, phone, last_login, created_at FROM users WHERE id = $1',
+      'SELECT id, email, full_name, role, phone, last_login, created_at, permissions FROM users WHERE id = $1',
       [req.user.userId]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-    res.json({ success: true, data: result.rows[0] });
+    const userData = result.rows[0];
+    const { ROLE_PERMISSIONS } = require('../middleware/auth');
+    let parsedPermissions = [];
+    if (Array.isArray(userData.permissions)) {
+      parsedPermissions = userData.permissions;
+    } else if (typeof userData.permissions === 'string') {
+      try { parsedPermissions = JSON.parse(userData.permissions); } catch (_) {}
+    }
+    const roleDefaults = ROLE_PERMISSIONS[userData.role] || [];
+    userData.permissions = Array.from(new Set([...roleDefaults, ...parsedPermissions]));
+    res.json({ success: true, data: userData });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'auth' });
     res.status(500).json({ success: false, message: 'Failed to fetch user' });
@@ -384,7 +410,15 @@ router.post('/users', authMiddleware, requireRole('admin'), async (req, res) => 
     }
 
     const hash = await bcrypt.hash(password, 12);
-    const permsJson = JSON.stringify(permissions || []);
+    const { ROLE_PERMISSIONS } = require('../middleware/auth');
+    const roleDefaults = ROLE_PERMISSIONS[role] || [];
+    let initialPerms = [];
+    if (Array.isArray(permissions) && permissions.length > 0) {
+      initialPerms = permissions;
+    } else {
+      initialPerms = roleDefaults;
+    }
+    const permsJson = JSON.stringify(initialPerms);
     const result = await query(
       'INSERT INTO users (email, password_hash, full_name, role, phone, created_by, permissions) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, email, full_name, role, permissions',
       [email.toLowerCase(), hash, full_name, role, phone, req.user.userId, permsJson]
@@ -550,6 +584,10 @@ router.post('/reset-password', async (req, res) => {
 // Check if initial setup is complete (unauthenticated)
 router.get('/setup-status', async (req, res) => {
   try {
+    const { pool, initDB } = require('../database/connection');
+    if (!pool) {
+      await initDB();
+    }
     const result = await query('SELECT COUNT(*) as count FROM users WHERE role = $1', ['admin']);
     const adminCount = result.rows[0].count;
 
@@ -559,12 +597,86 @@ router.get('/setup-status', async (req, res) => {
       message: adminCount > 0 ? 'Setup complete' : 'Setup required'
     });
   } catch (err) {
-    logger.error('Error checking setup status:', err);
+    logger.error('Error checking setup status:', err.message);
     res.status(500).json({
       success: false,
       errorCode: ERROR_CODES.DATABASE_ERROR,
-      message: 'Error checking setup status'
+      message: 'Error checking setup status: ' + err.message
     });
+  }
+});
+
+// POST /api/auth/configure-db
+// Receives MySQL credentials from the error screen, updates .env and reconnects live pool
+router.post('/configure-db', async (req, res) => {
+  try {
+    const { host, port, user, password, database } = req.body;
+    const { reconnectDB } = require('../database/connection');
+    const fs = require('fs');
+    const path = require('path');
+
+    // Update .env files across possible locations (process.cwd, project root, userData)
+    const envPaths = [
+      path.join(process.cwd(), '.env'),
+      path.join(__dirname, '..', '..', '.env'),
+      process.env.USER_DATA_PATH ? path.join(process.env.USER_DATA_PATH, '.env') : null
+    ].filter(Boolean);
+
+    for (const envPath of envPaths) {
+      if (fs.existsSync(envPath)) {
+        try {
+          let envContent = fs.readFileSync(envPath, 'utf8');
+          const setEnv = (key, val) => {
+            const regex = new RegExp(`^${key}=.*$`, 'm');
+            if (regex.test(envContent)) {
+              envContent = envContent.replace(regex, `${key}=${val}`);
+            } else {
+              envContent += `\n${key}=${val}`;
+            }
+          };
+          if (host) setEnv('DB_HOST', host);
+          if (port) setEnv('DB_PORT', port);
+          if (user) setEnv('DB_USER', user);
+          if (password !== undefined) setEnv('DB_PASSWORD', password);
+          if (database) setEnv('DB_NAME', database);
+          fs.writeFileSync(envPath, envContent, 'utf8');
+        } catch (_) {}
+      }
+    }
+
+    // Live reconnect database connection
+    await reconnectDB({
+      host: host || process.env.DB_HOST,
+      port: port || process.env.DB_PORT,
+      user: user || process.env.DB_USER,
+      password: password !== undefined ? password : process.env.DB_PASSWORD,
+      database: database || process.env.DB_NAME
+    });
+
+    res.json({ success: true, message: 'Connected to MySQL successfully!' });
+  } catch (err) {
+    logger.error('Failed to configure DB:', err.message);
+    res.status(400).json({ success: false, message: err.message || 'Failed to connect to MySQL with provided password' });
+  }
+});
+
+// POST /api/auth/open-log-folder
+// Opens the logs directory in Windows Explorer
+router.post('/open-log-folder', async (req, res) => {
+  try {
+    const path = require('path');
+    const fs = require('fs');
+    const { exec } = require('child_process');
+    const logDir = process.env.LOG_DIR || path.join(process.cwd(), 'logs');
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    if (process.platform === 'win32') {
+      exec(`explorer.exe "${logDir}"`);
+    }
+    res.json({ success: true, path: logDir });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 

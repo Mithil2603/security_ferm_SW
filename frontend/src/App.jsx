@@ -86,18 +86,54 @@ function App() {
     setIsSavingConfig(true);
     setConfigMsg('');
     try {
+      let success = false;
+      let errorMsg = '';
+
+      // 1. Try Electron IPC if available
       if (window.electronAPI && window.electronAPI.saveDbConfig) {
-        await window.electronAPI.saveDbConfig(dbConfig);
-        setConfigMsg('Settings saved! Retrying connection...');
+        try {
+          const ipcRes = await window.electronAPI.saveDbConfig(dbConfig);
+          if (ipcRes && ipcRes.success) {
+            success = true;
+          } else if (ipcRes && ipcRes.error) {
+            errorMsg = ipcRes.error;
+          }
+        } catch (ipcErr) {
+          errorMsg = ipcErr.message;
+        }
+      }
+
+      // 2. Also call backend HTTP API endpoint to ensure Express server & root .env are updated
+      try {
+        const baseUrl = getApiBaseUrl();
+        const res = await fetch(`${baseUrl}/auth/configure-db`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(dbConfig)
+        });
+        const data = await res.json();
+        if (data && data.success) {
+          success = true;
+        } else if (data && data.message) {
+          if (!success) errorMsg = data.message;
+        }
+      } catch (fetchErr) {
+        if (!success && !errorMsg) {
+          errorMsg = fetchErr.message;
+        }
+      }
+
+      if (success) {
+        setConfigMsg('✅ Connected to MySQL successfully! Initializing...');
         setTimeout(() => {
           setSetupStatus('checking');
           checkSetupStatus();
         }, 1000);
       } else {
-        setConfigMsg('Saved settings. Please click Retry Connection.');
+        setConfigMsg('❌ ' + (errorMsg || 'Could not connect with provided credentials.'));
       }
     } catch (err) {
-      setConfigMsg('Failed to save settings: ' + err.message);
+      setConfigMsg('❌ ' + err.message);
     } finally {
       setIsSavingConfig(false);
     }
@@ -159,24 +195,36 @@ function App() {
                   setSetupStatus('checking');
                   checkSetupStatus();
                 }}
-                className="px-6 py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-medium rounded-lg transition-colors shadow-md w-full"
+                className="px-6 py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-medium rounded-lg transition-colors shadow-md w-full cursor-pointer"
               >
                 Retry Connection
               </button>
               <button
                 onClick={() => setShowDbConfig(true)}
-                className="px-6 py-2.5 bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium rounded-lg transition-colors text-sm w-full"
+                className="px-6 py-2.5 bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium rounded-lg transition-colors text-sm w-full cursor-pointer"
               >
                 Configure MySQL Credentials
               </button>
               <button
                 type="button"
-                onClick={() => {
+                onClick={async () => {
+                  let opened = false;
                   if (window.electronAPI && window.electronAPI.openLogFolder) {
-                    window.electronAPI.openLogFolder();
+                    try {
+                      const res = await window.electronAPI.openLogFolder();
+                      if (res && res.success) opened = true;
+                    } catch (_) {}
+                  }
+                  if (!opened) {
+                    try {
+                      const baseUrl = getApiBaseUrl();
+                      await fetch(`${baseUrl}/auth/open-log-folder`, { method: 'POST' });
+                    } catch (err) {
+                      console.error('Failed to open log folder:', err);
+                    }
                   }
                 }}
-                className="px-6 py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 font-medium rounded-lg transition-colors text-xs w-full border border-slate-700"
+                className="px-6 py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 font-medium rounded-lg transition-colors text-xs w-full border border-slate-700 cursor-pointer"
               >
                 📂 Open Log Folder
               </button>
@@ -201,10 +249,14 @@ function App() {
                 <label className="block text-xs font-semibold text-slate-300 mb-1">MySQL Password</label>
                 <input type="password" value={dbConfig.password} onChange={e => setDbConfig({...dbConfig, password: e.target.value})} placeholder="Enter MySQL Password" className="w-full px-3 py-1.5 bg-slate-800 border border-slate-600 rounded text-sm text-white focus:outline-none focus:border-teal-500" />
               </div>
-              {configMsg && <div className="text-xs text-teal-400 mt-2">{configMsg}</div>}
+              {configMsg && (
+                <div className={`text-xs p-2.5 rounded ${configMsg.startsWith('✅') ? 'text-teal-300 bg-teal-900/40 border border-teal-700/60' : 'text-rose-300 bg-rose-900/40 border border-rose-700/60'} mt-2 break-words`}>
+                  {configMsg}
+                </div>
+              )}
               <div className="flex gap-2 pt-2">
-                <button type="button" onClick={() => setShowDbConfig(false)} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded text-xs w-1/2 font-medium">Cancel</button>
-                <button type="submit" disabled={isSavingConfig} className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded text-xs w-1/2 font-medium">{isSavingConfig ? 'Saving...' : 'Save & Connect'}</button>
+                <button type="button" onClick={() => { setShowDbConfig(false); setConfigMsg(''); }} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded text-xs w-1/2 font-medium cursor-pointer">Cancel</button>
+                <button type="submit" disabled={isSavingConfig} className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded text-xs w-1/2 font-medium disabled:opacity-50 cursor-pointer">{isSavingConfig ? 'Testing & Saving...' : 'Save & Connect'}</button>
               </div>
             </form>
           )}

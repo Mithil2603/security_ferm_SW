@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { UserSquare2, Plus, Search, Edit2, Trash2, CheckCircle2, XCircle, ShieldCheck, X, Upload, FileText, Download, FileSpreadsheet } from 'lucide-react';
+import { UserSquare2, Plus, Search, Edit2, Trash2, CheckCircle2, XCircle, ShieldCheck, X, Upload, FileText, Download, FileSpreadsheet, ExternalLink } from 'lucide-react';
 import api from '../services/api';
-import { getServerBaseUrl } from '../utils/apiUrl';
+import { getServerBaseUrl, getApiBaseUrl } from '../utils/apiUrl';
 import { format } from 'date-fns';
 import * as XLSX from 'xlsx';
 import Pagination from '../components/Pagination';
@@ -9,6 +9,7 @@ import TableSkeleton from '../components/TableSkeleton';
 import ImportModal from '../components/shared/ImportModal';
 import Toast from '../components/Toast';
 import { toast, confirmDialog } from '../context/ToastContext';
+import { useAuth } from '../context/AuthContext';
 import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
 
 const emptyForm = {
@@ -20,6 +21,8 @@ const emptyForm = {
 };
 
 export default function Employees() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -145,18 +148,25 @@ export default function Employees() {
       return;
     }
 
-    if (!editingEmp) {
-      if (formData.aadhar_number && formData.aadhar_number.length !== 12) {
-        const msg = 'Aadhar number must be exactly 12 digits';
-        setError(msg);
-        toast.error(msg);
-        return;
+    const canEditAadharPan = !editingEmp || isAdmin;
+    if (canEditAadharPan) {
+      if (formData.aadhar_number) {
+        const cleanAadhar = formData.aadhar_number.replace(/\D/g, '');
+        if (cleanAadhar.length > 0 && cleanAadhar.length !== 12 && !cleanAadhar.startsWith('X')) {
+          const msg = 'Aadhar number must be exactly 12 digits';
+          setError(msg);
+          toast.error(msg);
+          return;
+        }
       }
-      if (formData.pan_number && formData.pan_number.length !== 10) {
-        const msg = 'PAN number must be exactly 10 characters (e.g. ABCDE1234F)';
-        setError(msg);
-        toast.error(msg);
-        return;
+      if (formData.pan_number) {
+        const cleanPan = formData.pan_number.trim().toUpperCase();
+        if (cleanPan.length > 0 && cleanPan.length !== 10 && !cleanPan.startsWith('X')) {
+          const msg = 'PAN number must be exactly 10 characters (e.g. ABCDE1234F)';
+          setError(msg);
+          toast.error(msg);
+          return;
+        }
       }
     }
 
@@ -167,8 +177,10 @@ export default function Employees() {
       if (!payload.assigned_client_id) payload.assigned_client_id = null;
 
       if (editingEmp) {
-        delete payload.aadhar_number;
-        delete payload.pan_number;
+        if (!isAdmin) {
+          delete payload.aadhar_number;
+          delete payload.pan_number;
+        }
         await api.put(`/employees/${editingEmp.id}`, payload);
         toast.success('Employee updated successfully!');
       } else {
@@ -228,6 +240,42 @@ export default function Employees() {
       fetchDocuments(editingEmp.id);
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Failed to delete document');
+    }
+  };
+
+  const handleDownloadDocument = async (doc) => {
+    try {
+      const fileUrl = `${getServerBaseUrl()}/uploads/docs/${doc.file_path}`;
+      const response = await fetch(fileUrl);
+      if (!response.ok) throw new Error('Failed to fetch file');
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = doc.file_name || doc.file_path.split('/').pop() || 'document';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      }, 200);
+      toast.success(`Downloading ${doc.file_name || 'document'}`);
+    } catch (err) {
+      console.error('Download error:', err);
+      // Fallback: server attachment endpoint or direct anchor
+      try {
+        const empId = editingEmp?.id || doc.employee_id;
+        const downloadUrl = `${getApiBaseUrl()}/employees/${empId}/docs/${doc.id}/download`;
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = doc.file_name || 'document';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } catch (fallbackErr) {
+        window.open(`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`, '_blank');
+      }
     }
   };
 
@@ -507,7 +555,13 @@ export default function Employees() {
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <label className="block text-sm font-medium text-slate-700">Aadhar Number</label>
-                    {editingEmp && <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">🔒 Read Only</span>}
+                    {editingEmp && (
+                      isAdmin ? (
+                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">Admin Edit</span>
+                      ) : (
+                        <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">🔒 Admin Only</span>
+                      )
+                    )}
                   </div>
                   <input
                     type="text"
@@ -516,15 +570,25 @@ export default function Employees() {
                     onChange={handleInputChange}
                     maxLength="12"
                     placeholder="12-digit number"
-                    disabled={!!editingEmp}
-                    className={editingEmp ? "w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-100 text-slate-700 font-mono cursor-not-allowed select-none" : inputCls}
+                    disabled={editingEmp && !isAdmin}
+                    className={(editingEmp && !isAdmin) ? "w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-100 text-slate-700 font-mono cursor-not-allowed select-none" : inputCls}
                   />
-                  {editingEmp && <p className="text-[11px] text-slate-600 mt-1">Aadhar is locked once registered for compliance.</p>}
+                  {editingEmp && (
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      {isAdmin ? 'Admins have permission to view & edit Aadhar.' : 'Aadhar is locked. Only Admin can modify this number.'}
+                    </p>
+                  )}
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <label className="block text-sm font-medium text-slate-700">PAN Number</label>
-                    {editingEmp && <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">🔒 Read Only</span>}
+                    {editingEmp && (
+                      isAdmin ? (
+                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">Admin Edit</span>
+                      ) : (
+                        <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">🔒 Admin Only</span>
+                      )
+                    )}
                   </div>
                   <input
                     type="text"
@@ -533,10 +597,14 @@ export default function Employees() {
                     onChange={handleInputChange}
                     maxLength="10"
                     placeholder="ABCDE1234F"
-                    disabled={!!editingEmp}
-                    className={editingEmp ? "w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-100 text-slate-700 font-mono cursor-not-allowed select-none" : inputCls}
+                    disabled={editingEmp && !isAdmin}
+                    className={(editingEmp && !isAdmin) ? "w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-100 text-slate-700 font-mono cursor-not-allowed select-none" : inputCls}
                   />
-                  {editingEmp && <p className="text-[11px] text-slate-600 mt-1">PAN is locked once registered for compliance.</p>}
+                  {editingEmp && (
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      {isAdmin ? 'Admins have permission to view & edit PAN.' : 'PAN is locked. Only Admin can modify this number.'}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -639,30 +707,45 @@ export default function Employees() {
                   ) : (
                     <ul className="space-y-2">
                       {documents.map(doc => (
-                        <li key={doc.id} className="flex justify-between items-center p-3 border border-slate-200 rounded-lg bg-white shadow-sm hover:shadow transition-shadow">
-                          <div className="flex items-center gap-3">
-                            <div className="p-2 bg-slate-100 rounded-lg text-slate-500">
+                        <li 
+                          key={doc.id} 
+                          className="flex justify-between items-center p-3 border border-slate-200 rounded-lg bg-white shadow-sm hover:shadow-md hover:border-slate-300 transition-all group"
+                        >
+                          <div 
+                            className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
+                            onClick={() => window.open(`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`, '_blank')}
+                            title="Click anywhere to view document in new window"
+                          >
+                            <div className="p-2 bg-slate-100 group-hover:bg-teal-50 group-hover:text-teal-600 rounded-lg text-slate-500 transition-colors shrink-0">
                               <FileText className="w-4 h-4" />
                             </div>
-                            <div>
-                              <p className="text-sm font-medium text-slate-800">{doc.file_name}</p>
+                            <div className="truncate">
+                              <div className="flex items-center gap-1.5">
+                                <p className="text-sm font-medium text-slate-800 group-hover:text-teal-600 transition-colors truncate">{doc.file_name}</p>
+                                <ExternalLink className="w-3.5 h-3.5 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                              </div>
                               <p className="text-xs text-slate-400">Uploaded {format(new Date(doc.uploaded_at), 'MMM dd, yyyy')}</p>
                             </div>
                           </div>
-                          <div className="flex items-center gap-1">
-                            <a 
-                              href={`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`} 
-                              target="_blank" 
-                              rel="noopener noreferrer"
-                              className="p-1.5 text-teal-600 hover:bg-teal-50 rounded-lg transition-colors"
-                              title="Download / View"
+                          <div className="flex items-center gap-1 shrink-0 ml-2">
+                            <button 
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDownloadDocument(doc);
+                              }}
+                              className="p-1.5 text-teal-600 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer"
+                              title="Download Document"
                             >
                               <Download className="w-4 h-4" />
-                            </a>
+                            </button>
                             <button
                               type="button"
-                              onClick={() => handleDeleteDocument(doc.id, doc.file_name)}
-                              className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteDocument(doc.id, doc.file_name);
+                              }}
+                              className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
                               title="Delete Document"
                             >
                               <Trash2 className="w-4 h-4" />

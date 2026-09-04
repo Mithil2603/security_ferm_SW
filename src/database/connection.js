@@ -140,6 +140,11 @@ async function initPool() {
         throw createErr;
       }
     }
+
+    if (pool) {
+      try { await pool.end(); } catch (_) {}
+      pool = null;
+    }
     logger.error('❌ MySQL connection failed:', err.message);
     throw err;
   }
@@ -255,6 +260,11 @@ function adaptSqlForMySQL(sql) {
 // Main query() function — same API as before, works with all existing routes
 // ─────────────────────────────────────────────────────────────────────────────
 const query = async (text, params = []) => {
+  if (!pool) {
+    try {
+      await initDB();
+    } catch (_) {}
+  }
   if (!pool) {
     throw new Error('MySQL pool not initialized. Call initPool() first.');
   }
@@ -413,6 +423,22 @@ async function initDB() {
   }
 }
 
+async function reconnectDB(newConfig = {}) {
+  if (newConfig.host) process.env.DB_HOST = newConfig.host;
+  if (newConfig.port) process.env.DB_PORT = String(newConfig.port);
+  if (newConfig.user) process.env.DB_USER = newConfig.user;
+  if (newConfig.password !== undefined) process.env.DB_PASSWORD = newConfig.password;
+  if (newConfig.database) process.env.DB_NAME = newConfig.database;
+
+  if (pool) {
+    try { await pool.end(); } catch (_) {}
+    pool = null;
+  }
+
+  await initDB();
+  return true;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock `db` object for any legacy code that used better-sqlite3 db directly
 // ─────────────────────────────────────────────────────────────────────────────
@@ -431,6 +457,7 @@ const moduleExports = {
   query,
   db,
   initDB,
+  reconnectDB,
   adaptSqlForMySQL,
 };
 
