@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+
 import { Building2, Plus, Search, MapPin, Mail, Phone, Edit2, Trash2, CheckCircle2, XCircle, X, CalendarDays, AlertCircle, FileEdit, FileText, Download, Upload, FileSpreadsheet, Printer, ExternalLink, BookOpen } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
@@ -23,9 +24,11 @@ export default function Clients() {
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [showInactive, setShowInactive] = useState(false);
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isRenewModalOpen, setIsRenewModalOpen] = useState(false);
   const [statementClient, setStatementClient] = useState(null);
@@ -41,31 +44,53 @@ export default function Clients() {
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
-  const fetchClients = async () => {
-    try {
+  // Debounce search input — only this effect touches debouncedSearch
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchTerm), 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  // Single canonical fetch effect. AbortController cancels stale in-flight
+  // requests so a slow earlier response never overwrites a newer one.
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const doFetch = async () => {
       setLoading(true);
       setFetchError('');
-      const url = `/clients?search=${searchTerm}${!showInactive ? '&is_active=true' : ''}&page=${page}&limit=20`;
-      const response = await api.get(url);
-      setClients(response.data || []);
-      if (response.pagination) setPagination(response.pagination);
-    } catch (err) {
-      console.error('Failed to fetch clients', err);
-      setFetchError('Failed to load clients. Check server connection.');
-    } finally {
-      setLoading(false);
-    }
+      try {
+        const activeFilter = showInactive ? '&is_active=false' : '&is_active=true';
+        const url = `/clients?search=${debouncedSearch}${activeFilter}&page=${page}&limit=20`;
+        const response = await api.get(url, { signal: controller.signal });
+        setClients(response.data || []);
+        if (response.pagination) setPagination(response.pagination);
+      } catch (err) {
+        if (controller.signal.aborted) return; // stale — ignore
+        console.error('Failed to fetch clients', err);
+        setFetchError('Failed to load clients. Check server connection.');
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    };
+
+    doFetch();
+    return () => controller.abort();
+  }, [debouncedSearch, showInactive, page, refreshKey]);
+
+  // Call this after any mutation to trigger a fresh fetch without touching filters
+  const refresh = useCallback(() => setRefreshKey(k => k + 1), []);
+
+  // Change handlers — reset to page 1 when filters change so we never land
+  // on a now-invalid page (e.g. page 3 of active clients doesn't exist in inactive)
+  const handleSearchChange = (value) => {
+    setSearchTerm(value);
+    setPage(1);
   };
 
-  useEffect(() => {
-    const timer = setTimeout(() => fetchClients(), 300);
-    return () => clearTimeout(timer);
-  }, [searchTerm, showInactive, page]);
-
-  // Reset page when search or filters change
-  useEffect(() => {
+  const handleFilterChange = (inactive) => {
+    setShowInactive(inactive);
     setPage(1);
-  }, [searchTerm, showInactive]);
+  };
 
   const [toast, setToast] = useState({ show: false, message: '', type: 'error' });
 
@@ -144,7 +169,7 @@ export default function Clients() {
       setIsModalOpen(false);
       setEditingClient(null);
       setFormData({ ...emptyForm });
-      fetchClients();
+      refresh();
     } catch (err) {
       const msg = err.errors && Array.isArray(err.errors)
         ? err.errors.map(e => e.message).join(' | ')
@@ -172,7 +197,7 @@ export default function Clients() {
       await api.patch(`/clients/${editingClient.id}/renew`, renewData);
       setIsRenewModalOpen(false);
       setTimeout(() => setEditingClient(null), 300);
-      fetchClients();
+      refresh();
     } catch (err) {
       alert(err.response?.data?.message || 'Failed to renew contract');
     }
@@ -266,11 +291,27 @@ export default function Clients() {
     try {
       await api.delete(`/clients/${id}`);
       setConfirmDelete(null);
-      toast.success('Client status updated');
-      fetchClients();
+      // Optimistic update: immediately remove from the active list
+      setClients(prev => prev.filter(c => c.id !== id));
+      showToast('Client deactivated successfully', 'success');
+      refresh();
     } catch (err) {
       console.error('Failed to deactivate client', err);
-      toast.error(err.response?.data?.message || 'Failed to deactivate client');
+      showToast(err.response?.data?.message || 'Failed to deactivate client', 'error');
+    }
+  };
+
+  const handleReactivate = async (id) => {
+    try {
+      await api.patch(`/clients/${id}/reactivate`);
+      setConfirmDelete(null);
+      // Optimistic update: immediately remove from the inactive list
+      setClients(prev => prev.filter(c => c.id !== id));
+      showToast('Client reactivated successfully', 'success');
+      refresh();
+    } catch (err) {
+      console.error('Failed to reactivate client', err);
+      showToast(err.response?.data?.message || 'Failed to reactivate client', 'error');
     }
   };
 
@@ -278,10 +319,12 @@ export default function Clients() {
     try {
       await api.delete(`/clients/${id}/hard`);
       setConfirmDelete(null);
-      toast.success('Client permanently deleted');
-      fetchClients();
+      // Optimistic update: immediately remove from the list
+      setClients(prev => prev.filter(c => c.id !== id));
+      showToast('Client permanently deleted', 'success');
+      refresh();
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to permanently delete client');
+      showToast(err.response?.data?.message || 'Failed to permanently delete client', 'error');
       console.error('Failed to permanently delete client', err);
     }
   };
@@ -350,14 +393,6 @@ export default function Clients() {
         </div>
         <div className="flex gap-2 flex-wrap justify-end">
           <button
-            onClick={handleDownloadSampleTemplate}
-            className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2 border border-indigo-200"
-            title="Download pre-formatted Excel template for importing"
-          >
-            <FileSpreadsheet className="w-4 h-4 text-indigo-600" />
-            Sample Template
-          </button>
-          <button
             onClick={() => setIsImportModalOpen(true)}
             className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2 border border-slate-300"
           >
@@ -389,16 +424,16 @@ export default function Clients() {
             type="text"
             placeholder="Search clients by name, contact, or phone..."
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
             className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all"
           />
         </div>
         <div className="flex items-center gap-2">
           <label className="text-sm font-medium text-slate-600 cursor-pointer flex items-center gap-2">
-            <input 
-              type="checkbox" 
-              checked={showInactive} 
-              onChange={(e) => setShowInactive(e.target.checked)} 
+            <input
+              type="checkbox"
+              checked={showInactive}
+              onChange={(e) => handleFilterChange(e.target.checked)}
               className="w-4 h-4 text-teal-600 border-slate-300 rounded focus:ring-teal-500"
             />
             Show Inactive Clients
@@ -410,7 +445,7 @@ export default function Clients() {
       {fetchError && (
         <div className="mb-4 p-4 bg-red-50 text-red-600 rounded-lg text-sm flex justify-between shadow-sm border border-red-100">
           <div className="flex items-center gap-2"><AlertCircle className="w-4 h-4" /> {fetchError}</div>
-          <button onClick={fetchClients} className="underline hover:text-red-700 font-medium">Retry</button>
+          <button onClick={refresh} className="underline hover:text-red-700 font-medium">Retry</button>
         </div>
       )}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -507,14 +542,18 @@ export default function Clients() {
                         <button onClick={() => openEditModal(client)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Edit">
                           <Edit2 className="w-4 h-4" />
                         </button>
-                        {client.is_active && (
+                        {!!client.is_active && (
                           <button onClick={() => openRenewModal(client)} className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="Renew Contract">
                             <FileEdit className="w-4 h-4" />
                           </button>
                         )}
-                        {client.is_active && (
+                        {client.is_active ? (
                           <button onClick={() => setConfirmDelete({ id: client.id, type: 'deactivate' })} className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Deactivate">
                             <XCircle className="w-4 h-4" />
+                          </button>
+                        ) : (
+                          <button onClick={() => setConfirmDelete({ id: client.id, type: 'reactivate' })} className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="Reactivate Client">
+                            <CheckCircle2 className="w-4 h-4" />
                           </button>
                         )}
                         <button onClick={() => setConfirmDelete({ id: client.id, type: 'hard' })} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete Permanently">
@@ -532,27 +571,41 @@ export default function Clients() {
       </div>
 
       {/* Modals */}
-      {/* Deactivate/Delete Confirmation */}
+      {/* Deactivate/Delete/Reactivate Confirmation */}
       {confirmDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 animate-slide-up">
             <h3 className="text-lg font-bold text-slate-800 mb-2">
-              {confirmDelete.type === 'deactivate' ? 'Confirm Deactivation' : 'Confirm Permanent Delete'}
+              {confirmDelete.type === 'deactivate' ? 'Confirm Deactivation'
+                : confirmDelete.type === 'reactivate' ? 'Confirm Reactivation'
+                : 'Confirm Permanent Delete'}
             </h3>
             <p className="text-sm text-slate-600 mb-6">
-              {confirmDelete.type === 'deactivate' 
-                ? 'Are you sure you want to deactivate this client? This will not delete the client record.' 
+              {confirmDelete.type === 'deactivate'
+                ? 'Are you sure you want to deactivate this client? This will not delete the client record.'
+                : confirmDelete.type === 'reactivate'
+                ? 'Are you sure you want to reactivate this client? They will appear in active client lists again.'
                 : 'Are you sure you want to PERMANENTLY delete this client? This action cannot be undone and will fail if they have linked invoices or employees.'}
             </p>
             <div className="flex justify-end gap-3">
               <button onClick={() => setConfirmDelete(null)} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors">
                 Cancel
               </button>
-              <button 
-                onClick={() => confirmDelete.type === 'deactivate' ? handleDeactivate(confirmDelete.id) : handleHardDelete(confirmDelete.id)} 
-                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors shadow-sm"
+              <button
+                onClick={() => {
+                  if (confirmDelete.type === 'deactivate') handleDeactivate(confirmDelete.id);
+                  else if (confirmDelete.type === 'reactivate') handleReactivate(confirmDelete.id);
+                  else handleHardDelete(confirmDelete.id);
+                }}
+                className={`px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors shadow-sm ${
+                  confirmDelete.type === 'reactivate'
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : 'bg-red-600 hover:bg-red-700'
+                }`}
               >
-                {confirmDelete.type === 'deactivate' ? 'Deactivate' : 'Delete Permanently'}
+                {confirmDelete.type === 'deactivate' ? 'Deactivate'
+                  : confirmDelete.type === 'reactivate' ? 'Reactivate'
+                  : 'Delete Permanently'}
               </button>
             </div>
           </div>
@@ -1010,9 +1063,7 @@ export default function Clients() {
         onClose={() => setIsImportModalOpen(false)}
         entityName="Clients"
         endpoint="/clients/import"
-        onImportSuccess={() => {
-          fetchClients();
-        }}
+        onImportSuccess={refresh}
       />
       {toast.show && (
         <Toast
