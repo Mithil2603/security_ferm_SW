@@ -64,7 +64,7 @@ router.get('/', async (req, res) => {
         (SELECT COUNT(*) FROM employees e WHERE e.assigned_client_id = c.id AND e.is_active = 1) as employee_count
        FROM clients c 
        ${whereClause}
-       ORDER BY c.is_active DESC, c.name ASC
+       ORDER BY c.created_at DESC, c.name ASC
        LIMIT $${paramCount} OFFSET $${paramCount + 1}`,
       [...params, parseInt(limit), offset]
     );
@@ -267,6 +267,26 @@ router.delete('/:id', async (req, res) => {
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'clients' });
     res.status(500).json({ success: false, message: 'Failed to deactivate client' });
+  }
+});
+
+// PATCH /api/clients/:id/reactivate (re-enable a soft-deleted client)
+router.patch('/:id/reactivate', async (req, res) => {
+  try {
+    const result = await query(
+      'UPDATE clients SET is_active = 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+      [req.params.id]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'Client not found' });
+    }
+
+    await logAudit(req, 'clients', req.params.id, 'update', 'Reactivated client');
+
+    res.json({ success: true, message: 'Client reactivated successfully' });
+  } catch (error) {
+    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'clients' });
+    res.status(500).json({ success: false, message: 'Failed to reactivate client' });
   }
 });
 
