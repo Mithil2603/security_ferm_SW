@@ -9,6 +9,12 @@
 const { query } = require('../../database/connection');
 const { add, subtract, multiply, divide, percentage, toDecimal, sum } = require('../utils/decimalMath');
 const { daysInMonth } = require('../utils/dateCalculator');
+const {
+  normalizePayrollMonth,
+  resolveAttendanceDays,
+  getMissingAttendancePolicy,
+} = require('./attendanceCalculator');
+const { resolvePfPercentage } = require('./statutory');
 const Decimal = require('decimal.js');
 const logger = require('../../utils/logger');
 
@@ -16,8 +22,20 @@ class SalarySlipService {
 
   /**
    * Generate a salary slip for a single employee for a given month.
+   *
+   * @param {number}  employeeId
+   * @param {string}  payrollMonth  the payroll PERIOD, "YYYY-MM". This is the
+   *                                only date the calculation trusts — it is not
+   *                                derived from "today", so early/festival runs
+   *                                keep calculating the selected month.
+   * @param {number}  [daysWorked]  explicit payable-days override for manual
+   *                                corrections. When omitted, payable days are
+   *                                computed from THIS month's attendance.
+   * @param {number}  userId
    */
   async generate(employeeId, payrollMonth, daysWorked, userId) {
+    payrollMonth = normalizePayrollMonth(payrollMonth);
+
     // Check for duplicate
     const existing = await query(
       `SELECT id FROM salary_slips WHERE employee_id = $1 AND payroll_month = $2`,
@@ -45,8 +63,24 @@ class SalarySlipService {
     // Parse month
     const [year, month] = payrollMonth.split('-').map(Number);
     const totalDays = daysInMonth(month, year);
-    const effectiveDays = daysWorked !== undefined ? daysWorked : totalDays;
-    const absentDays = Math.max(0, totalDays - effectiveDays);
+
+    // Payable days: use the explicit override if one was passed (manual
+    // correction / batch), otherwise derive it from THIS month's attendance
+    // using the shared calculator. A month with no attendance record is NOT
+    // silently treated as fully present (see attendanceCalculator).
+    let effectiveDays;
+    let attendanceSummary = null;
+    if (daysWorked !== undefined && daysWorked !== null && daysWorked !== '') {
+      effectiveDays = Number(daysWorked);
+    } else {
+      const missingPolicy = await getMissingAttendancePolicy(query);
+      attendanceSummary = await resolveAttendanceDays(query, employeeId, payrollMonth, missingPolicy);
+      effectiveDays = attendanceSummary.payableDays;
+    }
+    if (!Number.isFinite(effectiveDays) || effectiveDays < 0) effectiveDays = 0;
+    if (effectiveDays > totalDays) effectiveDays = totalDays;
+
+    const absentDays = Math.round((totalDays - effectiveDays) * 100) / 100;
     const ratio = new Decimal(effectiveDays).dividedBy(totalDays);
 
     // ─── Calculate Earnings ───────────────────────────────────────────────────
@@ -89,8 +123,11 @@ class SalarySlipService {
     // ─── Calculate Deductions ─────────────────────────────────────────────────
     const deductions = [];
 
-    // PF (Employee share): on basic salary
-    const pfAmount = baseSalary.times(D(emp.pf_percentage || 12)).dividedBy(100).toDecimalPlaces(2);
+    // PF (Employee share): on basic salary.
+    // resolvePfPercentage honours an explicit 0 — only an unset value
+    // falls back to the statutory 12%.
+    const pfPercentage = resolvePfPercentage(emp.pf_percentage);
+    const pfAmount = baseSalary.times(D(pfPercentage)).dividedBy(100).toDecimalPlaces(2);
     if (pfAmount.greaterThan(0)) {
       deductions.push({ code: 'PF_EE', name: 'Provident Fund (Employee)', amount: parseFloat(pfAmount.toString()), order: 10 });
     }
@@ -185,9 +222,16 @@ class SalarySlipService {
   }
 
   /**
-   * Batch generate salary slips for all active employees.
+   * Batch generate salary slips for all active employees for one payroll month.
+   *
+   * Uses exactly the same attendance resolution and salary calculation as
+   * generate() — each employee's payable days come from resolveAttendanceDays()
+   * for the SELECTED month only.
    */
   async batchGenerate(payrollMonth, userId) {
+    payrollMonth = normalizePayrollMonth(payrollMonth);
+    const missingPolicy = await getMissingAttendancePolicy(query);
+
     const employees = await query(
       `SELECT e.id, e.full_name, e.salary_structure_id
        FROM employees e
@@ -206,22 +250,25 @@ class SalarySlipService {
         );
         if (existing.rows.length > 0) { skipped++; continue; }
 
-        // Get attendance for days worked
-        const [year, month] = payrollMonth.split('-').map(Number);
-        const monthStart = `${payrollMonth}-01`;
-        const totalDays = daysInMonth(month, year);
-        const monthEnd = `${payrollMonth}-${String(totalDays).padStart(2, '0')}`;
+        // Resolve payable days from THIS month's attendance (shared calculator).
+        const att = await resolveAttendanceDays(query, emp.id, payrollMonth, missingPolicy);
 
-        const attendanceResult = await query(
-          `SELECT COUNT(*) as count FROM attendance 
-           WHERE employee_id = $1 AND attendance_date >= $2 AND attendance_date <= $3 
-             AND status IN ('present', 'half_day')`,
-          [emp.id, monthStart, monthEnd]
-        );
-        const daysWorked = parseInt(attendanceResult.rows[0].count) || totalDays;
-
-        const slip = await this.generate(emp.id, payrollMonth, daysWorked, userId);
-        results.push({ employee: emp.full_name, status: 'generated', slip_id: slip.id });
+        const slip = await this.generate(emp.id, payrollMonth, att.payableDays, userId);
+        results.push({
+          employee: emp.full_name,
+          status: 'generated',
+          slip_id: slip.id,
+          days: {
+            payable: att.payableDays,
+            present: att.presentDays,
+            half_day: att.halfDays,
+            holiday: att.holidayDays,
+            leave: att.leaveDays,
+            absent: att.absentDays,
+            missing: att.missingDays,
+            total: att.totalDays,
+          },
+        });
         generated++;
       } catch (err) {
         results.push({ employee: emp.full_name, status: 'error', error: err.message });
@@ -229,7 +276,15 @@ class SalarySlipService {
       }
     }
 
-    return { generated, skipped, errors, total: employees.rows.length, details: results };
+    return {
+      generated,
+      skipped,
+      errors,
+      total: employees.rows.length,
+      payroll_month: payrollMonth,
+      missing_attendance_policy: missingPolicy,
+      details: results,
+    };
   }
 
   /**

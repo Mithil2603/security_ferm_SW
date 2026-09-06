@@ -388,7 +388,8 @@ async function insertPayrollTransaction() {
       const otherAllow = parseFloat(((ss.other_allowances || 0) * ratio).toFixed(2));
       const grossSalary = parseFloat((baseSalary + da + hra + otherAllow).toFixed(2));
       
-      const pfDeduction = parseFloat((baseSalary * (ss.pf_percentage || 12) / 100).toFixed(2));
+      const pfPct = (ss.pf_percentage === null || ss.pf_percentage === undefined || ss.pf_percentage === '') ? 12 : Number(ss.pf_percentage);
+      const pfDeduction = parseFloat((baseSalary * pfPct / 100).toFixed(2));
       const esiDeduction = grossSalary <= 21000 ? parseFloat((grossSalary * 0.0075).toFixed(2)) : 0;
       const taxDeduction = 0;
       const otherDeductions = 0;

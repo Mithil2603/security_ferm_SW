@@ -8,6 +8,7 @@ const { validate, schemas } = require('../middleware/validators');
 const { generatePayslipPDF } = require('../utils/payslipGenerator');
 const { saveStatement } = require('../utils/statementSaver');
 const { logError } = require('../utils/errorLogger');
+const { resolvePfPercentage } = require('../services/payroll/statutory');
 
 router.use(authMiddleware);
 router.use(requirePermission('manage_payroll'));
@@ -60,8 +61,9 @@ async function calculatePayroll(employee_id, payroll_month, manual_days_worked) 
   const otherAllow = D(emp.other_allowances).times(ratio).plus(customAdditions).toDecimalPlaces(2);
   const grossSalary = baseSalary.plus(da).plus(hra).plus(otherAllow).toDecimalPlaces(2);
   
-  // PF deduction on base salary (as per Indian standards), not gross
-  const pfDeduction = baseSalary.times(D(emp.pf_percentage || 12)).dividedBy(100).toDecimalPlaces(2);
+  // PF deduction on base salary (as per Indian standards), not gross.
+  // resolvePfPercentage honours an explicit 0 — only an unset value defaults to 12%.
+  const pfDeduction = baseSalary.times(D(resolvePfPercentage(emp.pf_percentage))).dividedBy(100).toDecimalPlaces(2);
   const esiDeduction = emp.esi_applicable ? grossSalary.times(0.75).dividedBy(100).toDecimalPlaces(2) : D(0);
   
   // Basic Indian Income Tax Calculation (New Regime FY 2025-26+)

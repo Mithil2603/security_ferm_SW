@@ -3,6 +3,7 @@ import api from '../services/api';
 import { Plus, Trash2, IndianRupee, ArrowDownRight, ArrowUpRight, Search, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast, confirmDialog } from '../context/ToastContext';
+import { normalizeAdjustmentCategories } from '../utils/payrollAdjustments';
 
 export default function Ledger() {
   const [employees, setEmployees] = useState([]);
@@ -55,7 +56,7 @@ export default function Ledger() {
   const fetchCategories = async () => {
     try {
       const res = await api.get('/settings/system/payroll_adjustment_categories');
-      setCategories(JSON.parse(res.data || '[]'));
+      setCategories(normalizeAdjustmentCategories(res.data));
     } catch (err) {
       setCategories([]);
     }
@@ -105,7 +106,7 @@ export default function Ledger() {
       await api.post('/ledger', {
         employee_id: selectedEmp.id,
         transaction_date: form.transaction_date,
-        type: cat.type,
+        type: cat.type === 'addition' ? 'addition' : 'deduction',
         category: cat.name,
         amount: parseFloat(form.amount),
         description: form.description

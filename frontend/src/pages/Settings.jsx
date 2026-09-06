@@ -12,6 +12,7 @@ import { getServerBaseUrl, getApiBaseUrl } from '../utils/apiUrl';
 import Toast from '../components/Toast';
 import { toast, confirmDialog } from '../context/ToastContext';
 import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
+import { normalizeAdjustmentCategories } from '../utils/payrollAdjustments';
 
 import DatabaseBackupTab from '../components/settings/DatabaseBackupTab';
 
@@ -1523,19 +1524,50 @@ function PayrollAdjustmentsTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [newCat, setNewCat] = useState({ name: '', type: 'deduction' });
+  const [missingPolicy, setMissingPolicy] = useState('unpaid');
+  const [savingPolicy, setSavingPolicy] = useState(false);
 
   useEffect(() => {
     fetchCategories();
+    fetchMissingPolicy();
   }, []);
+
+  const fetchMissingPolicy = async () => {
+    try {
+      const res = await api.get('/settings/system/payroll_missing_attendance_policy');
+      setMissingPolicy(res.data === 'present' ? 'present' : 'unpaid');
+    } catch {
+      setMissingPolicy('unpaid');
+    }
+  };
+
+  const saveMissingPolicy = async (value) => {
+    setSavingPolicy(true);
+    const prev = missingPolicy;
+    setMissingPolicy(value);
+    try {
+      await api.put('/settings/system/payroll_missing_attendance_policy', { value });
+      toast.success('Attendance policy updated');
+    } catch (err) {
+      setMissingPolicy(prev);
+      toast.error('Failed to update policy: ' + (err.response?.data?.message || err.message));
+    } finally {
+      setSavingPolicy(false);
+    }
+  };
 
   const fetchCategories = async () => {
     try {
       const res = await api.get('/settings/system/payroll_adjustment_categories');
-      if (res.data) {
-        const parsed = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
-        setCategories(Array.isArray(parsed) ? parsed : []);
-      } else {
-        setCategories([]);
+      const normalized = normalizeAdjustmentCategories(res.data);
+      setCategories(normalized);
+
+      // If any legacy entry had to be upgraded (bare string / missing type),
+      // persist the normalized list so it only happens once.
+      const original = typeof res.data === 'string' ? res.data : JSON.stringify(res.data ?? []);
+      if (res.data && JSON.stringify(normalized) !== original) {
+        api.put('/settings/system/payroll_adjustment_categories', { value: JSON.stringify(normalized) })
+          .catch(() => { /* non-blocking */ });
       }
     } catch (err) {
       console.error('Fetch categories error:', err);
@@ -1584,6 +1616,33 @@ function PayrollAdjustmentsTab() {
   if (loading) return <div className="p-8 text-center text-slate-500">Loading...</div>;
 
   return (
+    <div className="space-y-6">
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+      <div className="p-6 border-b border-slate-100 bg-slate-50">
+        <h2 className="text-lg font-bold text-slate-800">Missing Attendance Policy</h2>
+        <p className="text-sm text-slate-500 mt-1">
+          How <span className="font-medium">Batch Generate All</span> and salary-slip generation treat a day
+          with <span className="font-medium">no</span> attendance record for the payroll month.
+        </p>
+      </div>
+      <div className="p-6 space-y-3">
+        <label className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer ${missingPolicy === 'unpaid' ? 'border-teal-400 bg-teal-50' : 'border-slate-200'}`}>
+          <input type="radio" name="missingPolicy" value="unpaid" checked={missingPolicy === 'unpaid'} disabled={savingPolicy} onChange={() => saveMissingPolicy('unpaid')} className="mt-1" />
+          <span>
+            <span className="text-sm font-semibold text-slate-800">Unpaid (recommended)</span>
+            <span className="block text-xs text-slate-500 mt-0.5">An unmarked day is <strong>not</strong> paid. Only <em>present</em>, <em>half day</em> (½) and <em>holiday</em> days count towards salary. Mark attendance before running payroll.</span>
+          </span>
+        </label>
+        <label className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer ${missingPolicy === 'present' ? 'border-teal-400 bg-teal-50' : 'border-slate-200'}`}>
+          <input type="radio" name="missingPolicy" value="present" checked={missingPolicy === 'present'} disabled={savingPolicy} onChange={() => saveMissingPolicy('present')} className="mt-1" />
+          <span>
+            <span className="text-sm font-semibold text-slate-800">Treat as Present</span>
+            <span className="block text-xs text-slate-500 mt-0.5">An unmarked day is paid in full. Use this only if you record <em>exceptions</em> (absent / leave) and leave normal working days blank.</span>
+          </span>
+        </label>
+      </div>
+    </div>
+
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
       <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
         <div>
@@ -1644,6 +1703,7 @@ function PayrollAdjustmentsTab() {
           </div>
         </div>
       </div>
+    </div>
     </div>
   );
 }
