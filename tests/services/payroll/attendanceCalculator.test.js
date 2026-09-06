@@ -121,4 +121,33 @@ describe('resolveAttendanceDays (DB-backed) uses the selected month only', () =>
     expect(out.totalDays).toBe(30);
     expect(out.payableDays).toBe(1.5);
   });
+
+  test('respects cutOffDate by bounding query range and periodDays to cut-off', async () => {
+    const calls = [];
+    const fakeQuery = async (sql, params) => {
+      calls.push({ sql, params });
+      // 6 days of attendance: 5 present, 1 absent
+      return {
+        rows: [
+          { status: 'present' },
+          { status: 'present' },
+          { status: 'present' },
+          { status: 'present' },
+          { status: 'present' },
+          { status: 'absent' },
+        ]
+      };
+    };
+
+    const out = await resolveAttendanceDays(fakeQuery, 101, '2026-09', 'unpaid', '2026-09-06');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].params).toEqual([101, '2026-09-01', '2026-09-06']);
+    expect(out.month).toBe('2026-09');
+    expect(out.totalDays).toBe(6);
+    expect(out.payableDays).toBe(5);
+    expect(out.absentDays).toBe(1);
+    expect(out.missingDays).toBe(0);
+  });
 });
+
