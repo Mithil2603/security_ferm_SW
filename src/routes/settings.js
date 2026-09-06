@@ -89,7 +89,8 @@ router.put('/salary-structures/:id', requirePermission('manage_settings', 'manag
          esi_applicable = COALESCE($7, esi_applicable),
          income_tax_applicable = COALESCE($8, income_tax_applicable),
          effective_from = COALESCE($9, effective_from),
-         is_active = COALESCE($10, is_active)
+         is_active = COALESCE($10, is_active),
+         ctc = (COALESCE($2, base_salary) + COALESCE($3, dearness_allowance) + COALESCE($4, house_rent_allowance) + COALESCE($5, other_allowances)) + ((COALESCE($2, base_salary) * COALESCE($6, pf_percentage)) / 100)
        WHERE id = $11
        RETURNING *`,
       [name, base_salary, dearness_allowance, house_rent_allowance,

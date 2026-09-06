@@ -157,8 +157,10 @@ function SalaryStructuresTab() {
       };
       if (editing) {
         await api.put(`/settings/salary-structures/${editing.id}`, payload);
+        toast.success('Salary structure updated successfully');
       } else {
         await api.post('/settings/salary-structures', payload);
+        toast.success('Salary structure created successfully');
       }
       setIsModalOpen(false);
       fetchStructures();

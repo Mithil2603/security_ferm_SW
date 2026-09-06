@@ -33,8 +33,10 @@ class SalarySlipService {
    *                                computed from THIS month's attendance.
    * @param {number}  userId
    */
-  async generate(employeeId, payrollMonth, daysWorked, userId) {
+  async generate(employeeId, payrollMonth, daysWorked, userId, options = {}) {
     payrollMonth = normalizePayrollMonth(payrollMonth);
+
+    const { calculation_basis = 'full_month', cut_off_day = null } = options;
 
     // Check for duplicate
     const existing = await query(
@@ -62,26 +64,29 @@ class SalarySlipService {
 
     // Parse month
     const [year, month] = payrollMonth.split('-').map(Number);
-    const totalDays = daysInMonth(month, year);
+    const calendarDays = daysInMonth(month, year);
 
-    // Payable days: use the explicit override if one was passed (manual
-    // correction / batch), otherwise derive it from THIS month's attendance
-    // using the shared calculator. A month with no attendance record is NOT
-    // silently treated as fully present (see attendanceCalculator).
+    // If calculation_basis is 'to_date', bound evaluation to cut_off_day
+    const isToDate = calculation_basis === 'to_date' && cut_off_day && Number(cut_off_day) > 0;
+    const periodDays = isToDate ? Math.min(Number(cut_off_day), calendarDays) : calendarDays;
+    const cutOffDate = isToDate ? `${payrollMonth}-${String(periodDays).padStart(2, '0')}` : null;
+
+    // Payable days: use explicit override if provided, otherwise derive from attendance
     let effectiveDays;
     let attendanceSummary = null;
     if (daysWorked !== undefined && daysWorked !== null && daysWorked !== '') {
       effectiveDays = Number(daysWorked);
     } else {
       const missingPolicy = await getMissingAttendancePolicy(query);
-      attendanceSummary = await resolveAttendanceDays(query, employeeId, payrollMonth, missingPolicy);
+      attendanceSummary = await resolveAttendanceDays(query, employeeId, payrollMonth, missingPolicy, cutOffDate);
       effectiveDays = attendanceSummary.payableDays;
     }
     if (!Number.isFinite(effectiveDays) || effectiveDays < 0) effectiveDays = 0;
-    if (effectiveDays > totalDays) effectiveDays = totalDays;
+    if (effectiveDays > periodDays) effectiveDays = periodDays;
 
-    const absentDays = Math.round((totalDays - effectiveDays) * 100) / 100;
-    const ratio = new Decimal(effectiveDays).dividedBy(totalDays);
+    const absentDays = Math.round((periodDays - effectiveDays) * 100) / 100;
+    // Daily wage is based on standard calendar days of the month
+    const ratio = new Decimal(effectiveDays).dividedBy(calendarDays);
 
     // ─── Calculate Earnings ───────────────────────────────────────────────────
     const earnings = [];
@@ -192,7 +197,7 @@ class SalarySlipService {
          total_earnings, total_deductions, net_salary, status, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', $10)`,
       [
-        employeeId, payrollMonth, emp.struct_id, totalDays, effectiveDays, absentDays,
+        employeeId, payrollMonth, emp.struct_id, periodDays, effectiveDays, absentDays,
         parseFloat(totalEarnings.toString()),
         parseFloat(totalDeductions.toString()),
         parseFloat(netSalary.toString()),
@@ -206,14 +211,14 @@ class SalarySlipService {
     for (const e of earnings) {
       await query(
         `INSERT INTO salary_slip_components (salary_slip_id, component_code, component_name, type, amount, display_order)
-         VALUES ($1, $2, $3, 'earning', $4, $5)`,
+          VALUES ($1, $2, $3, 'earning', $4, $5)`,
         [slipId, e.code, e.name, e.amount, e.order]
       );
     }
     for (const d of deductions) {
       await query(
         `INSERT INTO salary_slip_components (salary_slip_id, component_code, component_name, type, amount, display_order)
-         VALUES ($1, $2, $3, 'deduction', $4, $5)`,
+          VALUES ($1, $2, $3, 'deduction', $4, $5)`,
         [slipId, d.code, d.name, d.amount, d.order]
       );
     }
@@ -228,9 +233,15 @@ class SalarySlipService {
    * generate() — each employee's payable days come from resolveAttendanceDays()
    * for the SELECTED month only.
    */
-  async batchGenerate(payrollMonth, userId) {
+  async batchGenerate(payrollMonth, userId, options = {}) {
     payrollMonth = normalizePayrollMonth(payrollMonth);
     const missingPolicy = await getMissingAttendancePolicy(query);
+
+    const [year, month] = payrollMonth.split('-').map(Number);
+    const calendarDays = daysInMonth(month, year);
+    const isToDate = options.calculation_basis === 'to_date' && options.cut_off_day && Number(options.cut_off_day) > 0;
+    const periodDays = isToDate ? Math.min(Number(options.cut_off_day), calendarDays) : calendarDays;
+    const cutOffDate = isToDate ? `${payrollMonth}-${String(periodDays).padStart(2, '0')}` : null;
 
     const employees = await query(
       `SELECT e.id, e.full_name, e.salary_structure_id
@@ -251,9 +262,9 @@ class SalarySlipService {
         if (existing.rows.length > 0) { skipped++; continue; }
 
         // Resolve payable days from THIS month's attendance (shared calculator).
-        const att = await resolveAttendanceDays(query, emp.id, payrollMonth, missingPolicy);
+        const att = await resolveAttendanceDays(query, emp.id, payrollMonth, missingPolicy, cutOffDate);
 
-        const slip = await this.generate(emp.id, payrollMonth, att.payableDays, userId);
+        const slip = await this.generate(emp.id, payrollMonth, att.payableDays, userId, options);
         results.push({
           employee: emp.full_name,
           status: 'generated',
@@ -266,7 +277,7 @@ class SalarySlipService {
             leave: att.leaveDays,
             absent: att.absentDays,
             missing: att.missingDays,
-            total: att.totalDays,
+            total: periodDays,
           },
         });
         generated++;
@@ -282,6 +293,8 @@ class SalarySlipService {
       errors,
       total: employees.rows.length,
       payroll_month: payrollMonth,
+      calculation_basis: isToDate ? 'to_date' : 'full_month',
+      cut_off_day: periodDays,
       missing_attendance_policy: missingPolicy,
       details: results,
     };
@@ -296,6 +309,10 @@ class SalarySlipService {
               e.designation, e.bank_account_number, e.bank_ifsc_code, e.bank_name,
               e.pan_number, e.aadhar_number,
               st.name as structure_name,
+              st.base_salary as struct_base_salary,
+              st.dearness_allowance as struct_da,
+              st.house_rent_allowance as struct_hra,
+              st.other_allowances as struct_other,
               u.full_name as approved_by_name
        FROM salary_slips ss
        JOIN employees e ON ss.employee_id = e.id
@@ -315,6 +332,23 @@ class SalarySlipService {
     );
     slip.earnings = comps.rows.filter(c => c.type === 'earning');
     slip.deductions = comps.rows.filter(c => c.type === 'deduction');
+
+    // Calculate full monthly gross & loss of pay (LOP)
+    const structBase = parseFloat(slip.struct_base_salary || 0);
+    const structDa = parseFloat(slip.struct_da || 0);
+    const structHra = parseFloat(slip.struct_hra || 0);
+    const structOther = parseFloat(slip.struct_other || 0);
+    const fullGross = structBase + structDa + structHra + structOther;
+
+    slip.full_monthly_gross = fullGross > 0 ? fullGross : parseFloat(slip.total_earnings);
+    slip.struct_base_salary = structBase;
+    slip.struct_da = structDa;
+    slip.struct_hra = structHra;
+    slip.struct_other = structOther;
+
+    const daysInMonth = parseInt(slip.days_in_month) || 30;
+    const daysWorked = parseFloat(slip.days_worked) || 0;
+    slip.lop_amount = Math.max(0, Math.round((slip.full_monthly_gross - parseFloat(slip.total_earnings)) * 100) / 100);
 
     return slip;
   }

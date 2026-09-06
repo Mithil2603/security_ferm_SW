@@ -66,6 +66,17 @@ function round2(n) {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
+function normalizeAttendanceStatus(statusVal) {
+  if (!statusVal) return 'unknown';
+  const s = String(statusVal).trim().toLowerCase();
+  if (['p', 'present', 'pr', 'fullday', 'full_day', 'full', 'd', 'day', 'night', 'yes'].includes(s)) return 'present';
+  if (['a', 'absent', 'ab', 'no'].includes(s)) return 'absent';
+  if (['hd', 'half_day', 'half day', 'half-day', 'half', 'h/d'].includes(s)) return 'half_day';
+  if (['l', 'leave', 'cl', 'pl', 'sl', 'el', 'paid_leave'].includes(s)) return 'leave';
+  if (['h', 'holiday', 'wo', 'week_off', 'week-off', 'weekoff', 'off'].includes(s)) return 'holiday';
+  return 'unknown';
+}
+
 /**
  * Pure: fold attendance rows into a day-level summary for one month.
  *
@@ -83,7 +94,8 @@ function summarizeAttendance(rows, totalDays, missingPolicy = 'unpaid') {
   const counts = { present: 0, half_day: 0, holiday: 0, leave: 0, absent: 0, unknown: 0 };
 
   for (const row of rows || []) {
-    const status = String(row && row.status != null ? row.status : '').toLowerCase().trim();
+    const rawStatus = row && row.status != null ? row.status : '';
+    const status = normalizeAttendanceStatus(rawStatus);
     if (Object.prototype.hasOwnProperty.call(counts, status)) counts[status] += 1;
     else counts.unknown += 1;
   }
@@ -127,9 +139,13 @@ function summarizeAttendance(rows, totalDays, missingPolicy = 'unpaid') {
  * @param {number}   employeeId
  * @param {string}   payrollMonth "YYYY-MM" (or "YYYY-MM-DD" – only the month is used)
  * @param {'unpaid'|'present'} missingPolicy
+ * @param {string}   [cutOffDate] optional "YYYY-MM-DD" to evaluate attendance only up to this day
  */
-async function resolveAttendanceDays(query, employeeId, payrollMonth, missingPolicy = 'unpaid') {
+async function resolveAttendanceDays(query, employeeId, payrollMonth, missingPolicy = 'unpaid', cutOffDate = null) {
   const bounds = monthBounds(payrollMonth);
+  const effectiveEndDate = cutOffDate && cutOffDate >= bounds.startDate && cutOffDate <= bounds.endDate
+    ? cutOffDate
+    : bounds.endDate;
 
   const result = await query(
     `SELECT status
@@ -137,12 +153,17 @@ async function resolveAttendanceDays(query, employeeId, payrollMonth, missingPol
       WHERE employee_id = $1
         AND attendance_date >= $2
         AND attendance_date <= $3`,
-    [employeeId, bounds.startDate, bounds.endDate]
+    [employeeId, bounds.startDate, effectiveEndDate]
   );
+
+  const [endYear, endMonth, endDay] = effectiveEndDate.split('-').map(Number);
+  const periodDays = (effectiveEndDate !== bounds.endDate) ? endDay : bounds.totalDays;
 
   return {
     ...bounds,
-    ...summarizeAttendance(result.rows, bounds.totalDays, missingPolicy),
+    effectiveEndDate,
+    periodDays,
+    ...summarizeAttendance(result.rows, periodDays, missingPolicy),
   };
 }
 

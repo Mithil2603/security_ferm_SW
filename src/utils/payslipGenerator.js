@@ -111,7 +111,14 @@ function generatePayslipPDF(payroll, employee, client, agencySettings, dataCallb
     .text(`Total Days in Month: ${payroll.days_in_month}`, 350, empTop + 20)
     .text(`Days Worked: ${payroll.days_worked}`, 350, empTop + 35)
     .text(`Days Absent: ${payroll.days_absent}`, 350, empTop + 50)
-    .text(`Days Leave: ${payroll.days_leave}`, 350, empTop + 65);
+    .text(`Days Leave: ${payroll.days_leave || 0}`, 350, empTop + 65);
+
+  if (Number(payroll.days_worked) < Number(payroll.days_in_month)) {
+    const lopDays = Math.round((Number(payroll.days_in_month) - Number(payroll.days_worked)) * 100) / 100;
+    doc
+      .fillColor('#b91c1c')
+      .text(`Loss of Pay (LOP): ${lopDays} Unpaid Day(s)`, 350, empTop + 80);
+  }
 
   doc.moveDown(4);
   const tableTop = doc.y;

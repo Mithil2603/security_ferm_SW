@@ -333,36 +333,67 @@ const query = async (text, params = []) => {
       // It's a ResultSetHeader (INSERT/UPDATE/DELETE)
       const header = rows;
       const result = { rows: [], rowCount: header.affectedRows, insertId: header.insertId, lastInsertRowid: header.insertId };
-      if (hasReturning && header.insertId) {
-        // Simulate RETURNING by fetching the inserted row
-        const tableMatch = mysqlText.match(/INSERT\s+(?:IGNORE\s+)?INTO\s+(`?\w+`?)/i);
-        if (tableMatch && tableMatch[1]) {
-          const tableName = tableMatch[1].replace(/`/g, '');
-          const returningMatch = text.match(/RETURNING\s+(.+)$/i);
-          let returnCols = 'id';
-          if (returningMatch) {
-            const raw = returningMatch[1].trim();
-            if (raw === '*') {
-              returnCols = '*';
-            } else {
-              returnCols = raw.split(',').map(c => {
-                const col = c.trim().replace(/`/g, '');
-                return col === '*' ? '*' : `\`${col}\``;
-              }).join(', ');
-            }
+
+      if (hasReturning) {
+        let returnCols = '*';
+        const returningMatch = text.match(/RETURNING\s+(.+)$/i);
+        if (returningMatch) {
+          const raw = returningMatch[1].trim();
+          if (raw !== '*') {
+            returnCols = raw.split(',').map(c => {
+              const col = c.trim().replace(/`/g, '');
+              return col === '*' ? '*' : `\`${col}\``;
+            }).join(', ');
           }
-          try {
-            const [fetchRows] = await pool.execute(
-              `SELECT ${returnCols} FROM \`${tableName}\` WHERE id = ?`,
-              [header.insertId]
-            );
-            result.rows = fetchRows.length > 0 ? fetchRows : [{ id: header.insertId }];
-          } catch (e) {
-            logger.warn('RETURNING simulation fetch failed:', { table: tableName, insertId: header.insertId, error: e.message });
+        }
+
+        if (header.insertId) {
+          // Simulate RETURNING for INSERT by fetching the inserted row
+          const tableMatch = text.match(/INSERT\s+(?:IGNORE\s+)?INTO\s+(`?\w+`?)/i);
+          if (tableMatch && tableMatch[1]) {
+            const tableName = tableMatch[1].replace(/`/g, '');
+            try {
+              const [fetchRows] = await pool.execute(
+                `SELECT ${returnCols} FROM \`${tableName}\` WHERE id = ?`,
+                [header.insertId]
+              );
+              result.rows = fetchRows.length > 0 ? fetchRows : [{ id: header.insertId }];
+            } catch (e) {
+              logger.warn('RETURNING simulation fetch failed (INSERT):', { table: tableName, insertId: header.insertId, error: e.message });
+              result.rows = [{ id: header.insertId }];
+            }
+          } else {
             result.rows = [{ id: header.insertId }];
           }
         } else {
-          result.rows = [{ id: header.insertId }];
+          // Simulate RETURNING for UPDATE by fetching the updated row
+          const updateMatch = text.match(/UPDATE\s+(`?\w+`?)\s+SET[\s\S]+?WHERE\s+(`?\w+`?)\s*=\s*(?:\$(\d+)|\?)/i);
+          if (updateMatch) {
+            const tableName = updateMatch[1].replace(/`/g, '');
+            const idCol = updateMatch[2].replace(/`/g, '');
+            let targetId;
+            if (updateMatch[3]) {
+              const paramIdx = parseInt(updateMatch[3]) - 1;
+              targetId = params[paramIdx];
+            } else if (params.length > 0) {
+              targetId = params[params.length - 1];
+            }
+
+            if (targetId !== undefined && targetId !== null) {
+              try {
+                const [fetchRows] = await pool.execute(
+                  `SELECT ${returnCols} FROM \`${tableName}\` WHERE \`${idCol}\` = ?`,
+                  [targetId]
+                );
+                result.rows = fetchRows;
+                if (fetchRows.length > 0) {
+                  result.rowCount = Math.max(header.affectedRows, fetchRows.length);
+                }
+              } catch (e) {
+                logger.warn('RETURNING simulation fetch failed (UPDATE):', { table: tableName, targetId, error: e.message });
+              }
+            }
+          }
         }
       }
       return result;

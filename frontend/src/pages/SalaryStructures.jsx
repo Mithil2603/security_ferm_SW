@@ -58,6 +58,7 @@ export default function SalaryStructures() {
       };
       await api.post('/salary-structures', payload);
       setIsCreateOpen(false);
+      toast.success('Salary structure created successfully');
       fetchStructures();
     } catch (err) {
       setError(err.message || 'Failed to create');
@@ -81,6 +82,7 @@ export default function SalaryStructures() {
       };
       await api.put(`/salary-structures/${editId}`, payload);
       setIsEditOpen(false);
+      toast.success('Salary structure updated successfully');
       fetchStructures();
     } catch (err) {
       setError(err.message || 'Failed to update');

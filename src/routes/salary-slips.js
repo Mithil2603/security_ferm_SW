@@ -39,7 +39,9 @@ router.post('/generate', async (req, res) => {
     const schema = Joi.object({
       employee_id: Joi.number().integer().positive().required(),
       payroll_month: Joi.string().pattern(/^\d{4}-\d{2}$/).required(),
-      days_worked: Joi.number().integer().min(0).max(31),
+      days_worked: Joi.number().min(0).max(31).allow(null),
+      calculation_basis: Joi.string().valid('full_month', 'to_date').default('full_month'),
+      cut_off_day: Joi.number().integer().min(1).max(31).allow(null),
     });
     
     const { error, value } = schema.validate({
@@ -49,7 +51,11 @@ router.post('/generate', async (req, res) => {
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
     const result = await salarySlipService.generate(
-      value.employee_id, value.payroll_month, value.days_worked, req.user.id
+      value.employee_id,
+      value.payroll_month,
+      value.days_worked,
+      req.user.id,
+      { calculation_basis: value.calculation_basis, cut_off_day: value.cut_off_day }
     );
     logger.info(`✅ Salary slip generated: Employee #${value.employee_id}, Month ${value.payroll_month}`);
     res.status(201).json({ success: true, data: result });
@@ -72,11 +78,17 @@ router.post('/batch-generate', async (req, res) => {
   try {
     const schema = Joi.object({
       payroll_month: Joi.string().pattern(/^\d{4}-\d{2}$/).required(),
+      calculation_basis: Joi.string().valid('full_month', 'to_date').default('full_month'),
+      cut_off_day: Joi.number().integer().min(1).max(31).allow(null),
     });
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await salarySlipService.batchGenerate(value.payroll_month, req.user.id);
+    const result = await salarySlipService.batchGenerate(
+      value.payroll_month,
+      req.user.id,
+      { calculation_basis: value.calculation_basis, cut_off_day: value.cut_off_day }
+    );
     logger.info(`✅ Batch salary slips: ${result.generated} generated, ${result.skipped} skipped, ${result.errors} errors`);
     res.status(201).json({ success: true, data: result });
   } catch (err) {

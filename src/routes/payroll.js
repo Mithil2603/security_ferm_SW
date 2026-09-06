@@ -13,7 +13,9 @@ const { resolvePfPercentage } = require('../services/payroll/statutory');
 router.use(authMiddleware);
 router.use(requirePermission('manage_payroll'));
 
-async function calculatePayroll(employee_id, payroll_month, manual_days_worked) {
+const { resolveAttendanceDays, getMissingAttendancePolicy } = require('../services/payroll/attendanceCalculator');
+
+async function calculatePayroll(employee_id, payroll_month, manual_days_worked, options = {}) {
   // Get employee with salary structure
   const empResult = await query(
     `SELECT e.*, ss.base_salary, ss.dearness_allowance, ss.house_rent_allowance, 
@@ -28,14 +30,30 @@ async function calculatePayroll(employee_id, payroll_month, manual_days_worked) 
   const emp = empResult.rows[0];
   if (!emp.base_salary) throw new Error(`No salary structure assigned to employee ${emp.full_name}`);
 
-  // Manual payroll days entry logic
+  // Payroll days calculation
   const monthStart = payroll_month;
   const [year, month] = payroll_month.split('-');
   const daysInMonth = new Date(parseInt(year), parseInt(month), 0).getDate();
 
-  const effectiveDays = manual_days_worked;
-  const absentDays = Math.max(0, daysInMonth - effectiveDays);
-  const leaveDays = 0; // Not tracked automatically anymore
+  const { calculation_basis = 'full_month', cut_off_day = null } = options;
+  const isToDate = calculation_basis === 'to_date' && cut_off_day && Number(cut_off_day) > 0;
+  const periodDays = isToDate ? Math.min(Number(cut_off_day), daysInMonth) : daysInMonth;
+  const cutOffDate = isToDate ? `${payroll_month.substring(0, 7)}-${String(periodDays).padStart(2, '0')}` : null;
+
+  let effectiveDays;
+  let absentDays;
+  let leaveDays = 0;
+
+  if (manual_days_worked !== undefined && manual_days_worked !== null && manual_days_worked !== '') {
+    effectiveDays = Number(manual_days_worked);
+    absentDays = Math.max(0, periodDays - effectiveDays);
+  } else {
+    const missingPolicy = await getMissingAttendancePolicy(query);
+    const att = await resolveAttendanceDays(query, employee_id, payroll_month, missingPolicy, cutOffDate);
+    effectiveDays = att.payableDays;
+    absentDays = Math.max(0, periodDays - effectiveDays);
+    leaveDays = att.leaveDays;
+  }
 
   // Fetch unsettled ledger entries
   const ledgerResult = await query(
@@ -104,7 +122,7 @@ async function calculatePayroll(employee_id, payroll_month, manual_days_worked) 
   return {
     employee_id,
     payroll_month: `${monthStart}`,
-    days_in_month: daysInMonth,
+    days_in_month: periodDays,
     days_worked: effectiveDays,
     days_absent: absentDays,
     days_leave: leaveDays,
@@ -207,7 +225,10 @@ router.post('/calculate', validate(schemas.generatePayroll), async (req, res) =>
           }
         }
 
-        const data = await calculatePayroll(empId, month, days_worked);
+        const data = await calculatePayroll(empId, month, days_worked, {
+          calculation_basis: req.body.calculation_basis,
+          cut_off_day: req.body.cut_off_day
+        });
         const inserted = await query(
           `INSERT INTO payroll (employee_id, payroll_month, days_in_month, days_worked, days_absent, days_leave,
             base_salary, da_amount, hra_amount, other_allowances, gross_salary, pf_deduction, esi_deduction,

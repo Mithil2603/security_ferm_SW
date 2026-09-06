@@ -15,6 +15,33 @@ const STATUS_STYLES = {
   cancelled: 'bg-red-50 text-red-700 border border-red-300',
 };
 
+const getMonthProgress = (monthStr) => {
+  if (!monthStr) return { isInProgress: false, daysPassed: 0, totalDays: 30 };
+  const [yearStr, monthPart] = monthStr.split('-');
+  const y = parseInt(yearStr, 10);
+  const m = parseInt(monthPart, 10);
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1; // 1-12
+  const totalDays = new Date(y, m, 0).getDate();
+
+  if (y === currentYear && m === currentMonth) {
+    const today = now.getDate();
+    if (today < totalDays) {
+      return {
+        isInProgress: true,
+        daysPassed: today,
+        totalDays
+      };
+    }
+  }
+  return {
+    isInProgress: false,
+    daysPassed: totalDays,
+    totalDays
+  };
+};
+
 export default function Payroll() {
   const [slips, setSlips] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -25,6 +52,8 @@ export default function Payroll() {
   const [filterStatus, setFilterStatus] = useState('');
   
   const [isGenerateOpen, setIsGenerateOpen] = useState(false);
+  const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
+  const [batchOptions, setBatchOptions] = useState({ calculation_basis: 'to_date' });
   const [isViewOpen, setIsViewOpen] = useState(false);
   const [isPayOpen, setIsPayOpen] = useState(false);
   const [selectedSlip, setSelectedSlip] = useState(null);
@@ -34,7 +63,8 @@ export default function Payroll() {
   const [singleGenForm, setSingleGenForm] = useState({
     employee_id: '',
     payroll_month: format(new Date(), 'yyyy-MM'),
-    days_worked: ''
+    days_worked: '',
+    calculation_basis: 'to_date'
   });
 
   const [payForm, setPayForm] = useState({
@@ -78,20 +108,35 @@ export default function Payroll() {
 
   // ─── Actions ─────────────────────────────────────────────────────────────────
 
-  const handleBatchGenerate = async () => {
-    const confirmed = await confirmDialog({
-      title: 'Batch Generate Salary Slips',
-      message: `Generate all missing salary slips for ${filterMonth}?`,
-      confirmText: 'Generate All',
-      variant: 'teal'
-    });
-    if (!confirmed) return;
+  const handleBatchGenerateClick = async () => {
+    const progress = getMonthProgress(filterMonth);
+    if (progress.isInProgress) {
+      setBatchOptions({ calculation_basis: 'to_date' });
+      setIsBatchModalOpen(true);
+    } else {
+      const confirmed = await confirmDialog({
+        title: 'Batch Generate Salary Slips',
+        message: `Generate all missing salary slips for ${filterMonth} (${progress.totalDays} days)?`,
+        confirmText: 'Generate All',
+        variant: 'teal'
+      });
+      if (!confirmed) return;
+      executeBatchGenerate('full_month', null);
+    }
+  };
 
+  const executeBatchGenerate = async (basis = 'full_month', cutOff = null) => {
     setGenerating(true);
     try {
-      const res = await api.post('/salary-slips/batch-generate', { payroll_month: filterMonth });
+      const payload = {
+        payroll_month: filterMonth,
+        calculation_basis: basis,
+        cut_off_day: cutOff
+      };
+      const res = await api.post('/salary-slips/batch-generate', payload);
       const resData = res.data || res;
       toast.success(`Generated: ${resData.generated || 0} | Skipped: ${resData.skipped || 0} | Errors: ${resData.errors || 0}`);
+      setIsBatchModalOpen(false);
       fetchSlips();
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Failed to generate');
@@ -106,12 +151,17 @@ export default function Payroll() {
       toast.warning('Please select an employee');
       return;
     }
+    const singleProgress = getMonthProgress(singleGenForm.payroll_month);
+    const isToDate = singleProgress.isInProgress && singleGenForm.calculation_basis === 'to_date';
+
     setGenerating(true);
     try {
       await api.post('/salary-slips/generate', {
         employee_id: parseInt(singleGenForm.employee_id),
         payroll_month: singleGenForm.payroll_month,
-        days_worked: singleGenForm.days_worked ? parseInt(singleGenForm.days_worked) : undefined
+        days_worked: singleGenForm.days_worked !== '' ? parseInt(singleGenForm.days_worked) : undefined,
+        calculation_basis: isToDate ? 'to_date' : 'full_month',
+        cut_off_day: isToDate ? singleProgress.daysPassed : undefined
       });
       setIsGenerateOpen(false);
       fetchSlips();
@@ -237,10 +287,12 @@ export default function Payroll() {
             type="button"
             onClick={() => {
               fetchEmployees();
+              const progress = getMonthProgress(filterMonth);
               setSingleGenForm({
                 employee_id: '',
                 payroll_month: filterMonth,
-                days_worked: ''
+                days_worked: '',
+                calculation_basis: progress.isInProgress ? 'to_date' : 'full_month'
               });
               setIsGenerateOpen(true);
             }} 
@@ -257,7 +309,7 @@ export default function Payroll() {
           </button>
           <button 
             type="button"
-            onClick={handleBatchGenerate} 
+            onClick={handleBatchGenerateClick} 
             disabled={generating} 
             className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-300 text-white font-bold px-4 py-2 rounded-lg text-sm shadow-sm transition-colors"
           >
@@ -443,10 +495,63 @@ export default function Payroll() {
                   type="month" 
                   required 
                   value={singleGenForm.payroll_month} 
-                  onChange={e => setSingleGenForm(prev => ({ ...prev, payroll_month: e.target.value }))}
+                  onChange={e => {
+                    const newMonth = e.target.value;
+                    const prog = getMonthProgress(newMonth);
+                    setSingleGenForm(prev => ({
+                      ...prev,
+                      payroll_month: newMonth,
+                      calculation_basis: prog.isInProgress ? 'to_date' : 'full_month'
+                    }));
+                  }}
                   className={inputCls}
                 />
               </div>
+
+              {/* In-Progress Month Option */}
+              {(() => {
+                const singleProgress = getMonthProgress(singleGenForm.payroll_month);
+                if (!singleProgress.isInProgress) return null;
+                return (
+                  <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-amber-900 uppercase tracking-wider">
+                      <Clock className="w-4 h-4 text-amber-600" />
+                      Month in Progress ({singleProgress.daysPassed} of {singleProgress.totalDays} days passed)
+                    </div>
+                    <div className="space-y-1.5 pt-1">
+                      <label className="flex items-start gap-2 text-xs font-medium text-slate-800 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="singleBasis"
+                          value="to_date"
+                          checked={singleGenForm.calculation_basis === 'to_date'}
+                          onChange={() => setSingleGenForm(p => ({ ...p, calculation_basis: 'to_date' }))}
+                          className="mt-0.5 text-teal-600 focus:ring-teal-500"
+                        />
+                        <span>
+                          Generate for <strong>{singleProgress.daysPassed} days</strong> (1st – {singleProgress.daysPassed}th) <span className="text-teal-700 font-bold">[Recommended]</span>
+                        </span>
+                      </label>
+                      <label className="flex items-start gap-2 text-xs font-medium text-slate-800 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="singleBasis"
+                          value="full_month"
+                          checked={singleGenForm.calculation_basis === 'full_month'}
+                          onChange={() => setSingleGenForm(p => ({ ...p, calculation_basis: 'full_month' }))}
+                          className="mt-0.5 text-teal-600 focus:ring-teal-500"
+                        />
+                        <span>Generate for full month ({singleProgress.totalDays} days)</span>
+                      </label>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      {singleGenForm.calculation_basis === 'to_date'
+                        ? `Slip will reflect ${singleProgress.daysPassed}/${singleProgress.daysPassed} days. Future unmarked days will not be penalized.`
+                        : `Slip will evaluate all ${singleProgress.totalDays} calendar days.`}
+                    </p>
+                  </div>
+                );
+              })()}
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
@@ -475,6 +580,119 @@ export default function Payroll() {
           </div>
         </div>
       )}
+
+      {/* ─── Batch Generate Options Modal (In-Progress Month) ───────────────── */}
+      {isBatchModalOpen && (() => {
+        const batchProgress = getMonthProgress(filterMonth);
+        return (
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-slide-up border border-slate-100">
+              <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-amber-50/70">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center font-bold">
+                    <Clock className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-slate-900">Month In Progress ({filterMonth})</h2>
+                    <p className="text-xs text-amber-700 font-medium">
+                      Only {batchProgress.daysPassed} of {batchProgress.totalDays} calendar days have passed so far.
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setIsBatchModalOpen(false)} 
+                  className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <p className="text-sm text-slate-600 leading-relaxed">
+                  Choose how attendance and salary proration should be calculated for all employees:
+                </p>
+
+                <div className="space-y-3">
+                  {/* Option 1: To Date (Recommended) */}
+                  <label 
+                    className={`flex items-start gap-3 p-3.5 rounded-xl border-2 cursor-pointer transition-all ${
+                      batchOptions.calculation_basis === 'to_date'
+                        ? 'border-teal-600 bg-teal-50/40 text-slate-900 shadow-sm'
+                        : 'border-slate-200 hover:border-slate-300 bg-white text-slate-700'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="batchBasis"
+                      value="to_date"
+                      checked={batchOptions.calculation_basis === 'to_date'}
+                      onChange={() => setBatchOptions({ calculation_basis: 'to_date' })}
+                      className="mt-1 h-4 w-4 text-teal-600 focus:ring-teal-500 border-slate-300"
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm">Generate for {batchProgress.daysPassed} Days (Passed So Far)</span>
+                        <span className="bg-teal-100 text-teal-800 text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full">
+                          Recommended
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Calculates attendance strictly up to day {batchProgress.daysPassed}. Payslips will show {batchProgress.daysPassed}/{batchProgress.daysPassed} days and unreached future days ({batchProgress.daysPassed + 1} to {batchProgress.totalDays}) will <strong>not</strong> be counted as absent or loss of pay.
+                      </p>
+                    </div>
+                  </label>
+
+                  {/* Option 2: Full Month */}
+                  <label 
+                    className={`flex items-start gap-3 p-3.5 rounded-xl border-2 cursor-pointer transition-all ${
+                      batchOptions.calculation_basis === 'full_month'
+                        ? 'border-teal-600 bg-teal-50/40 text-slate-900 shadow-sm'
+                        : 'border-slate-200 hover:border-slate-300 bg-white text-slate-700'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="batchBasis"
+                      value="full_month"
+                      checked={batchOptions.calculation_basis === 'full_month'}
+                      onChange={() => setBatchOptions({ calculation_basis: 'full_month' })}
+                      className="mt-1 h-4 w-4 text-teal-600 focus:ring-teal-500 border-slate-300"
+                    />
+                    <div className="flex-1">
+                      <span className="font-bold text-sm">Generate for Full Month ({batchProgress.totalDays} Days)</span>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Calculates against the complete {batchProgress.totalDays} calendar days. Days not yet marked will be evaluated per system missing attendance policy.
+                      </p>
+                    </div>
+                  </label>
+                </div>
+
+                <div className="flex gap-3 pt-4 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setIsBatchModalOpen(false)}
+                    className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium py-2.5 rounded-lg text-sm transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={generating}
+                    onClick={() => executeBatchGenerate(
+                      batchOptions.calculation_basis,
+                      batchOptions.calculation_basis === 'to_date' ? batchProgress.daysPassed : null
+                    )}
+                    className="flex-1 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-300 text-white font-bold py-2.5 rounded-lg text-sm shadow-md transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Zap className="w-4 h-4" />
+                    {generating ? 'Generating...' : `Batch Generate (${batchOptions.calculation_basis === 'to_date' ? `${batchProgress.daysPassed} Days` : `${batchProgress.totalDays} Days`})`}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ─── View Modal ────────────────────────────────────────────────────────── */}
       {isViewOpen && selectedSlip && (
@@ -518,11 +736,38 @@ export default function Payroll() {
                 </div>
               </div>
 
+              {/* Proration / Loss of Pay (LOP) Alert Banner */}
+              {selectedSlip.days_worked < selectedSlip.days_in_month && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 text-xs">
+                  <div>
+                    <span className="font-bold text-amber-900 text-sm block">Salary Prorated for Actual Attendance</span>
+                    <span className="text-amber-800">
+                      Full Monthly Base Rate: <strong>₹{Number(selectedSlip.full_monthly_gross || selectedSlip.total_earnings).toLocaleString('en-IN')}</strong> ({selectedSlip.days_in_month} days)
+                    </span>
+                  </div>
+                  <div className="text-left sm:text-right">
+                    <span className="font-extrabold text-red-600 text-sm block">
+                      Loss of Pay (LOP): -₹{Number(selectedSlip.lop_amount || 0).toLocaleString('en-IN')}
+                    </span>
+                    <span className="text-amber-700 font-medium">
+                      {selectedSlip.days_absent || Math.round((selectedSlip.days_in_month - selectedSlip.days_worked) * 100) / 100} Unpaid Day(s) ({selectedSlip.days_worked} / {selectedSlip.days_in_month} days worked)
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* Earnings & Deductions Split */}
               <div className="grid grid-cols-2 gap-6">
                 {/* Earnings */}
                 <div className="bg-slate-50/50 p-4 rounded-xl border border-slate-200">
-                  <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3 border-b border-slate-200 pb-2">Earnings</h3>
+                  <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3 border-b border-slate-200 pb-2 flex justify-between items-center">
+                    <span>Earnings</span>
+                    {selectedSlip.days_worked < selectedSlip.days_in_month && (
+                      <span className="text-[10px] text-teal-700 font-semibold bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
+                        Prorated ({selectedSlip.days_worked}/{selectedSlip.days_in_month}d)
+                      </span>
+                    )}
+                  </h3>
                   <div className="space-y-2">
                     {selectedSlip.earnings?.map(e => (
                       <div key={e.id} className="flex justify-between text-sm">
