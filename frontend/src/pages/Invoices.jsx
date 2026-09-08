@@ -74,6 +74,7 @@ export default function Invoices() {
       invoice_date: todayStr,
       billing_period_start: startOfMonth,
       billing_period_end: endOfMonth,
+      amount_subtotal: '',
       tax_type: 'cgst_sgst',
       is_rcm_applicable: false,
       discount_amount: '0',
@@ -108,6 +109,9 @@ export default function Invoices() {
         ...invoiceForm,
         discount_amount: parseFloat(invoiceForm.discount_amount) || 0,
       };
+      if (invoiceForm.amount_subtotal !== '' && !isNaN(parseFloat(invoiceForm.amount_subtotal))) {
+        payload.amount_subtotal = parseFloat(invoiceForm.amount_subtotal);
+      }
       if (invoiceForm.invoice_type === 'event') {
         payload.is_ad_hoc = 1;
         if (invoiceForm.fixed_amount) {
@@ -118,6 +122,7 @@ export default function Invoices() {
         if (invoiceForm.duty_days_worked) payload.duty_days_worked = parseInt(invoiceForm.duty_days_worked, 10);
       }
       await api.post('/invoices', payload);
+      toast.success('Single bill generated successfully');
       setIsCreateOpen(false);
       fetchInvoices();
     } catch (err) {
@@ -291,9 +296,10 @@ export default function Invoices() {
             Auto-Generate Monthly
           </button>
           <button onClick={openCreateModal}
+            title="Generate a manual single bill for a client"
             className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2">
             <Plus className="w-4 h-4" />
-            Monthly Invoice
+            Generate Single Bill
           </button>
         </div>
       </div>
@@ -406,7 +412,10 @@ export default function Invoices() {
             <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
               <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                 <FileText className="w-5 h-5 text-teal-600" />
-                {invoiceForm.invoice_type === 'event' ? 'Create Event Invoice' : 'Create Monthly Invoice'}
+                Generate Single Bill
+                <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 ml-1">
+                  {invoiceForm.invoice_type === 'event' ? 'Event / Ad-Hoc' : 'Regular Contract'}
+                </span>
               </h3>
               <button onClick={() => setIsCreateOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
@@ -451,6 +460,7 @@ export default function Invoices() {
                     setInvoiceForm(prev => ({
                       ...prev,
                       client_id: cid,
+                      amount_subtotal: selected?.monthly_rate !== undefined ? selected.monthly_rate : prev.amount_subtotal,
                       ...(selected?.client_type === 'event' ? { invoice_type: 'event' } : {})
                     }));
                   }} 
@@ -511,6 +521,40 @@ export default function Invoices() {
                   </div>
                 </div>
               </div>
+
+              {/* Regular Single Bill Amount */}
+              {invoiceForm.invoice_type === 'regular' && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-sm font-medium text-slate-700">Bill Amount / Subtotal (₹) *</label>
+                    {invoiceForm.client_id && (() => {
+                      const cl = clients.find(c => String(c.id) === String(invoiceForm.client_id));
+                      return cl?.monthly_rate ? (
+                        <button
+                          type="button"
+                          onClick={() => setInvoiceForm(prev => ({ ...prev, amount_subtotal: cl.monthly_rate }))}
+                          className="text-[11px] font-semibold text-teal-600 hover:text-teal-700 underline"
+                        >
+                          Reset to Contract Rate (₹{parseFloat(cl.monthly_rate).toLocaleString('en-IN')})
+                        </button>
+                      ) : null;
+                    })()}
+                  </div>
+                  <input
+                    required
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="e.g. 50000"
+                    value={invoiceForm.amount_subtotal}
+                    onChange={(e) => setInvoiceForm(prev => ({ ...prev, amount_subtotal: e.target.value }))}
+                    className={inputCls}
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Default is client contract rate. You can manually adjust or enter any custom amount for this single bill.
+                  </p>
+                </div>
+              )}
 
               {/* Event-specific Pricing */}
               {invoiceForm.invoice_type === 'event' && (
@@ -641,7 +685,9 @@ export default function Invoices() {
                     baseAmount = parseFloat(selectedClient?.monthly_rate || 0);
                   }
                 } else {
-                  baseAmount = parseFloat(selectedClient?.monthly_rate || 0);
+                  baseAmount = (invoiceForm.amount_subtotal !== '' && !isNaN(parseFloat(invoiceForm.amount_subtotal)))
+                    ? parseFloat(invoiceForm.amount_subtotal)
+                    : parseFloat(selectedClient?.monthly_rate || 0);
                 }
 
                 const disc = parseFloat(invoiceForm.discount_amount || 0);
@@ -656,7 +702,7 @@ export default function Invoices() {
                   <div className={`p-3.5 rounded-xl border text-xs space-y-1.5 ${isEvent ? 'bg-amber-50/70 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
                     <div className="flex justify-between items-center pb-1 border-b border-slate-200/80">
                       <span className="font-bold text-slate-800">
-                        {isEvent ? '⚡ Full Event Payment:' : 'Contract Monthly Rate:'}
+                        {isEvent ? '⚡ Full Event Payment:' : 'Bill Subtotal Amount:'}
                       </span>
                       <span className="font-bold text-slate-900">
                         ₹{baseAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
@@ -695,7 +741,7 @@ export default function Invoices() {
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
                 <button type="button" onClick={() => setIsCreateOpen(false)} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
                 <button type="submit" disabled={submitting} className="px-5 py-2 text-sm font-bold text-white bg-teal-600 rounded-lg hover:bg-teal-700 shadow-md disabled:opacity-50">
-                  {submitting ? 'Creating...' : 'Create Invoice'}
+                  {submitting ? 'Generating...' : 'Generate Single Bill'}
                 </button>
               </div>
             </form>

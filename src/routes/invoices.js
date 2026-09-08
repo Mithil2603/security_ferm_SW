@@ -246,8 +246,34 @@ router.post('/', validate(schemas.createInvoice), async (req, res) => {
       const daysCount = Math.ceil((new Date(billing_period_end) - new Date(billing_period_start)) / (1000 * 60 * 60 * 24)) + 1;
       finalDutyDays = duty_days_worked ? parseInt(duty_days_worked) : daysCount;
     } else {
-      // REGULAR INVOICE: Standard monthly contract with pro-rata bifurcation for partial calendar periods
-      amounts = calculateInvoiceAmounts(client.monthly_rate, billing_period_start, billing_period_end, tax_type, discount_amount, is_rcm_applicable);
+      // REGULAR INVOICE: If manual amount_subtotal was specified, use it; otherwise calculate based on client.monthly_rate
+      if (amount_subtotal !== undefined && amount_subtotal !== '' && amount_subtotal !== null && !isNaN(parseFloat(amount_subtotal)) && parseFloat(amount_subtotal) >= 0) {
+        const customSub = parseFloat(parseFloat(amount_subtotal).toFixed(2));
+        const disc = parseFloat(discount_amount) || 0;
+        const taxable = Math.max(0, customSub - disc);
+        let cgst = 0, sgst = 0, igst = 0;
+        if (tax_type === 'cgst_sgst') {
+          cgst = parseFloat((taxable * 0.09).toFixed(2));
+          sgst = parseFloat((taxable * 0.09).toFixed(2));
+        } else if (tax_type === 'igst') {
+          igst = parseFloat((taxable * 0.18).toFixed(2));
+        }
+        let total = taxable;
+        if (!is_rcm_applicable) {
+          total += cgst + sgst + igst;
+        }
+        amounts = {
+          daysInPeriod: Math.ceil((new Date(billing_period_end) - new Date(billing_period_start)) / (1000 * 60 * 60 * 24)) + 1,
+          amount_subtotal: customSub,
+          cgst_amount: cgst,
+          sgst_amount: sgst,
+          igst_amount: igst,
+          total_amount: parseFloat(total.toFixed(2)),
+          final_amount: parseFloat(total.toFixed(2))
+        };
+      } else {
+        amounts = calculateInvoiceAmounts(client.monthly_rate, billing_period_start, billing_period_end, tax_type, discount_amount, is_rcm_applicable);
+      }
       isAdhocVal = 0;
       finalDutyDays = null;
     }
