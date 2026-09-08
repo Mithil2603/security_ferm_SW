@@ -97,15 +97,8 @@ router.post('/login', loginLimiter, async (req, res) => {
     // Update last login
     await query('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = $1', [user.id]);
 
-    const { ROLE_PERMISSIONS } = require('../middleware/auth');
-    let parsedPermissions = [];
-    if (Array.isArray(user.permissions)) {
-      parsedPermissions = user.permissions;
-    } else if (typeof user.permissions === 'string') {
-      try { parsedPermissions = JSON.parse(user.permissions); } catch (_) {}
-    }
-    const roleDefaults = ROLE_PERMISSIONS[user.role] || [];
-    const effectivePermissions = Array.from(new Set([...roleDefaults, ...parsedPermissions]));
+    const { getEffectivePermissions } = require('../middleware/auth');
+    const effectivePermissions = getEffectivePermissions(user.role, user.permissions);
     
     // Create JWT token (default 8h)
     const jwtExpiry = process.env.JWT_EXPIRY || process.env.JWT_EXPIRES_IN || process.env.JWT_ACCESS_EXPIRY || '8h';
@@ -248,15 +241,8 @@ router.post('/refresh', async (req, res) => {
     }
 
     const user = userResult.rows[0];
-    const { ROLE_PERMISSIONS } = require('../middleware/auth');
-    let parsedPermissions = [];
-    if (Array.isArray(user.permissions)) {
-      parsedPermissions = user.permissions;
-    } else if (typeof user.permissions === 'string') {
-      try { parsedPermissions = JSON.parse(user.permissions); } catch (_) {}
-    }
-    const roleDefaults = ROLE_PERMISSIONS[user.role] || [];
-    const effectivePermissions = Array.from(new Set([...roleDefaults, ...parsedPermissions]));
+    const { getEffectivePermissions } = require('../middleware/auth');
+    const effectivePermissions = getEffectivePermissions(user.role, user.permissions);
     
     const jwtExpiry = process.env.JWT_EXPIRY || process.env.JWT_EXPIRES_IN || process.env.JWT_ACCESS_EXPIRY || '8h';
     const token = jwt.sign(
@@ -314,15 +300,8 @@ router.get('/me', authMiddleware, async (req, res) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
     const userData = result.rows[0];
-    const { ROLE_PERMISSIONS } = require('../middleware/auth');
-    let parsedPermissions = [];
-    if (Array.isArray(userData.permissions)) {
-      parsedPermissions = userData.permissions;
-    } else if (typeof userData.permissions === 'string') {
-      try { parsedPermissions = JSON.parse(userData.permissions); } catch (_) {}
-    }
-    const roleDefaults = ROLE_PERMISSIONS[userData.role] || [];
-    userData.permissions = Array.from(new Set([...roleDefaults, ...parsedPermissions]));
+    const { getEffectivePermissions } = require('../middleware/auth');
+    userData.permissions = getEffectivePermissions(userData.role, userData.permissions);
     res.json({ success: true, data: userData });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'auth' });
@@ -394,15 +373,9 @@ router.get('/users', authMiddleware, requireRole('admin'), async (req, res) => {
     const result = await query(
       'SELECT id, email, full_name, role, phone, is_active, last_login, created_at, permissions FROM users ORDER BY created_at DESC'
     );
-    const { ROLE_PERMISSIONS } = require('../middleware/auth');
+    const { getEffectivePermissions } = require('../middleware/auth');
     const rows = result.rows.map(u => {
-      let parsed = [];
-      if (Array.isArray(u.permissions)) parsed = u.permissions;
-      else if (typeof u.permissions === 'string') {
-        try { parsed = JSON.parse(u.permissions); } catch (_) {}
-      }
-      const roleDefaults = ROLE_PERMISSIONS[u.role] || [];
-      u.permissions = parsed.length > 0 ? parsed : roleDefaults;
+      u.permissions = getEffectivePermissions(u.role, u.permissions);
       return u;
     });
     res.json({ success: true, data: rows });
@@ -423,12 +396,7 @@ router.post('/users', authMiddleware, requireRole('admin'), async (req, res) => 
     const hash = await bcrypt.hash(password, 12);
     const { ROLE_PERMISSIONS } = require('../middleware/auth');
     const roleDefaults = ROLE_PERMISSIONS[role] || [];
-    let initialPerms = [];
-    if (Array.isArray(permissions) && permissions.length > 0) {
-      initialPerms = permissions;
-    } else {
-      initialPerms = roleDefaults;
-    }
+    const initialPerms = Array.isArray(permissions) ? permissions : roleDefaults;
     const permsJson = JSON.stringify(initialPerms);
     const result = await query(
       'INSERT INTO users (email, password_hash, full_name, role, phone, created_by, permissions) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, email, full_name, role, permissions',

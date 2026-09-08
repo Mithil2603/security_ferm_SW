@@ -51,7 +51,7 @@ const emptyForm = {
   full_name: '', phone: '', email: '', date_of_birth: '', address: '', city: '',
   aadhar_number: '', pan_number: '', bank_account_number: '', bank_ifsc_code: '',
   bank_name: '', bank_account_holder_name: '', date_of_joining: format(new Date(), 'yyyy-MM-dd'),
-  designation: 'Watchman', salary_structure_id: '', assigned_client_id: '',
+  designation: 'Security Guard', salary_structure_id: '', assigned_client_id: '',
   emergency_contact_name: '', emergency_contact_phone: '', notes: '', is_active: true
 };
 
@@ -161,7 +161,7 @@ export default function Employees() {
       bank_account_number: emp.bank_account_number || '', bank_ifsc_code: emp.bank_ifsc_code || '',
       bank_name: emp.bank_name || '', bank_account_holder_name: emp.bank_account_holder_name || '',
       date_of_joining: emp.date_of_joining ? emp.date_of_joining.substring(0, 10) : '',
-      designation: emp.designation || 'Watchman',
+      designation: emp.designation || 'Security Guard',
       salary_structure_id: emp.salary_structure_id || '',
       assigned_client_id: emp.assigned_client_id || '',
       emergency_contact_name: emp.emergency_contact_name || '',
@@ -365,7 +365,7 @@ export default function Employees() {
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Employees");
-    XLSX.writeFile(wb, `Watchmen_Export_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
+    XLSX.writeFile(wb, `Employees_Export_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
   };
 
   const inputCls = "w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm";
@@ -376,7 +376,7 @@ export default function Employees() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
             <UserSquare2 className="w-6 h-6 text-teal-600" />
-            Watchmen Management
+            Employee Management
           </h1>
           <p className="text-slate-500 text-sm mt-1">Manage personnel, deployments, and salary structures.</p>
         </div>
@@ -391,7 +391,7 @@ export default function Employees() {
           </button>
           <button onClick={openCreateModal} className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2">
             <Plus className="w-4 h-4" />
-            Onboard Watchman
+            Onboard Employee
           </button>
         </div>
       </div>
@@ -601,7 +601,7 @@ export default function Employees() {
             <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
               <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                 <UserSquare2 className="w-5 h-5 text-teal-600" />
-                {editingEmp ? 'Edit Employee' : 'Onboard New Watchman'}
+                {editingEmp ? 'Edit Employee' : 'Onboard New Employee'}
               </h3>
               <button onClick={() => { setIsModalOpen(false); setEditingEmp(null); }} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
@@ -709,16 +709,20 @@ export default function Employees() {
                   </div>
                   <input required type="date" name="date_of_joining" value={formData.date_of_joining} onChange={handleInputChange} className={inputCls} />
                   <p className="text-[11px] text-slate-400 mt-1">
-                    Official date the watchman commences duty.
+                    Official date the employee commences duty.
                   </p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Designation</label>
                   <select name="designation" value={formData.designation} onChange={handleInputChange} className={inputCls}>
-                    <option value="Watchman">Watchman</option>
-                    <option value="Senior Watchman">Senior Watchman</option>
+                    <option value="Security Guard">Security Guard</option>
+                    <option value="Senior Security Guard">Senior Security Guard</option>
                     <option value="Head Guard">Head Guard</option>
                     <option value="Supervisor">Supervisor</option>
+                    <option value="Employee">Employee</option>
+                    {formData.designation && !['Security Guard', 'Senior Security Guard', 'Head Guard', 'Supervisor', 'Employee'].includes(formData.designation) && (
+                      <option value={formData.designation}>{formData.designation}</option>
+                    )}
                   </select>
                 </div>
                 <div>
@@ -863,7 +867,7 @@ export default function Employees() {
               <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-slate-100">
                 <button type="button" onClick={() => { setIsModalOpen(false); setEditingEmp(null); }} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors">Cancel</button>
                 <button type="submit" disabled={submitting} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors shadow-sm disabled:opacity-50">
-                  {submitting ? 'Saving...' : editingEmp ? 'Update Employee' : 'Onboard Watchman'}
+                  {submitting ? 'Saving...' : editingEmp ? 'Update Employee' : 'Onboard Employee'}
                 </button>
               </div>
             </form>
@@ -905,7 +909,7 @@ export default function Employees() {
                     <h2 className="text-xl font-bold text-slate-900">{viewingEmp.full_name}</h2>
                     <div className="flex flex-wrap items-center gap-2 mt-1">
                       <span className="text-xs font-medium text-slate-600 bg-white px-2 py-0.5 rounded-md border border-slate-200">
-                        {viewingEmp.designation || 'Watchman'}
+                        {viewingEmp.designation || 'Employee'}
                       </span>
                       {viewingEmp.client_name ? (
                         <span className="text-xs font-medium text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200 flex items-center gap-1">
@@ -1025,7 +1029,7 @@ export default function Employees() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                   <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
                     <span className="text-xs font-medium text-slate-500 block mb-1">Designation</span>
-                    <span className="text-sm font-semibold text-slate-800">{viewingEmp.designation || 'Watchman'}</span>
+                    <span className="text-sm font-semibold text-slate-800">{viewingEmp.designation || 'Employee'}</span>
                   </div>
                   <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
                     <span className="text-xs font-medium text-slate-500 block mb-1">Assigned Client Site</span>

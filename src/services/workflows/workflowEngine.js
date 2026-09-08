@@ -72,14 +72,24 @@ class WorkflowEngine {
   // ═══════════════════════════════════════════════════════════════════════════
 
   async getRules(filters = {}) {
-    const { trigger_entity, is_active = 1 } = filters;
-    let conditions = ['is_active = $1'];
-    let params = [is_active];
-    let pc = 2;
-    if (trigger_entity) { conditions.push(`trigger_entity = $${pc}`); params.push(trigger_entity); pc++; }
+    const { trigger_entity, is_active } = filters;
+    let conditions = [];
+    let params = [];
+    let pc = 1;
+    if (is_active !== undefined && is_active !== null && is_active !== '') {
+      conditions.push(`is_active = $${pc}`);
+      params.push(Number(is_active));
+      pc++;
+    }
+    if (trigger_entity) {
+      conditions.push(`trigger_entity = $${pc}`);
+      params.push(trigger_entity);
+      pc++;
+    }
 
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const result = await query(
-      `SELECT * FROM workflow_rules WHERE ${conditions.join(' AND ')} ORDER BY priority, name`,
+      `SELECT * FROM workflow_rules ${whereClause} ORDER BY priority, name`,
       params
     );
     return result.rows;
@@ -120,7 +130,13 @@ class WorkflowEngine {
   }
 
   async deleteRule(id) {
-    await query(`UPDATE workflow_rules SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [id]);
+    try {
+      await query(`DELETE FROM workflow_logs WHERE workflow_rule_id = $1`, [id]);
+    } catch (_) {}
+    try {
+      await query(`UPDATE notifications SET workflow_rule_id = NULL WHERE workflow_rule_id = $1`, [id]);
+    } catch (_) {}
+    await query(`DELETE FROM workflow_rules WHERE id = $1`, [id]);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -129,7 +145,7 @@ class WorkflowEngine {
 
   async executeRulesForEvent(triggerEntity, triggerEvent, entityData) {
     const startTime = Date.now();
-    const rules = await this.getRules({ trigger_entity: triggerEntity });
+    const rules = await this.getRules({ trigger_entity: triggerEntity, is_active: 1 });
     const results = [];
 
     for (const rule of rules) {
@@ -318,6 +334,11 @@ class WorkflowEngine {
     return this.getAutoApprovalRules();
   }
 
+  async deleteAutoApprovalRule(id) {
+    await query(`DELETE FROM auto_approval_rules WHERE id = $1`, [id]);
+    return { success: true };
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // Workflow Logs
   // ═══════════════════════════════════════════════════════════════════════════
@@ -333,9 +354,9 @@ class WorkflowEngine {
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     const result = await query(
-      `SELECT wl.*, wr.name as rule_name
+      `SELECT wl.*, COALESCE(wr.name, 'Deleted Rule') as rule_name
        FROM workflow_logs wl
-       JOIN workflow_rules wr ON wl.workflow_rule_id = wr.id
+       LEFT JOIN workflow_rules wr ON wl.workflow_rule_id = wr.id
        ${where}
        ORDER BY wl.created_at DESC
        LIMIT $${pc} OFFSET $${pc + 1}`,

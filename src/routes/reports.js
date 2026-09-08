@@ -164,7 +164,7 @@ router.get('/payroll-summary', async (req, res) => {
 });
 
 // GET /api/reports/profit-loss
-router.get('/profit-loss', async (req, res) => {
+router.get('/profit-loss', requirePermission('view_reports', 'view_pl_account'), async (req, res) => {
   try {
     const { from_date, to_date } = req.query;
     const fromDate = from_date || `${new Date().getFullYear()}-01-01`;

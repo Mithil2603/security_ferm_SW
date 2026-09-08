@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useAuth } from '../context/AuthContext';
 import DrillDownModal from '../components/DrillDownModal';
 import { PieChart as PieChartIcon, TrendingUp, TrendingDown, Download, IndianRupee, Printer, Calendar, FileSpreadsheet, AlertTriangle, CheckCircle, Clock, Users, Eye, EyeOff, Activity, Zap, Target, Shield, Info, RotateCw, Banknote, Receipt, Wallet, Percent, Briefcase } from 'lucide-react';
 import api from '../services/api';
@@ -74,6 +75,12 @@ const FlipCard = ({ children, infoTitle, infoText, infoIcon: InfoIcon, container
 };
 
 export default function Reports() {
+  const { user } = useAuth();
+  const userPerms = Array.isArray(user?.permissions)
+    ? user.permissions
+    : (typeof user?.permissions === 'string' ? (() => { try { return JSON.parse(user.permissions); } catch (_) { return []; } })() : []);
+  const canViewPL = user?.role === 'admin' || userPerms.includes('*') || userPerms.includes('view_pl_account');
+
   const [loading, setLoading] = useState(true);
   const [exportingSheet, setExportingSheet] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -859,26 +866,28 @@ export default function Reports() {
                   </FlipCard>
 
                   {/* Net Profit */}
-                  <FlipCard 
-                    containerClassName="col-span-1 md:col-span-2 print:col-span-full"
-                    infoTitle="Net Profit" 
-                    infoText="This is your final profit margin after deducting all operational costs, payroll, and taxes. A negative number indicates a loss."
-                    infoIcon={TrendingUp}
-                  >
-                    <div className={`rounded-xl p-5 border shadow-sm transition-all h-full flex flex-col justify-center ${displayProfit >= 0 ? 'bg-gradient-to-r from-emerald-50 to-teal-50 border-emerald-200' : 'bg-gradient-to-r from-red-50 to-rose-50 border-red-200'}`}>
-                      <div className="flex justify-between items-center mb-1">
-                        <p className={`text-xs font-bold uppercase tracking-wider ${displayProfit >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
-                          Net Profit <span className="text-[10px] opacity-70 ml-1">(based on {revenueMode})</span>
+                  {canViewPL && (
+                    <FlipCard 
+                      containerClassName="col-span-1 md:col-span-2 print:col-span-full"
+                      infoTitle="Net Profit" 
+                      infoText="This is your final profit margin after deducting all operational costs, payroll, and taxes. A negative number indicates a loss."
+                      infoIcon={TrendingUp}
+                    >
+                      <div className={`rounded-xl p-5 border shadow-sm transition-all h-full flex flex-col justify-center ${displayProfit >= 0 ? 'bg-gradient-to-r from-emerald-50 to-teal-50 border-emerald-200' : 'bg-gradient-to-r from-red-50 to-rose-50 border-red-200'}`}>
+                        <div className="flex justify-between items-center mb-1">
+                          <p className={`text-xs font-bold uppercase tracking-wider ${displayProfit >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                            Net Profit <span className="text-[10px] opacity-70 ml-1">(based on {revenueMode})</span>
+                          </p>
+                          <span className={`text-sm font-bold px-2 py-0.5 rounded-full ${displayProfit >= 0 ? 'bg-emerald-200 text-emerald-800' : 'bg-red-200 text-red-800'}`}>
+                            {displayMargin}% Margin
+                          </span>
+                        </div>
+                        <p className={`text-3xl font-black ${displayProfit >= 0 ? 'text-emerald-800' : 'text-red-800'}`}>
+                          {displayProfit < 0 ? '-' : ''}₹{Math.abs(displayProfit).toLocaleString('en-IN')}
                         </p>
-                        <span className={`text-sm font-bold px-2 py-0.5 rounded-full ${displayProfit >= 0 ? 'bg-emerald-200 text-emerald-800' : 'bg-red-200 text-red-800'}`}>
-                          {displayMargin}% Margin
-                        </span>
                       </div>
-                      <p className={`text-3xl font-black ${displayProfit >= 0 ? 'text-emerald-800' : 'text-red-800'}`}>
-                        {displayProfit < 0 ? '-' : ''}₹{Math.abs(displayProfit).toLocaleString('en-IN')}
-                      </p>
-                    </div>
-                  </FlipCard>
+                    </FlipCard>
+                  )}
 
                 </div>
               </div>
@@ -959,7 +968,7 @@ export default function Reports() {
               <FlipCard
                 containerClassName="flex flex-col items-center group w-full h-full print-break-inside-avoid"
                 infoTitle="Payroll Distribution"
-                infoText="This horizontal bar chart shows exactly how much is being paid out in watchmen salaries across your different client sites."
+                infoText="This horizontal bar chart shows exactly how much is being paid out in employee salaries across your different client sites."
                 infoIcon={Users}
               >
                 <h3 className="text-2xl font-bold mb-4 text-slate-800">Payroll Distribution</h3>

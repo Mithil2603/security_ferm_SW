@@ -343,7 +343,7 @@ router.post('/', validate(schemas.createEmployee), async (req, res) => {
   try {
     const { full_name, phone, email, date_of_birth, address, city, aadhar_number, pan_number,
       bank_account_number, bank_ifsc_code, bank_name, bank_account_holder_name,
-      date_of_joining, designation = 'Watchman', salary_structure_id, assigned_client_id,
+      date_of_joining, designation = 'Security Guard', salary_structure_id, assigned_client_id,
       emergency_contact_name, emergency_contact_phone, notes } = req.body;
 
     if (!full_name || !phone || !date_of_joining) {

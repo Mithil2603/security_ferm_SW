@@ -33,7 +33,7 @@ const navItems = [
   { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['admin', 'manager', 'accountant', 'employee'] },
   { name: 'Clients', path: '/clients', icon: Users, roles: ['admin', 'manager'], permission: 'manage_invoices' },
   { name: 'Employees', path: '/employees', icon: UserSquare2, roles: ['admin', 'manager'], permission: 'manage_employees' },
-  { name: 'Attendance', path: '/attendance', icon: CalendarCheck, roles: ['admin', 'manager', 'accountant', 'employee'] },
+  { name: 'Attendance', path: '/attendance', icon: CalendarCheck, roles: ['admin', 'manager', 'accountant'], permission: 'manage_employees' },
   { name: 'Invoicing', path: '/invoices', icon: FileText, roles: ['admin', 'accountant'], permission: 'manage_invoices' },
   { name: 'Payroll', path: '/payroll', icon: Banknote, roles: ['admin', 'accountant'], permission: 'manage_payroll' },
   { name: 'Employee Ledger', path: '/ledger', icon: Banknote, roles: ['admin', 'accountant', 'manager'], permission: 'manage_payroll' },
@@ -49,7 +49,7 @@ const navItems = [
   { name: 'Statement Archive', path: '/statements', icon: Archive, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
   { name: 'P&L Account', path: '/pl-account', icon: Wallet, roles: ['admin'], permission: 'view_pl_account' },
   { name: 'Balance Sheet', path: '/balance-sheet', icon: BarChart3, roles: ['admin', 'accountant'], permission: 'view_balance_sheet' },
-  { name: 'Vouchers', path: '/vouchers', icon: BookOpen, roles: ['admin', 'accountant'], permission: 'view_vouchers' },
+  { name: 'Vouchers', path: '/vouchers', icon: BookOpen, roles: ['admin', 'accountant'], permission: ['view_vouchers', 'create_vouchers', 'edit_vouchers', 'delete_vouchers', 'approve_vouchers', 'manage_vouchers'] },
   { name: 'Bank Reconciliation', path: '/bank-reconciliation', icon: Landmark, roles: ['admin', 'accountant'], permission: 'manage_bank_reconciliation' },
   { name: 'Budgets vs Actuals', path: '/budgets', icon: Target, roles: ['admin', 'accountant'], permission: 'manage_budgets' },
   { name: 'divider' },
@@ -71,11 +71,18 @@ export default function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
     if (!user) return false;
     if (user.role === 'admin' || userPerms.includes('*')) return true;
 
-    // Check custom or granted permission
-    if (item.permission && userPerms.includes(item.permission)) return true;
+    // If item requires a specific permission, user must have that permission
+    if (item.permission) {
+      if (Array.isArray(item.permission)) {
+        return item.permission.some(p => userPerms.includes(p));
+      }
+      return userPerms.includes(item.permission);
+    }
 
-    // Check role default
-    if (item.roles && item.roles.includes(user.role)) return true;
+    // Otherwise, check role default
+    if (item.roles) {
+      return item.roles.includes(user.role);
+    }
 
     return false;
   };

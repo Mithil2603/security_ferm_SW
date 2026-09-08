@@ -42,7 +42,6 @@ const ROLE_PERMISSIONS = {
     'manage_vouchers',
     'manage_payroll',
     'view_balance_sheet',
-    'view_pl_account',
     'manage_bank_accounts',
     'manage_bank_reconciliation',
     'manage_budgets'
@@ -69,6 +68,33 @@ const ROLE_PERMISSIONS = {
   ]
 };
 
+const getEffectivePermissions = (role, permissions) => {
+  if (role === 'admin') {
+    return ['*'];
+  }
+  let parsed = null;
+  if (Array.isArray(permissions)) {
+    parsed = permissions;
+  } else if (typeof permissions === 'string') {
+    try {
+      const json = JSON.parse(permissions);
+      if (Array.isArray(json)) {
+        parsed = json;
+      }
+    } catch (_) {
+      parsed = null;
+    }
+  }
+
+  // If user has explicitly defined custom permissions (even empty array), strictly use them!
+  if (parsed !== null && Array.isArray(parsed)) {
+    return parsed;
+  }
+
+  // Otherwise fall back to role default permissions
+  return ROLE_PERMISSIONS[role] ? [...ROLE_PERMISSIONS[role]] : [];
+};
+
 const requireRole = (...roles) => {
   return (req, res, next) => {
     if (!req.user || !roles.includes(req.user.role)) {
@@ -91,22 +117,9 @@ const requirePermission = (...perms) => {
     if (req.user.role === 'admin') {
       return next();
     }
-    
-    // Check user custom permissions (handle array, json string, or null)
-    let userPerms = [];
-    if (Array.isArray(req.user.permissions)) {
-      userPerms = req.user.permissions;
-    } else if (typeof req.user.permissions === 'string') {
-      try {
-        userPerms = JSON.parse(req.user.permissions);
-      } catch (_) {
-        userPerms = [];
-      }
-    }
 
-    // Combine role base permissions with custom permissions
-    const rolePerms = ROLE_PERMISSIONS[req.user.role] || [];
-    const effectivePerms = new Set([...rolePerms, ...userPerms]);
+    const effectivePermsList = getEffectivePermissions(req.user.role, req.user.permissions);
+    const effectivePerms = new Set(effectivePermsList);
 
     const hasPerm = perms.some(p => effectivePerms.has(p) || effectivePerms.has('*'));
     
@@ -120,4 +133,4 @@ const requirePermission = (...perms) => {
   };
 };
 
-module.exports = { authMiddleware, requireRole, requirePermission, ROLE_PERMISSIONS };
+module.exports = { authMiddleware, requireRole, requirePermission, ROLE_PERMISSIONS, getEffectivePermissions };

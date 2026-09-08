@@ -18,12 +18,7 @@ if (!fs.existsSync(tempDir)) {
 const upload = multer({ dest: tempDir });
 
 router.use(authMiddleware);
-router.use((req, res, next) => {
-  if (req.user && ['admin', 'manager', 'accountant'].includes(req.user.role)) {
-    return next();
-  }
-  return requirePermission('manage_employees', 'manage_payroll')(req, res, next);
-});
+router.use(requirePermission('manage_employees', 'manage_payroll'));
 
 // GET /api/attendance
 router.get('/', async (req, res) => {

@@ -1,11 +1,18 @@
 import { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { CalendarCheck, CalendarDays, Check, X, Clock, AlertCircle, Users, X as XIcon, FileSpreadsheet } from 'lucide-react';
+import { useSearchParams, Link } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import { CalendarCheck, CalendarDays, Check, X, Clock, AlertCircle, Users, X as XIcon, FileSpreadsheet, ShieldAlert } from 'lucide-react';
 import api from '../services/api';
 import { format } from 'date-fns';
 import AttendanceImportModal from '../components/AttendanceImportModal';
 
 export default function Attendance() {
+  const { user } = useAuth();
+  const userPerms = Array.isArray(user?.permissions)
+    ? user.permissions
+    : (typeof user?.permissions === 'string' ? (() => { try { return JSON.parse(user.permissions); } catch (_) { return []; } })() : []);
+  const canAccess = user?.role === 'admin' || userPerms.includes('*') || userPerms.includes('manage_employees') || userPerms.includes('manage_payroll');
+
   const [searchParams, setSearchParams] = useSearchParams();
   const initialDate = searchParams.get('date') || searchParams.get('from_date') || format(new Date(), 'yyyy-MM-dd');
 
@@ -28,6 +35,10 @@ export default function Attendance() {
   }, [searchParams]);
 
   const fetchAttendance = async () => {
+    if (!canAccess) {
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       const response = await api.get(`/attendance?from_date=${dateFilter}&to_date=${dateFilter}`);
@@ -103,6 +114,23 @@ export default function Attendance() {
     half_day: 'bg-blue-50 text-blue-700 border-blue-200',
     holiday: 'bg-purple-50 text-purple-700 border-purple-200',
   };
+
+  if (!canAccess) {
+    return (
+      <div className="flex flex-col items-center justify-center p-12 bg-white rounded-2xl border border-slate-200 shadow-sm text-center max-w-lg mx-auto my-12 animate-fade-in">
+        <div className="p-4 bg-red-50 text-red-600 rounded-full mb-4">
+          <ShieldAlert className="w-10 h-10" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-800 mb-2">Access Denied</h2>
+        <p className="text-sm text-slate-500 mb-6">
+          You do not have permission to view or manage Attendance. Please contact your system administrator if you need access.
+        </p>
+        <Link to="/" className="px-5 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-sm font-medium transition-colors">
+          Return to Dashboard
+        </Link>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-fade-in">

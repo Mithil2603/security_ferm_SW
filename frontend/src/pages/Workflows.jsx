@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Zap, Bell, Settings, Play, Plus, Eye, X, Check, Trash2, AlertTriangle, CheckCircle, Info } from 'lucide-react';
+import { Zap, Bell, Settings, Play, Pause, Plus, Eye, X, Check, Trash2, AlertTriangle, CheckCircle, Info } from 'lucide-react';
 import api from '../services/api';
 import TableSkeleton from '../components/TableSkeleton';
+import { toast, confirmDialog } from '../context/ToastContext';
 
 const TYPE_ICONS = { info: Info, warning: AlertTriangle, success: CheckCircle, alert: AlertTriangle, reminder: Bell, error: AlertTriangle };
 const TYPE_COLORS = { info: 'blue', warning: 'amber', success: 'emerald', alert: 'red', reminder: 'purple', error: 'red' };
@@ -38,16 +39,27 @@ export default function Workflows() {
     e.preventDefault();
     try {
       await api.post('/workflows/rules', ruleForm);
+      toast.success('Workflow rule created successfully');
       setCreateRule(false);
+      setRuleForm({
+        name: '', trigger_entity: 'invoice', trigger_event: 'overdue',
+        action_type: 'send_notification', priority: 5,
+        condition: { field: '', operator: '>=', value: '' },
+        action_config: { message: '' },
+      });
       fetchRules();
-    } catch (err) { alert(err.message || 'Failed'); }
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to create rule');
+    }
   };
 
   const scanOverdue = async () => {
     try {
       const r = await api.post('/workflows/scan-overdue');
-      alert(`Scanned ${r.data.scanned} invoices. ${r.data.reminders_created} new reminders created.`);
-    } catch (err) { alert(err.message || 'Failed'); }
+      toast.success(`Scanned ${r.data?.scanned ?? 0} invoices. ${r.data?.reminders_created ?? 0} new reminders created.`);
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to scan overdue invoices');
+    }
   };
 
   const markAllRead = async () => {
@@ -59,7 +71,51 @@ export default function Workflows() {
   };
 
   const toggleRule = async (id, currentActive) => {
-    try { await api.put(`/workflows/rules/${id}`, { is_active: currentActive ? 0 : 1 }); fetchRules(); } catch {}
+    try {
+      await api.put(`/workflows/rules/${id}`, { is_active: currentActive ? 0 : 1 });
+      toast.success(currentActive ? 'Rule deactivated' : 'Rule activated');
+      fetchRules();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to update rule');
+    }
+  };
+
+  const handleDeleteRule = async (id, name) => {
+    const confirmed = await confirmDialog({
+      title: 'Delete Workflow Rule',
+      message: `Are you sure you want to delete rule "${name}"? This action cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'danger'
+    });
+    if (!confirmed) return;
+
+    try {
+      await api.delete(`/workflows/rules/${id}`);
+      toast.success('Workflow rule deleted successfully');
+      fetchRules();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to delete rule');
+    }
+  };
+
+  const handleDeleteApproval = async (id, name) => {
+    const confirmed = await confirmDialog({
+      title: 'Delete Auto-Approval Rule',
+      message: `Are you sure you want to delete "${name}"?`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'danger'
+    });
+    if (!confirmed) return;
+
+    try {
+      await api.delete(`/workflows/auto-approvals/${id}`);
+      toast.success('Auto-approval rule deleted successfully');
+      fetchApprovals();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to delete auto-approval rule');
+    }
   };
 
   return (
@@ -74,16 +130,16 @@ export default function Workflows() {
         <div className="flex gap-2">
           {tab === 'rules' && (
             <>
-              <button onClick={scanOverdue} className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm">
+              <button type="button" onClick={scanOverdue} className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm">
                 <Play className="w-4 h-4" /> Scan Overdue
               </button>
-              <button onClick={() => setCreateRule(true)} className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm">
+              <button type="button" onClick={() => setCreateRule(true)} className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm">
                 <Plus className="w-4 h-4" /> New Rule
               </button>
             </>
           )}
           {tab === 'notifications' && unreadCount > 0 && (
-            <button onClick={markAllRead} className="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors text-sm font-medium">
+            <button type="button" onClick={markAllRead} className="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors text-sm font-medium">
               <Check className="w-4 h-4" /> Mark All Read
             </button>
           )}
@@ -97,7 +153,7 @@ export default function Workflows() {
           { id: 'approvals', label: 'Auto-Approvals', icon: CheckCircle },
           { id: 'logs', label: 'Execution Logs', icon: Eye },
         ].map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${tab === t.id ? 'bg-teal-600 text-white' : 'text-slate-500 hover:text-slate-900'}`}>
+          <button key={t.id} type="button" onClick={() => setTab(t.id)} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${tab === t.id ? 'bg-teal-600 text-white' : 'text-slate-500 hover:text-slate-900'}`}>
             <t.icon className="w-4 h-4" /> {t.label}
           </button>
         ))}
@@ -134,14 +190,34 @@ export default function Workflows() {
                   <td className="p-4 text-center text-slate-900">{r.priority}</td>
                   <td className="p-4 text-center text-slate-700">{r.execution_count}</td>
                   <td className="p-4 text-center">
-                    <button onClick={() => toggleRule(r.id, r.is_active)} className={`text-xs px-2 py-0.5 rounded cursor-pointer ${r.is_active ? 'bg-emerald-500/20 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}>
+                    <button
+                      type="button"
+                      onClick={() => toggleRule(r.id, r.is_active)}
+                      className={`text-xs px-2.5 py-1 rounded-full font-medium cursor-pointer transition-colors ${r.is_active ? 'bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/25' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                      title={r.is_active ? 'Click to deactivate' : 'Click to activate'}
+                    >
                       {r.is_active ? 'Active' : 'Inactive'}
                     </button>
                   </td>
                   <td className="p-4 text-right">
-                    <button onClick={() => toggleRule(r.id, r.is_active)} className="p-1 rounded hover:bg-slate-100 text-slate-500" title="Toggle">
-                      {r.is_active ? <Trash2 className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        type="button"
+                        onClick={() => toggleRule(r.id, r.is_active)}
+                        className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors"
+                        title={r.is_active ? 'Pause / Deactivate' : 'Activate'}
+                      >
+                        {r.is_active ? <Pause className="w-4 h-4 text-amber-600" /> : <Play className="w-4 h-4 text-emerald-600" />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteRule(r.id, r.name)}
+                        className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-600 transition-colors"
+                        title="Delete Rule"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -167,7 +243,7 @@ export default function Workflows() {
                   <p className="text-xs text-gray-600 mt-1">{new Date(n.created_at).toLocaleString()}</p>
                 </div>
                 {!n.is_read && (
-                  <button onClick={() => markRead(n.id)} className="text-slate-400 hover:text-slate-900 p-1"><Check className="w-4 h-4" /></button>
+                  <button type="button" onClick={() => markRead(n.id)} className="text-slate-400 hover:text-slate-900 p-1"><Check className="w-4 h-4" /></button>
                 )}
               </div>
             );
@@ -185,15 +261,28 @@ export default function Workflows() {
               <th className="text-right p-4 font-medium">Max Amount</th>
               <th className="text-center p-4 font-medium">Approvals</th>
               <th className="text-center p-4 font-medium">Status</th>
+              <th className="text-right p-4 font-medium">Actions</th>
             </tr></thead>
             <tbody>
-              {approvals.map(a => (
+              {approvals.length === 0 ? (
+                <tr><td colSpan="6" className="p-8 text-center text-slate-400">No auto-approval rules configured.</td></tr>
+              ) : approvals.map(a => (
                 <tr key={a.id} className="border-b border-slate-200 hover:bg-slate-50">
                   <td className="p-4 text-slate-900 font-medium">{a.name}</td>
                   <td className="p-4"><span className="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded">{a.entity_type}</span></td>
                   <td className="p-4 text-right text-slate-900">{a.max_amount ? `₹${Number(a.max_amount).toLocaleString('en-IN')}` : 'No limit'}</td>
                   <td className="p-4 text-center text-slate-700">{a.approval_count}</td>
                   <td className="p-4 text-center"><span className={`text-xs px-2 py-0.5 rounded ${a.is_active ? 'bg-emerald-500/20 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}>{a.is_active ? 'Active' : 'Inactive'}</span></td>
+                  <td className="p-4 text-right">
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteApproval(a.id, a.name)}
+                      className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-600 transition-colors"
+                      title="Delete Auto-Approval Rule"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -237,7 +326,7 @@ export default function Workflows() {
           <div className="bg-white border border-slate-200 rounded-2xl p-6 w-full max-w-md">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-bold text-slate-900">New Workflow Rule</h2>
-              <button onClick={() => setCreateRule(false)} className="text-slate-500 hover:text-slate-900"><X className="w-5 h-5" /></button>
+              <button type="button" onClick={() => setCreateRule(false)} className="text-slate-500 hover:text-slate-900"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleCreateRule} className="space-y-3">
               <div>

@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { Wallet, TrendingUp, TrendingDown, Download, Printer, Calendar, RefreshCw, ChevronDown, ChevronUp, ArrowUpRight, ArrowDownRight, FileText, Users, Receipt, IndianRupee, Building2, BarChart3, Minus } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import { Wallet, TrendingUp, TrendingDown, Download, Printer, Calendar, RefreshCw, ChevronDown, ChevronUp, ArrowUpRight, ArrowDownRight, FileText, Users, Receipt, IndianRupee, Building2, BarChart3, Minus, ShieldAlert } from 'lucide-react';
 import api from '../services/api';
 import * as XLSX from 'xlsx';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, ComposedChart, Bar, Legend, ReferenceLine } from 'recharts';
@@ -101,11 +103,18 @@ function LineItem({ label, amount, sublabel, bold = false, previousAmount, isNeg
 }
 
 export default function PLAccount() {
+  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [compare, setCompare] = useState(false);
   const [saving, setSaving] = useState(false);
   const printRef = useRef();
+
+  const userPerms = Array.isArray(user?.permissions)
+    ? user.permissions
+    : (typeof user?.permissions === 'string' ? (() => { try { return JSON.parse(user.permissions); } catch (_) { return []; } })() : []);
+  const canView = user?.role === 'admin' || userPerms.includes('*') || userPerms.includes('view_pl_account');
 
   const now = new Date();
   const fyStart = now.getMonth() >= 3 ? `${now.getFullYear()}-04-01` : `${now.getFullYear() - 1}-04-01`;
@@ -115,8 +124,14 @@ export default function PLAccount() {
   });
 
   const fetchData = async () => {
+    if (!canView) {
+      setError('Access Denied: You do not have permission to view Profit & Loss Account.');
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
+      setError(null);
       const params = new URLSearchParams({
         from_date: dateRange.from_date,
         to_date: dateRange.to_date,
@@ -126,6 +141,11 @@ export default function PLAccount() {
       setData(res.data);
     } catch (err) {
       console.error('Failed to fetch P&L', err);
+      if (err.response?.status === 403) {
+        setError('Access Denied: You do not have permission to view Profit & Loss Account.');
+      } else {
+        setError(err.response?.data?.message || err.message || 'Failed to fetch P&L');
+      }
     } finally {
       setLoading(false);
     }
@@ -204,6 +224,23 @@ export default function PLAccount() {
           {[1,2,3,4].map(i => <div key={i} className="h-32 bg-slate-100 rounded-2xl animate-pulse" />)}
         </div>
         {[1,2,3].map(i => <div key={i} className="h-48 bg-slate-100 rounded-2xl animate-pulse" />)}
+      </div>
+    );
+  }
+
+  if (error || !canView) {
+    return (
+      <div className="flex flex-col items-center justify-center p-12 bg-white rounded-2xl border border-slate-200 shadow-sm text-center max-w-lg mx-auto my-12">
+        <div className="p-4 bg-red-50 text-red-600 rounded-full mb-4">
+          <ShieldAlert className="w-10 h-10" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-800 mb-2">Access Denied</h2>
+        <p className="text-sm text-slate-500 mb-6">
+          {error || 'You do not have permission to view the Profit & Loss Account. Please contact your system administrator if you need access.'}
+        </p>
+        <Link to="/" className="px-5 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-sm font-medium transition-colors">
+          Return to Dashboard
+        </Link>
       </div>
     );
   }

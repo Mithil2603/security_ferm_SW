@@ -452,7 +452,6 @@ function TeamManagementTab() {
       'approve_vouchers',
       'manage_payroll',
       'view_balance_sheet',
-      'view_pl_account',
       'manage_bank_accounts',
       'manage_bank_reconciliation',
       'manage_budgets'
@@ -684,11 +683,15 @@ function TeamManagementTab() {
                           {u.is_active ? <ShieldOff className="w-4 h-4" /> : <ShieldCheck className="w-4 h-4" />}
                         </button>
                         <button onClick={() => {
-                          let initialPerms = [];
-                          if (u.permissions) {
-                            initialPerms = typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions;
+                          let initialPerms = null;
+                          if (u.permissions !== null && u.permissions !== undefined) {
+                            try {
+                              initialPerms = typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions;
+                            } catch (_) {
+                              initialPerms = null;
+                            }
                           }
-                          if (!Array.isArray(initialPerms) || initialPerms.length === 0) {
+                          if (!Array.isArray(initialPerms)) {
                             initialPerms = ROLE_DEFAULTS[u.role] || [];
                           }
                           setIsPermissionsOpen(u);

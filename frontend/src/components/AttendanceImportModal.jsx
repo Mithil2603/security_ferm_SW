@@ -238,7 +238,7 @@ export default function AttendanceImportModal({ isOpen, onClose, onImportSuccess
               <div>
                 <h4 className="text-sm font-bold text-emerald-900">Need the template format?</h4>
                 <p className="text-xs text-emerald-700 mt-0.5">
-                  Downloads a template pre-filled with your registered active watchmen and today's date.
+                  Downloads a template pre-filled with your registered active employees and today's date.
                 </p>
               </div>
             </div>
@@ -279,7 +279,7 @@ export default function AttendanceImportModal({ isOpen, onClose, onImportSuccess
                 {result.message || 'Attendance records filled successfully!'}
               </div>
               <div className="text-sm text-emerald-700 space-y-1">
-                <p>• Successfully marked <strong>{result.successCount ?? 0}</strong> record(s) for <strong>{result.employeesCount || result.successCount}</strong> watchmen.</p>
+                <p>• Successfully marked <strong>{result.successCount ?? 0}</strong> record(s) for <strong>{result.employeesCount || result.successCount}</strong> employees.</p>
                 {result.datesMarked && result.datesMarked.length > 0 && (
                   <p>• Dates recorded: <strong>{result.datesMarked.join(', ')}</strong></p>
                 )}

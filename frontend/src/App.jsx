@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import Layout from './components/layout/Layout';
 import './services/errorInterceptor'; // Import to initialize
 import LicenseActivation from './pages/LicenseActivation';
@@ -39,6 +39,37 @@ import AuditLogs from './pages/AuditLogs';
 import HelpDocumentation from './pages/HelpDocumentation';
 import SketchbookOfUsPreview from './pages/SketchbookOfUsPreview';
 import { getApiBaseUrl } from './utils/apiUrl';
+
+function ProtectedRoute({ children, permission, role }) {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="flex h-64 w-full items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-teal-500"></div>
+      </div>
+    );
+  }
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role === 'admin') return children;
+
+  const userPerms = Array.isArray(user.permissions)
+    ? user.permissions
+    : (typeof user.permissions === 'string' ? (() => { try { return JSON.parse(user.permissions); } catch (_) { return []; } })() : []);
+
+  if (userPerms.includes('*')) return children;
+
+  if (permission) {
+    const required = Array.isArray(permission) ? permission : [permission];
+    const hasAny = required.some(p => userPerms.includes(p));
+    if (!hasAny) {
+      return <Navigate to="/" replace />;
+    }
+  }
+  if (role && user.role !== role) {
+    return <Navigate to="/" replace />;
+  }
+  return children;
+}
 
 function App() {
   const [licenseStatus, setLicenseStatus] = useState('checking'); // 'checking' | 'unlicensed' | 'licensed'
@@ -283,32 +314,32 @@ function App() {
           <Route path="/sketchbook" element={<SketchbookOfUsPreview />} />
           <Route element={<Layout />}>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/clients" element={<Clients />} />
-            <Route path="/employees" element={<Employees />} />
-            <Route path="/attendance" element={<Attendance />} />
-            <Route path="/invoices" element={<Invoices />} />
-            <Route path="/payroll" element={<Payroll />} />
-            <Route path="/ledger" element={<Ledger />} />
-            <Route path="/account-ledger" element={<AccountLedger />} />
+            <Route path="/clients" element={<ProtectedRoute permission="manage_invoices"><Clients /></ProtectedRoute>} />
+            <Route path="/employees" element={<ProtectedRoute permission="manage_employees"><Employees /></ProtectedRoute>} />
+            <Route path="/attendance" element={<ProtectedRoute permission={['manage_employees', 'manage_payroll']}><Attendance /></ProtectedRoute>} />
+            <Route path="/invoices" element={<ProtectedRoute permission="manage_invoices"><Invoices /></ProtectedRoute>} />
+            <Route path="/payroll" element={<ProtectedRoute permission="manage_payroll"><Payroll /></ProtectedRoute>} />
+            <Route path="/ledger" element={<ProtectedRoute permission="manage_payroll"><Ledger /></ProtectedRoute>} />
+            <Route path="/account-ledger" element={<ProtectedRoute permission="view_reports"><AccountLedger /></ProtectedRoute>} />
             <Route path="/party-ledger" element={<Navigate to="/account-ledger" replace />} />
-            <Route path="/expenses" element={<Expenses />} />
-            <Route path="/vendor-statements" element={<VendorStatements />} />
+            <Route path="/expenses" element={<ProtectedRoute permission="manage_expenses"><Expenses /></ProtectedRoute>} />
+            <Route path="/vendor-statements" element={<ProtectedRoute permission="manage_expenses"><VendorStatements /></ProtectedRoute>} />
             <Route path="/vendor-ledger" element={<Navigate to="/vendor-statements" replace />} />
-            <Route path="/budgets" element={<Budgets />} />
-            <Route path="/reports" element={<Reports />} />
-            <Route path="/tax-reports" element={<TaxReports />} />
+            <Route path="/budgets" element={<ProtectedRoute permission="manage_budgets"><Budgets /></ProtectedRoute>} />
+            <Route path="/reports" element={<ProtectedRoute permission="view_reports"><Reports /></ProtectedRoute>} />
+            <Route path="/tax-reports" element={<ProtectedRoute permission="view_reports"><TaxReports /></ProtectedRoute>} />
             <Route path="/tax-calculator" element={<Navigate to="/tax-reports" replace />} />
-            <Route path="/pf-gratuity" element={<PFGratuity />} />
-            <Route path="/gst-compliance" element={<GSTCompliance />} />
-            <Route path="/financial-reports" element={<FinancialReports />} />
-            <Route path="/workflows" element={<Workflows />} />
-            <Route path="/statements" element={<StatementArchive />} />
-            <Route path="/pl-account" element={<PLAccount />} />
-            <Route path="/vouchers" element={<Vouchers />} />
-            <Route path="/balance-sheet" element={<BalanceSheet />} />
-            <Route path="/bank-reconciliation" element={<BankReconciliation />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/audit-logs" element={<AuditLogs />} />
+            <Route path="/pf-gratuity" element={<ProtectedRoute permission="manage_payroll"><PFGratuity /></ProtectedRoute>} />
+            <Route path="/gst-compliance" element={<ProtectedRoute permission="manage_payroll"><GSTCompliance /></ProtectedRoute>} />
+            <Route path="/financial-reports" element={<ProtectedRoute permission="view_reports"><FinancialReports /></ProtectedRoute>} />
+            <Route path="/workflows" element={<ProtectedRoute role="admin"><Workflows /></ProtectedRoute>} />
+            <Route path="/statements" element={<ProtectedRoute permission="view_reports"><StatementArchive /></ProtectedRoute>} />
+            <Route path="/pl-account" element={<ProtectedRoute permission="view_pl_account"><PLAccount /></ProtectedRoute>} />
+            <Route path="/vouchers" element={<ProtectedRoute permission={['view_vouchers', 'create_vouchers', 'edit_vouchers', 'delete_vouchers', 'approve_vouchers', 'manage_vouchers']}><Vouchers /></ProtectedRoute>} />
+            <Route path="/balance-sheet" element={<ProtectedRoute permission="view_balance_sheet"><BalanceSheet /></ProtectedRoute>} />
+            <Route path="/bank-reconciliation" element={<ProtectedRoute permission="manage_bank_reconciliation"><BankReconciliation /></ProtectedRoute>} />
+            <Route path="/settings" element={<ProtectedRoute permission="manage_settings"><Settings /></ProtectedRoute>} />
+            <Route path="/audit-logs" element={<ProtectedRoute permission="manage_settings"><AuditLogs /></ProtectedRoute>} />
             <Route path="/help" element={<HelpDocumentation />} />
           </Route>
         </Routes>

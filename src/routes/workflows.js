@@ -105,8 +105,10 @@ router.put('/rules/:id', requirePermission('manage_settings'), async (req, res) 
 
 router.delete('/rules/:id', requirePermission('manage_settings'), async (req, res) => {
   try {
-    await workflowEngine.deleteRule(parseInt(req.params.id));
-    res.json({ success: true, message: 'Rule deactivated' });
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ success: false, message: 'Invalid rule ID' });
+    await workflowEngine.deleteRule(id);
+    res.json({ success: true, message: 'Workflow rule deleted successfully' });
   } catch (err) {
     logError({
       error: err,
@@ -240,6 +242,25 @@ router.post('/auto-approvals', requirePermission('manage_settings'), async (req,
       category: ERROR_CATEGORY.REPORTING,
       feature: 'workflows',
       extra: { message: 'Create auto-approval error:' }
+    });
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.delete('/auto-approvals/:id', requirePermission('manage_settings'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ success: false, message: 'Invalid rule ID' });
+    await workflowEngine.deleteAutoApprovalRule(id);
+    res.json({ success: true, message: 'Auto-approval rule deleted successfully' });
+  } catch (err) {
+    logError({
+      error: err,
+      req,
+      severity: ERROR_SEVERITY.HIGH,
+      category: ERROR_CATEGORY.REPORTING,
+      feature: 'workflows',
+      extra: { message: 'Delete auto-approval error:' }
     });
     res.status(500).json({ success: false, message: err.message });
   }

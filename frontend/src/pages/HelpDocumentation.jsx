@@ -9,9 +9,9 @@ const documentationTopics = [
     content: (
       <div className="space-y-4">
         <h3 className="text-lg font-bold text-slate-800">Welcome to SecurManage</h3>
-        <p className="text-slate-600">SecurManage is a comprehensive software designed for security agencies to manage watchmen, clients, invoicing, and payroll efficiently.</p>
+        <p className="text-slate-600">SecurManage is a comprehensive software designed for security agencies to manage employees, clients, invoicing, and payroll efficiently.</p>
         <ul className="list-disc pl-5 text-slate-600 space-y-2">
-          <li><strong>Dashboard:</strong> Provides an overview of key metrics like active watchmen, pending invoices, and monthly revenue.</li>
+          <li><strong>Dashboard:</strong> Provides an overview of key metrics like active employees, pending invoices, and monthly revenue.</li>
           <li><strong>Sidebar Navigation:</strong> Use the left sidebar to navigate between different modules.</li>
         </ul>
       </div>
@@ -29,7 +29,7 @@ const documentationTopics = [
           <li>Navigate to the <strong>Clients</strong> tab in the sidebar.</li>
           <li>Click the <strong>Add Client</strong> button in the top right.</li>
           <li>Fill in the necessary details like Name, Address, Monthly Rate, and Contract Dates.</li>
-          <li>Click <strong>Save</strong>. You can now assign watchmen to this client.</li>
+          <li>Click <strong>Save</strong>. You can now assign employees to this client.</li>
         </ol>
         <div className="mt-4 p-3 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-sm flex gap-2">
           <AlertCircle className="w-5 h-5 shrink-0" />
@@ -40,15 +40,15 @@ const documentationTopics = [
   },
   {
     id: 'manage-employees',
-    title: 'Managing Employees (Watchmen)',
+    title: 'Managing Employees',
     icon: <CheckCircle2 className="w-5 h-5 text-teal-500" />,
     content: (
       <div className="space-y-4">
-        <h3 className="text-lg font-bold text-slate-800">Onboarding Watchmen</h3>
+        <h3 className="text-lg font-bold text-slate-800">Onboarding Employees</h3>
         <p className="text-slate-600">Keep track of your security personnel, their assignments, and their salary structures.</p>
         <ol className="list-decimal pl-5 text-slate-600 space-y-2">
           <li>Navigate to the <strong>Employees</strong> tab.</li>
-          <li>Click <strong>Onboard Watchman</strong>.</li>
+          <li>Click <strong>Onboard Employee</strong>.</li>
           <li>Fill out their personal details, assign a Salary Structure, and assign them to a Client site.</li>
           <li>Save the profile.</li>
         </ol>
@@ -62,9 +62,9 @@ const documentationTopics = [
     content: (
       <div className="space-y-4">
         <h3 className="text-lg font-bold text-slate-800">Monthly Billing</h3>
-        <p className="text-slate-600">Generate automated invoices for your clients and salary slips for your watchmen.</p>
+        <p className="text-slate-600">Generate automated invoices for your clients and salary slips for your employees.</p>
         <ul className="list-disc pl-5 text-slate-600 space-y-2">
-          <li><strong>Invoicing:</strong> Go to the Invoices tab and click "Generate Monthly Invoices". The system will automatically calculate bills based on client contracts and watchmen attendance.</li>
+          <li><strong>Invoicing:</strong> Go to the Invoices tab and click "Generate Monthly Invoices". The system will automatically calculate bills based on client contracts and employee attendance.</li>
           <li><strong>Payroll:</strong> Go to the Payroll tab to generate salary slips for the month. Basic Salary, HRA, PF deductions (if applicable), and advances are computed automatically.</li>
         </ul>
       </div>

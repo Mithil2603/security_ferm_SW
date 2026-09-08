@@ -75,6 +75,11 @@ export default function Dashboard() {
   const [fetchError, setFetchError] = useState(null);
   const [isAttendanceUploadOpen, setIsAttendanceUploadOpen] = useState(false);
 
+  const userPerms = Array.isArray(user?.permissions)
+    ? user.permissions
+    : (typeof user?.permissions === 'string' ? (() => { try { return JSON.parse(user.permissions); } catch (_) { return []; } })() : []);
+  const hasPerm = (perm) => user?.role === 'admin' || userPerms.includes('*') || (Array.isArray(perm) ? perm.some(p => userPerms.includes(p)) : userPerms.includes(perm));
+
   const fetchDashboard = useCallback(async (isManualRefresh = false) => {
     if (isManualRefresh) setRefreshing(true);
     setFetchError(null);
@@ -217,7 +222,7 @@ export default function Dashboard() {
       {/* KPI Cards - Row 2 (Staff, Clients & Attendance) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <StatCard 
-          title="Active Watchmen & Employees" 
+          title="Active Employees" 
           value={kpis?.employees?.active ?? 0} 
           icon={Users} 
           subtitle={`Total Registered: ${kpis?.employees?.total ?? 0}`}
@@ -228,44 +233,69 @@ export default function Dashboard() {
           icon={Building2} 
           subtitle={`Total Contracts: ${kpis?.clients?.total ?? 0}`}
         />
-        <Link to="/attendance" className="block transition-transform hover:-translate-y-0.5">
+        {hasPerm('manage_employees') ? (
+          <Link to="/attendance" className="block transition-transform hover:-translate-y-0.5">
+            <StatCard 
+              title="Today's Attendance" 
+              value={kpis?.attendance ? `${kpis.attendance.present} / ${kpis?.employees?.active ?? 0}` : '0 / 0'} 
+              icon={CalendarCheck} 
+              subtitle={`${kpis?.attendance?.absent ? `${kpis.attendance.absent} Absent • ` : ''}${kpis?.attendance?.total_marked ?? 0} marked today`}
+            />
+          </Link>
+        ) : (
           <StatCard 
             title="Today's Attendance" 
             value={kpis?.attendance ? `${kpis.attendance.present} / ${kpis?.employees?.active ?? 0}` : '0 / 0'} 
             icon={CalendarCheck} 
             subtitle={`${kpis?.attendance?.absent ? `${kpis.attendance.absent} Absent • ` : ''}${kpis?.attendance?.total_marked ?? 0} marked today`}
           />
-        </Link>
+        )}
       </div>
 
       {/* Quick Actions */}
       <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
         <h3 className="text-sm font-bold text-slate-800 mb-4 uppercase tracking-wider">Quick Actions</h3>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
-          <Link to="/invoices" className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-teal-50 hover:border-teal-100 hover:text-teal-700 transition-colors group">
-            <PlusCircle className="w-6 h-6 text-slate-400 group-hover:text-teal-600 mb-2" />
-            <span className="text-sm font-medium">Create Invoice</span>
-          </Link>
-          <Link to="/attendance" className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-teal-50 hover:border-teal-100 hover:text-teal-700 transition-colors group">
-            <CheckSquare className="w-6 h-6 text-slate-400 group-hover:text-teal-600 mb-2" />
-            <span className="text-sm font-medium">Mark Attendance</span>
-          </Link>
-          <button 
-            type="button"
-            onClick={() => setIsAttendanceUploadOpen(true)}
-            className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors group text-slate-700"
-          >
-            <FileSpreadsheet className="w-6 h-6 text-slate-400 group-hover:text-emerald-600 mb-2" />
-            <span className="text-sm font-medium">Upload Attendance</span>
-          </button>
-          <Link to="/employees" className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-teal-50 hover:border-teal-100 hover:text-teal-700 transition-colors group">
-            <UserPlus className="w-6 h-6 text-slate-400 group-hover:text-teal-600 mb-2" />
-            <span className="text-sm font-medium">Add Watchman</span>
-          </Link>
-          <Link to="/expenses" className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-teal-50 hover:border-teal-100 hover:text-teal-700 transition-colors group">
-            <Receipt className="w-6 h-6 text-slate-400 group-hover:text-teal-600 mb-2" />
-            <span className="text-sm font-medium">Record Expense</span>
-          </Link>
+          {hasPerm('manage_invoices') && (
+            <Link to="/invoices" className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-teal-50 hover:border-teal-100 hover:text-teal-700 transition-colors group">
+              <PlusCircle className="w-6 h-6 text-slate-400 group-hover:text-teal-600 mb-2" />
+              <span className="text-sm font-medium">Create Invoice</span>
+            </Link>
+          )}
+          {hasPerm('manage_employees') && (
+            <Link to="/attendance" className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-teal-50 hover:border-teal-100 hover:text-teal-700 transition-colors group">
+              <CheckSquare className="w-6 h-6 text-slate-400 group-hover:text-teal-600 mb-2" />
+              <span className="text-sm font-medium">Mark Attendance</span>
+            </Link>
+          )}
+          {hasPerm('manage_employees') && (
+            <button 
+              type="button"
+              onClick={() => setIsAttendanceUploadOpen(true)}
+              className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors group text-slate-700 cursor-pointer"
+            >
+              <FileSpreadsheet className="w-6 h-6 text-slate-400 group-hover:text-emerald-600 mb-2" />
+              <span className="text-sm font-medium">Upload Attendance</span>
+            </button>
+          )}
+          {hasPerm('manage_employees') && (
+            <Link to="/employees" className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-teal-50 hover:border-teal-100 hover:text-teal-700 transition-colors group">
+              <UserPlus className="w-6 h-6 text-slate-400 group-hover:text-teal-600 mb-2" />
+              <span className="text-sm font-medium">Add Employee</span>
+            </Link>
+          )}
+          {hasPerm('manage_expenses') && (
+            <Link to="/expenses" className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-teal-50 hover:border-teal-100 hover:text-teal-700 transition-colors group">
+              <Receipt className="w-6 h-6 text-slate-400 group-hover:text-teal-600 mb-2" />
+              <span className="text-sm font-medium">Record Expense</span>
+            </Link>
+          )}
+          {hasPerm(['create_vouchers', 'view_vouchers']) && (
+            <Link to="/vouchers" className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-100 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-100 hover:text-indigo-700 transition-colors group">
+              <CreditCard className="w-6 h-6 text-slate-400 group-hover:text-indigo-600 mb-2" />
+              <span className="text-sm font-medium">Vouchers</span>
+            </Link>
+          )}
         </div>
       </div>
 
