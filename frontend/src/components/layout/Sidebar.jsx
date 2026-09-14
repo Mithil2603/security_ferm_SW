@@ -25,7 +25,8 @@ import {
   Activity,
   HelpCircle,
   X,
-  Target
+  Target,
+  Truck
 } from 'lucide-react';
 import classNames from 'classnames';
 
@@ -38,8 +39,8 @@ const navItems = [
   { name: 'Payroll', path: '/payroll', icon: Banknote, roles: ['admin', 'accountant'], permission: 'manage_payroll' },
   { name: 'Employee Ledger', path: '/ledger', icon: Banknote, roles: ['admin', 'accountant', 'manager'], permission: 'manage_payroll' },
   { name: 'Expenses', path: '/expenses', icon: Receipt, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },
-  { name: 'Vendor Ledger', path: '/vendor-statements', icon: FileText, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },
-  { name: 'Party Ledger', path: '/account-ledger', icon: BookOpen, roles: ['admin', 'accountant', 'manager'], permission: 'view_reports' },
+  { name: 'Vendor Ledger', path: '/vendor-ledger', icon: Truck, roles: ['admin', 'accountant', 'manager'], permission: ['manage_expenses', 'view_reports'] },
+  { name: 'Party Ledger', path: '/party-ledger', icon: BookOpen, roles: ['admin', 'accountant', 'manager'], permission: ['manage_invoices', 'view_reports'] },
   { name: 'Reports', path: '/reports', icon: PieChart, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
   { name: 'Tax Reports', path: '/tax-reports', icon: Receipt, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
   { name: 'PF & Gratuity', path: '/pf-gratuity', icon: Shield, roles: ['admin', 'accountant'], permission: 'manage_payroll' },

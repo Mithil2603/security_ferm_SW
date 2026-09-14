@@ -4,7 +4,8 @@ import { format } from 'date-fns';
 import {
   Database, HardDrive, FolderOpen, Download, Trash2,
   Play, Clock, CheckCircle2, AlertCircle, ShieldCheck,
-  RefreshCw, FileArchive, Settings2, Save
+  RefreshCw, FileArchive, Settings2, Save,
+  Paperclip, Copy, Check, Info
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -40,6 +41,10 @@ export default function DatabaseBackupTab() {
   });
   const [browserLoading, setBrowserLoading] = useState(false);
 
+  const [uploadsInfo, setUploadsInfo] = useState(null);
+  const [copiedPath, setCopiedPath] = useState(false);
+  const [downloadingAttachments, setDownloadingAttachments] = useState(false);
+
   const showToast = (message, type = 'error') => {
     setToast({ show: true, message, type });
   };
@@ -56,7 +61,9 @@ export default function DatabaseBackupTab() {
       const backupList = res.data?.backups || res.backups || [];
       const backupSettings = res.data?.settings || res.settings || null;
       const activePath = res.data?.active_path || res.active_path || '';
+      const uploads = res.data?.uploads_info || res.uploads_info || null;
       setBackups(backupList);
+      setUploadsInfo(uploads);
       if (backupSettings) {
         setSettings({
           ...backupSettings,
@@ -73,6 +80,21 @@ export default function DatabaseBackupTab() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleCopyUploadsPath = () => {
+    if (!uploadsInfo?.path) return;
+    navigator.clipboard.writeText(uploadsInfo.path);
+    setCopiedPath(true);
+    showToast('Uploads folder path copied to clipboard!', 'success');
+    setTimeout(() => setCopiedPath(false), 2500);
+  };
+
+  const handleDownloadAttachmentsZip = () => {
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token') || '';
+    setDownloadingAttachments(true);
+    window.open(`${getApiBaseUrl()}/backups/attachments/download?token=${token}`, '_blank');
+    setTimeout(() => setDownloadingAttachments(false), 2000);
   };
 
   const loadBrowserDir = async (dirPath) => {
@@ -447,6 +469,91 @@ export default function DatabaseBackupTab() {
             />
             <span>Allow <strong>Accountant</strong> Role</span>
           </label>
+        </div>
+      </div>
+
+      {/* Card: Attachments & Documents Storage Location */}
+      <div className="bg-white rounded-2xl border border-teal-200/80 p-6 shadow-sm relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-32 h-32 bg-teal-50 rounded-full blur-2xl -mr-10 -mt-10 pointer-events-none"></div>
+
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2.5 bg-teal-50 text-teal-700 rounded-xl border border-teal-200/60">
+              <Paperclip className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-800">
+                Attachments & Documents Storage Location
+              </h3>
+              <p className="text-xs text-slate-500">
+                All employee KYC documents, photos, receipts, vouchers, and uploaded files are saved here.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+              <span className="w-2 h-2 rounded-full bg-teal-500"></span>
+              {uploadsInfo?.file_count ?? 0} Files
+            </span>
+            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-mono font-bold bg-teal-50 text-teal-800 border border-teal-200">
+              {uploadsInfo?.total_size || '0 B'}
+            </span>
+            <button
+              type="button"
+              onClick={handleDownloadAttachmentsZip}
+              disabled={downloadingAttachments}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold shadow-sm transition-colors cursor-pointer disabled:opacity-50"
+              title="Download all attachments in a single ZIP file"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>{downloadingAttachments ? 'Creating ZIP...' : 'Download All Attachments (ZIP)'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Path Display Box */}
+        <div className="p-4 bg-slate-50 rounded-xl border border-slate-200/80 mb-4">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+              <FolderOpen className="w-3.5 h-3.5 text-teal-600" />
+              Local Disk Storage Folder:
+            </span>
+            <button
+              type="button"
+              onClick={handleCopyUploadsPath}
+              className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800 bg-white hover:bg-teal-50 px-2.5 py-1 rounded-md border border-teal-200 transition-colors shadow-2xs cursor-pointer"
+            >
+              {copiedPath ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-600" />
+                  <span className="text-emerald-700">Copied!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5 text-teal-600" />
+                  <span>Copy Path</span>
+                </>
+              )}
+            </button>
+          </div>
+          <div className="font-mono text-xs text-teal-950 font-semibold bg-white p-3 rounded-lg border border-teal-100 break-all select-all shadow-2xs">
+            {uploadsInfo?.path || 'c:\\Users\\mithi\\OneDrive\\Documents\\Freelance Project\\security_ferm_SW\\uploads'}
+          </div>
+        </div>
+
+        {/* Supervisor Reinstallation Guide / Info Banner */}
+        <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200/80 text-amber-900 text-xs space-y-2">
+          <div className="font-bold flex items-center gap-1.5 text-amber-950">
+            <Info className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>Important: Software Update & Reinstallation Guide</span>
+          </div>
+          <p className="text-amber-900/90 leading-relaxed">
+            • <strong>Software Update / Reinstallation:</strong> Whenever updating the software or setting up a fresh install, simply copy or backup the entire <strong>uploads</strong> folder shown above. After reinstalling, paste / replace this <strong>uploads</strong> folder in the software directory to restore all employee documents and receipts instantly!
+          </p>
+          <p className="text-amber-900/90 leading-relaxed">
+            • <strong>Automated Protection:</strong> Scheduled daily backups and the "Take Backup Now" button also automatically bundle this entire <strong>uploads</strong> directory into the backup archive.
+          </p>
         </div>
       </div>
 

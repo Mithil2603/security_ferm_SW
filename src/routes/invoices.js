@@ -52,18 +52,34 @@ async function generateInvoiceNumber(dateString = null) {
   return `${prefix}${paddedSequence}`;
 }
 
-function calculateInvoiceAmounts(monthly_rate, billing_period_start, billing_period_end, tax_type = 'none', discount_amount = 0, is_rcm_applicable = false) {
+function calculateInvoiceAmounts(monthly_rate, billing_period_start, billing_period_end, tax_type = 'none', discount_amount = 0, is_rcm_applicable = false, client = null, absentGuardDays = 0) {
   const start = new Date(billing_period_start);
   const end = new Date(billing_period_end);
-  const daysInPeriod = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
-  // Use the actual number of days in the billing start month (28-31) instead of fixed 30
+  const daysInPeriod = Math.max(1, Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1);
   const daysInMonth = new Date(start.getFullYear(), start.getMonth() + 1, 0).getDate();
 
-  const dailyRate = new Decimal(monthly_rate).dividedBy(daysInMonth);
-  const amount_subtotal = dailyRate.times(daysInPeriod).toDecimalPlaces(2);
+  let rawSubtotal;
+  const guards = client?.employee_count || 1;
+  const dailyRatePerGuard = (client?.rate_per_day > 0) 
+    ? client.rate_per_day 
+    : (monthly_rate > 0 ? (monthly_rate / (guards * daysInMonth)) : 0);
+
+  if (client?.rate_per_day > 0) {
+    const totalGuardDays = guards * daysInPeriod;
+    const billableGuardDays = Math.max(0, totalGuardDays - (parseFloat(absentGuardDays) || 0));
+    rawSubtotal = new Decimal(dailyRatePerGuard).times(billableGuardDays).toDecimalPlaces(2);
+  } else {
+    const dailyRate = new Decimal(monthly_rate || 0).dividedBy(daysInMonth);
+    let sub = dailyRate.times(daysInPeriod);
+    if (parseFloat(absentGuardDays) > 0 && dailyRatePerGuard > 0) {
+      const deduction = new Decimal(dailyRatePerGuard).times(parseFloat(absentGuardDays));
+      sub = Decimal.max(0, sub.minus(deduction));
+    }
+    rawSubtotal = sub.toDecimalPlaces(2);
+  }
   
   const discountDec = new Decimal(discount_amount || 0);
-  const taxable_amount = amount_subtotal.minus(discountDec);
+  const taxable_amount = Decimal.max(0, rawSubtotal.minus(discountDec));
   const final_taxable = taxable_amount.greaterThan(0) ? taxable_amount : new Decimal(0);
   
   let cgst_amount = new Decimal(0);
@@ -82,16 +98,19 @@ function calculateInvoiceAmounts(monthly_rate, billing_period_start, billing_per
     total_amount = total_amount.plus(cgst_amount).plus(sgst_amount).plus(igst_amount);
   }
   
-  const final_amount = total_amount.toDecimalPlaces(2);
+  const raw_total = parseFloat(total_amount.toDecimalPlaces(2).toString());
+  const final_rounded = Math.round(raw_total);
+  const round_off = parseFloat((final_rounded - raw_total).toFixed(2));
 
   return {
     daysInPeriod,
-    amount_subtotal: parseFloat(amount_subtotal.toString()),
+    amount_subtotal: parseFloat(rawSubtotal.toString()),
     cgst_amount: parseFloat(cgst_amount.toString()),
     sgst_amount: parseFloat(sgst_amount.toString()),
     igst_amount: parseFloat(igst_amount.toString()),
-    total_amount: parseFloat(total_amount.toString()),
-    final_amount: parseFloat(final_amount.toString()),
+    total_amount: raw_total,
+    round_off: round_off,
+    final_amount: final_rounded,
   };
 }
 
@@ -113,9 +132,11 @@ router.get('/', async (req, res) => {
 
     const result = await query(
       `SELECT i.*, c.name as client_name, c.email as client_email, c.phone as client_phone,
-        c.address as client_address, c.city as client_city, c.contact_person
+        c.address as client_address, c.city as client_city, c.contact_person,
+        ba.bank_name, ba.account_name as bank_account_name, ba.account_number as bank_account_number, ba.ifsc_code as bank_ifsc_code
        FROM invoices i
        JOIN clients c ON i.client_id = c.id
+       LEFT JOIN bank_accounts ba ON i.bank_account_id = ba.id
        ${where}
        ORDER BY i.invoice_date DESC, i.created_at DESC
        LIMIT $${pc} OFFSET $${pc + 1}`,
@@ -124,9 +145,21 @@ router.get('/', async (req, res) => {
 
     const countResult = await query(`SELECT COUNT(*) AS count FROM invoices i ${where}`, params);
 
+    const parseBillItems = (inv) => {
+      let items = [];
+      if (inv.bill_items) {
+        try {
+          items = typeof inv.bill_items === 'string' ? JSON.parse(inv.bill_items) : inv.bill_items;
+        } catch (e) {
+          items = [];
+        }
+      }
+      return Array.isArray(items) ? items : [];
+    };
+
     res.json({
       success: true,
-      data: result.rows,
+      data: result.rows.map(r => ({ ...r, bill_items: parseBillItems(r) })),
       pagination: { total: parseInt(countResult.rows[0].count), page: parseInt(page), limit: parseInt(limit) }
     });
   } catch (error) {
@@ -142,9 +175,11 @@ router.get('/:id', async (req, res) => {
     const result = await query(
       `SELECT i.*, c.name as client_name, c.email as client_email, c.phone as client_phone,
         c.address as client_address, c.city as client_city, c.state as client_state,
-        c.contact_person, c.gst_number as client_gst
+        c.contact_person, c.gst_number as client_gst,
+        ba.bank_name, ba.account_name as bank_account_name, ba.account_number as bank_account_number, ba.ifsc_code as bank_ifsc_code
        FROM invoices i
        JOIN clients c ON i.client_id = c.id
+       LEFT JOIN bank_accounts ba ON i.bank_account_id = ba.id
        WHERE i.id = $1`,
       [req.params.id]
     );
@@ -158,7 +193,17 @@ router.get('/:id', async (req, res) => {
       [req.params.id]
     );
 
-    res.json({ success: true, data: { ...result.rows[0], payments: payments.rows } });
+    const inv = result.rows[0];
+    let items = [];
+    if (inv.bill_items) {
+      try {
+        items = typeof inv.bill_items === 'string' ? JSON.parse(inv.bill_items) : inv.bill_items;
+      } catch (e) {
+        items = [];
+      }
+    }
+
+    res.json({ success: true, data: { ...inv, bill_items: Array.isArray(items) ? items : [], payments: payments.rows } });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'invoices' });
     res.status(500).json({ success: false, message: 'Failed to fetch invoice' });
@@ -172,7 +217,8 @@ router.post('/', validate(schemas.createInvoice), async (req, res) => {
       client_id, billing_period_start, billing_period_end, invoice_date, 
       is_rcm_applicable, discount_amount, notes,
       invoice_type = 'regular', is_ad_hoc,
-      amount_subtotal, fixed_amount, guards_count, rate_per_guard, duty_days_worked
+      amount_subtotal, fixed_amount, guards_count, rate_per_guard, duty_days_worked,
+      absent_guard_days = 0, absence_deduction = 0
     } = req.body;
     // Normalize tax_type: GST_18 is treated as cgst_sgst (18% split)
     const raw_tax_type = req.body.tax_type;
@@ -233,6 +279,8 @@ router.post('/', validate(schemas.createInvoice), async (req, res) => {
         total += cgst + sgst + igst;
       }
       total = parseFloat(total.toFixed(2));
+      const roundedFinal = Math.round(total);
+      const roundOff = parseFloat((roundedFinal - total).toFixed(2));
 
       amounts = {
         amount_subtotal: sub,
@@ -240,13 +288,14 @@ router.post('/', validate(schemas.createInvoice), async (req, res) => {
         sgst_amount: sgst,
         igst_amount: igst,
         total_amount: total,
-        final_amount: total
+        round_off: roundOff,
+        final_amount: roundedFinal
       };
       isAdhocVal = 1;
       const daysCount = Math.ceil((new Date(billing_period_end) - new Date(billing_period_start)) / (1000 * 60 * 60 * 24)) + 1;
       finalDutyDays = duty_days_worked ? parseInt(duty_days_worked) : daysCount;
     } else {
-      // REGULAR INVOICE: If manual amount_subtotal was specified, use it; otherwise calculate based on client.monthly_rate
+      // REGULAR INVOICE: If manual amount_subtotal was specified, use it; otherwise calculate based on client contract and absence deduction
       if (amount_subtotal !== undefined && amount_subtotal !== '' && amount_subtotal !== null && !isNaN(parseFloat(amount_subtotal)) && parseFloat(amount_subtotal) >= 0) {
         const customSub = parseFloat(parseFloat(amount_subtotal).toFixed(2));
         const disc = parseFloat(discount_amount) || 0;
@@ -262,34 +311,134 @@ router.post('/', validate(schemas.createInvoice), async (req, res) => {
         if (!is_rcm_applicable) {
           total += cgst + sgst + igst;
         }
+        total = parseFloat(total.toFixed(2));
+        const roundedFinal = Math.round(total);
+        const roundOff = parseFloat((roundedFinal - total).toFixed(2));
+
         amounts = {
           daysInPeriod: Math.ceil((new Date(billing_period_end) - new Date(billing_period_start)) / (1000 * 60 * 60 * 24)) + 1,
           amount_subtotal: customSub,
           cgst_amount: cgst,
           sgst_amount: sgst,
           igst_amount: igst,
-          total_amount: parseFloat(total.toFixed(2)),
-          final_amount: parseFloat(total.toFixed(2))
+          total_amount: total,
+          round_off: roundOff,
+          final_amount: roundedFinal
         };
       } else {
-        amounts = calculateInvoiceAmounts(client.monthly_rate, billing_period_start, billing_period_end, tax_type, discount_amount, is_rcm_applicable);
+        amounts = calculateInvoiceAmounts(client.monthly_rate, billing_period_start, billing_period_end, tax_type, discount_amount, is_rcm_applicable, client, absent_guard_days);
       }
       isAdhocVal = 0;
       finalDutyDays = null;
     }
 
+    // Process bill_items if provided (multi-category guard billing)
+    let parsedBillItems = null;
+    if (req.body.bill_items) {
+      try {
+        parsedBillItems = typeof req.body.bill_items === 'string' ? JSON.parse(req.body.bill_items) : req.body.bill_items;
+      } catch (e) {
+        parsedBillItems = null;
+      }
+    }
+
+    if (Array.isArray(parsedBillItems) && parsedBillItems.length > 0) {
+      const itemsSubtotal = parsedBillItems.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+      if (itemsSubtotal > 0) {
+        const sub = parseFloat(itemsSubtotal.toFixed(2));
+        const disc = parseFloat(discount_amount) || 0;
+        const taxable = Math.max(0, sub - disc);
+        let cgst = 0, sgst = 0, igst = 0;
+        if (tax_type === 'cgst_sgst') {
+          cgst = parseFloat((taxable * 0.09).toFixed(2));
+          sgst = parseFloat((taxable * 0.09).toFixed(2));
+        } else if (tax_type === 'igst') {
+          igst = parseFloat((taxable * 0.18).toFixed(2));
+        }
+        let total = taxable;
+        if (!is_rcm_applicable) {
+          total += cgst + sgst + igst;
+        }
+        total = parseFloat(total.toFixed(2));
+        const roundedFinal = Math.round(total);
+        const roundOff = parseFloat((roundedFinal - total).toFixed(2));
+
+        amounts = {
+          daysInPeriod: amounts?.daysInPeriod || 30,
+          amount_subtotal: sub,
+          cgst_amount: cgst,
+          sgst_amount: sgst,
+          igst_amount: igst,
+          total_amount: total,
+          round_off: roundOff,
+          final_amount: roundedFinal
+        };
+      }
+    }
+
+    let finalNotes = notes || '';
+    if (parseFloat(absent_guard_days) > 0) {
+      const deductionNote = `[Guards: ${client.employee_count || 1} | Absences: ${absent_guard_days} days | Deduction: -₹${parseFloat(absence_deduction || 0).toLocaleString('en-IN')}]`;
+      finalNotes = finalNotes ? `${finalNotes} ${deductionNote}` : deductionNote;
+    }
+
     const inv_date = invoice_date || new Date().toISOString().split('T')[0];
-    const invoice_number = await generateInvoiceNumber(inv_date);
+    
+    // Manual Invoice Numbering: do not auto-increment if specified
+    let invoice_number;
+    if (req.body.invoice_number && String(req.body.invoice_number).trim()) {
+      invoice_number = String(req.body.invoice_number).trim().toUpperCase();
+      const existingNo = await query('SELECT id FROM invoices WHERE invoice_number = $1', [invoice_number]);
+      if (existingNo.rows.length > 0) {
+        return res.status(409).json({ success: false, message: `Invoice number ${invoice_number} already exists. Please choose a different number.` });
+      }
+    } else {
+      invoice_number = await generateInvoiceNumber(inv_date);
+    }
+
     const due_date = new Date(new Date(inv_date).getTime() + (parseInt(process.env.INVOICE_DUE_DAYS) || 30) * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
+    // Chosen bank account or default IndusInd Bank
+    let finalBankId = req.body.bank_account_id ? parseInt(req.body.bank_account_id) : null;
+    if (!finalBankId) {
+      const defaultBank = await query("SELECT id FROM bank_accounts WHERE account_number = '252528112019' OR (account_type = 'bank' AND is_active = 1) ORDER BY (account_number = '252528112019') DESC, id ASC LIMIT 1");
+      if (defaultBank.rows.length > 0) {
+        finalBankId = defaultBank.rows[0].id;
+      }
+    }
+
+    let finalGuardsCount = req.body.guards_count ? parseInt(req.body.guards_count) : (client.employee_count || 1);
+    let finalRatePerDay = req.body.rate_per_day !== undefined && req.body.rate_per_day !== '' ? parseFloat(req.body.rate_per_day) : (client.rate_per_day || (amounts.daysInPeriod > 0 && client.monthly_rate > 0 ? parseFloat((client.monthly_rate / (finalGuardsCount * amounts.daysInPeriod)).toFixed(2)) : 0));
+    let finalMonthlyRate = req.body.monthly_rate !== undefined && req.body.monthly_rate !== '' ? parseFloat(req.body.monthly_rate) : (client.monthly_rate || 0);
+    let finalParticular = req.body.particular || 'Security Guard';
+    let finalHsnCode = req.body.hsn_code || '998525';
+    let finalSiteName = req.body.site_name || '';
+    let finalTotalDutyDays = req.body.total_duty_days ? parseInt(req.body.total_duty_days) : (finalDutyDays || (finalGuardsCount * (amounts.daysInPeriod || 30)));
+
+    if (Array.isArray(parsedBillItems) && parsedBillItems.length > 0) {
+      if (parsedBillItems[0].particular) finalParticular = parsedBillItems[0].particular;
+      if (parsedBillItems[0].monthly_rate) finalMonthlyRate = parseFloat(parsedBillItems[0].monthly_rate);
+      if (parsedBillItems[0].rate_per_day) finalRatePerDay = parseFloat(parsedBillItems[0].rate_per_day);
+      if (parsedBillItems[0].hsn_code) finalHsnCode = parsedBillItems[0].hsn_code;
+      finalGuardsCount = parsedBillItems.reduce((s, i) => s + (parseInt(i.guards_count) || 0), 0) || finalGuardsCount;
+      finalTotalDutyDays = parsedBillItems.reduce((s, i) => s + (parseInt(i.total_duty_days) || 0), 0) || finalTotalDutyDays;
+    }
+
     const result = await query(
-      `INSERT INTO invoices (invoice_number, client_id, invoice_date, due_date, billing_period_start, billing_period_end,
-        amount_subtotal, tax_type, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable, total_amount, discount_amount, final_amount, payment_due, notes, is_ad_hoc, duty_days_worked, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
-      [invoice_number, client_id, inv_date, due_date, billing_period_start, billing_period_end,
+      `INSERT INTO invoices (
+        invoice_number, client_id, invoice_date, due_date, billing_period_start, billing_period_end,
+        amount_subtotal, tax_type, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable, total_amount, discount_amount, round_off, final_amount, payment_due, notes, is_ad_hoc, duty_days_worked, created_by,
+        site_name, bank_account_id, particular, rate_per_day, monthly_rate, guards_count, hsn_code, total_duty_days, bill_items
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30) RETURNING *`,
+      [
+        invoice_number, client_id, inv_date, due_date, billing_period_start, billing_period_end,
         amounts.amount_subtotal, tax_type || 'none', amounts.cgst_amount, amounts.sgst_amount, amounts.igst_amount, 
         is_rcm_applicable ? 1 : 0, amounts.total_amount, discount_amount || 0,
-        amounts.final_amount, amounts.final_amount, notes, isAdhocVal, finalDutyDays, req.user.userId]
+        amounts.round_off || 0, amounts.final_amount, amounts.final_amount, finalNotes, isAdhocVal, finalDutyDays, req.user.userId,
+        finalSiteName, finalBankId, finalParticular, finalRatePerDay, finalMonthlyRate, finalGuardsCount, finalHsnCode, finalTotalDutyDays,
+        parsedBillItems ? JSON.stringify(parsedBillItems) : null
+      ]
     );
 
     const createdInvoice = result.rows[0];
@@ -363,7 +512,7 @@ router.post('/:id/payment', validate(schemas.recordPayment), async (req, res) =>
     const total_credit = parseFloat(amount_paid) + parseFloat(tds_deducted);
     const remaining = parseFloat(invoice.final_amount) - parseFloat(invoice.payment_received || 0) - parseFloat(invoice.tds_deducted || 0);
 
-    if (total_credit > remaining + 0.01) {
+    if (total_credit > remaining + 0.50) {
       return res.status(400).json({ success: false, message: `Amount + TDS exceeds remaining balance of ₹${remaining.toFixed(2)}` });
     }
 
@@ -377,11 +526,13 @@ router.post('/:id/payment', validate(schemas.recordPayment), async (req, res) =>
     const newReceived = parseFloat(invoice.payment_received || 0) + parseFloat(amount_paid);
     const newTds = parseFloat(invoice.tds_deducted || 0) + parseFloat(tds_deducted);
     const newDue = parseFloat(invoice.final_amount) - newReceived - newTds;
-    const newStatus = newDue <= 0.01 ? 'paid' : 'partially_paid';
+    const isPaid = newDue <= 0.50;
+    const finalPaymentDue = isPaid ? 0 : Math.max(0, newDue);
+    const newStatus = isPaid ? 'paid' : 'partially_paid';
 
     await query(
       'UPDATE invoices SET payment_received=$1, tds_deducted=$2, payment_due=$3, status=$4, updated_at=CURRENT_TIMESTAMP WHERE id=$5',
-      [newReceived.toFixed(2), newTds.toFixed(2), Math.max(0, newDue).toFixed(2), newStatus, req.params.id]
+      [newReceived.toFixed(2), newTds.toFixed(2), finalPaymentDue.toFixed(2), newStatus, req.params.id]
     );
 
     const updatedInvoice = await query('SELECT i.*, c.name as client_name, c.gst_number as client_gst FROM invoices i JOIN clients c ON i.client_id = c.id WHERE i.id = $1', [req.params.id]);
@@ -481,9 +632,11 @@ router.delete('/:id', async (req, res) => {
 router.get('/:id/pdf', async (req, res) => {
   try {
     const result = await query(
-      `SELECT i.*, c.name, c.address, c.city, c.state, c.postal_code, c.email, c.phone, c.gst_number
+      `SELECT i.*, c.name, c.address, c.city, c.state, c.postal_code, c.email, c.phone, c.gst_number,
+        ba.bank_name, ba.account_name as bank_account_name, ba.account_number as bank_account_number, ba.ifsc_code as bank_ifsc_code
        FROM invoices i
        JOIN clients c ON i.client_id = c.id
+       LEFT JOIN bank_accounts ba ON i.bank_account_id = ba.id
        WHERE i.id = $1`,
       [req.params.id]
     );
@@ -713,30 +866,60 @@ router.post('/event', async (req, res) => {
       total_amount += cgst_amount + sgst_amount + igst_amount;
     }
     total_amount = parseFloat(total_amount.toFixed(2));
+    const roundedFinal = Math.round(total_amount);
+    const roundOff = parseFloat((roundedFinal - total_amount).toFixed(2));
 
     const inv_date = invoice_date || new Date().toISOString().split('T')[0];
     const b_start = billing_period_start || event_date || inv_date;
     const b_end = billing_period_end || event_date || inv_date;
     const dueDays = parseInt(process.env.INVOICE_DUE_DAYS) || 30;
     const due_date = new Date(new Date(inv_date).getTime() + dueDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const invoice_number = await generateInvoiceNumber(inv_date);
+    
+    // Manual Invoice Numbering: do not auto-increment if specified
+    let invoice_number;
+    if (req.body.invoice_number && String(req.body.invoice_number).trim()) {
+      invoice_number = String(req.body.invoice_number).trim().toUpperCase();
+      const existingNo = await query('SELECT id FROM invoices WHERE invoice_number = $1', [invoice_number]);
+      if (existingNo.rows.length > 0) {
+        return res.status(409).json({ success: false, message: `Invoice number ${invoice_number} already exists. Please choose a different number.` });
+      }
+    } else {
+      invoice_number = await generateInvoiceNumber(inv_date);
+    }
+
+    let finalBankId = req.body.bank_account_id ? parseInt(req.body.bank_account_id) : null;
+    if (!finalBankId) {
+      const defaultBank = await query("SELECT id FROM bank_accounts WHERE account_number = '252528112019' OR (account_type = 'bank' AND is_active = 1) ORDER BY (account_number = '252528112019') DESC, id ASC LIMIT 1");
+      if (defaultBank.rows.length > 0) {
+        finalBankId = defaultBank.rows[0].id;
+      }
+    }
+
+    const finalGuards = guards_count ? parseInt(guards_count) : 1;
+    const finalRate = rate_per_guard ? parseFloat(rate_per_guard) : 0;
+    const finalDays = days_worked ? parseInt(days_worked) : 1;
+    const finalSiteName = req.body.site_name || '';
+    const finalParticular = req.body.particular || 'Security Guard';
+    const finalHsn = req.body.hsn_code || '998525';
     
     // Create Invoice (Full payment, is_ad_hoc = 1)
     const result = await query(
       `INSERT INTO invoices (
         invoice_number, client_id, invoice_date, due_date, 
         billing_period_start, billing_period_end, 
-        amount_subtotal, total_amount, final_amount, payment_due,
+        amount_subtotal, total_amount, round_off, final_amount, payment_due,
         tax_type, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable,
-        duty_days_worked, is_ad_hoc, notes, created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1, $17, $18)
+        duty_days_worked, is_ad_hoc, notes, created_by,
+        site_name, bank_account_id, particular, rate_per_day, monthly_rate, guards_count, hsn_code, total_duty_days
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 1, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
       RETURNING *`,
       [
         invoice_number, client_id, inv_date, due_date,
         b_start, b_end,
-        amount_subtotal, total_amount, total_amount, total_amount,
+        amount_subtotal, total_amount, roundOff, roundedFinal, roundedFinal,
         tax_type || 'none', cgst_amount, sgst_amount, igst_amount, is_rcm_applicable ? 1 : 0,
-        days_worked || 1, notes, req.user.userId
+        finalDays, notes, req.user.userId,
+        finalSiteName, finalBankId, finalParticular, finalRate, 0, finalGuards, finalHsn, finalGuards * finalDays
       ]
     );
 
@@ -774,8 +957,27 @@ router.post('/event', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const {
-      amount_subtotal, discount_amount, tax_type, is_rcm_applicable,
-      due_date, notes, duty_days_worked
+      invoice_number: new_invoice_number,
+      invoice_date,
+      billing_period_start,
+      billing_period_end,
+      amount_subtotal,
+      discount_amount,
+      tax_type,
+      is_rcm_applicable,
+      due_date,
+      notes,
+      duty_days_worked,
+      site_name,
+      bank_account_id,
+      particular,
+      rate_per_day,
+      monthly_rate,
+      guards_count,
+      total_duty_days,
+      hsn_code,
+      bill_items,
+      status: new_status
     } = req.body;
 
     const invoiceCheck = await query('SELECT * FROM invoices WHERE id = $1', [req.params.id]);
@@ -784,8 +986,36 @@ router.put('/:id', async (req, res) => {
     }
     const invoice = invoiceCheck.rows[0];
 
-    const sub = parseFloat(amount_subtotal || invoice.amount_subtotal);
-    const disc = parseFloat(discount_amount || invoice.discount_amount || 0);
+    // Process bill_items if provided
+    let parsedBillItems = undefined;
+    if (bill_items !== undefined) {
+      try {
+        parsedBillItems = typeof bill_items === 'string' ? JSON.parse(bill_items) : bill_items;
+      } catch (e) {
+        parsedBillItems = null;
+      }
+    }
+
+    // Check custom invoice number uniqueness if changed
+    let finalInvoiceNumber = invoice.invoice_number;
+    if (new_invoice_number && String(new_invoice_number).trim().toUpperCase() !== invoice.invoice_number) {
+      const trimmedNo = String(new_invoice_number).trim().toUpperCase();
+      const numCheck = await query('SELECT id FROM invoices WHERE invoice_number = $1 AND id != $2', [trimmedNo, req.params.id]);
+      if (numCheck.rows.length > 0) {
+        return res.status(409).json({ success: false, message: `Invoice number ${trimmedNo} already exists on another invoice.` });
+      }
+      finalInvoiceNumber = trimmedNo;
+    }
+
+    let sub = parseFloat(amount_subtotal !== undefined && amount_subtotal !== '' ? amount_subtotal : invoice.amount_subtotal);
+    if (Array.isArray(parsedBillItems) && parsedBillItems.length > 0) {
+      const itemsSum = parsedBillItems.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+      if (itemsSum > 0) {
+        sub = parseFloat(itemsSum.toFixed(2));
+      }
+    }
+
+    const disc = parseFloat(discount_amount !== undefined && discount_amount !== '' ? discount_amount : (invoice.discount_amount || 0));
     const taxType = tax_type || invoice.tax_type;
     
     let cgst_amount = 0, sgst_amount = 0, igst_amount = 0;
@@ -804,40 +1034,112 @@ router.put('/:id', async (req, res) => {
     if (!applyRcm) {
       final_amount += cgst_amount + sgst_amount + igst_amount;
     }
-    final_amount = parseFloat(final_amount.toFixed(2));
     const total_amount = parseFloat((taxable_value + cgst_amount + sgst_amount + igst_amount).toFixed(2));
+    const raw_final = parseFloat(final_amount.toFixed(2));
+    final_amount = Math.round(raw_final);
+    const round_off = parseFloat((final_amount - raw_final).toFixed(2));
     
     // Recalculate payment due
-    const payment_due = parseFloat((final_amount - (invoice.payment_received || 0) - (invoice.tds_deducted || 0)).toFixed(2));
-    let status = invoice.status;
-    if (payment_due <= 0 && status !== 'cancelled') {
-      status = 'paid';
-    } else if (payment_due < final_amount && payment_due > 0 && status !== 'cancelled') {
-      status = 'partially_paid';
+    let status = new_status || invoice.status;
+    let payment_due;
+
+    if (status === 'cancelled') {
+      payment_due = 0;
+    } else {
+      payment_due = parseFloat((final_amount - (invoice.payment_received || 0) - (invoice.tds_deducted || 0)).toFixed(2));
+      if (payment_due <= 0.50) {
+        payment_due = 0;
+        status = 'paid';
+      } else if (payment_due < final_amount && payment_due > 0) {
+        status = 'partially_paid';
+      }
     }
+
+    const finalSiteName = site_name !== undefined ? site_name : (invoice.site_name || '');
+    const finalBankId = bank_account_id !== undefined ? (bank_account_id ? parseInt(bank_account_id) : null) : invoice.bank_account_id;
+    let finalParticular = particular !== undefined ? particular : (invoice.particular || 'Security Guard');
+    let finalRatePerDay = rate_per_day !== undefined ? parseFloat(rate_per_day) : (invoice.rate_per_day || 0);
+    let finalMonthlyRate = monthly_rate !== undefined ? parseFloat(monthly_rate) : (invoice.monthly_rate || 0);
+    let finalGuardsCount = guards_count !== undefined ? parseInt(guards_count) : (invoice.guards_count || 1);
+    let finalTotalDutyDays = total_duty_days !== undefined ? parseInt(total_duty_days) : (invoice.total_duty_days || invoice.duty_days_worked || 0);
+    let finalHsnCode = hsn_code !== undefined ? hsn_code : (invoice.hsn_code || '998525');
+
+    if (Array.isArray(parsedBillItems) && parsedBillItems.length > 0) {
+      if (parsedBillItems[0].particular) finalParticular = parsedBillItems[0].particular;
+      if (parsedBillItems[0].monthly_rate !== undefined) finalMonthlyRate = parseFloat(parsedBillItems[0].monthly_rate) || 0;
+      if (parsedBillItems[0].rate_per_day !== undefined) finalRatePerDay = parseFloat(parsedBillItems[0].rate_per_day) || 0;
+      if (parsedBillItems[0].hsn_code) finalHsnCode = parsedBillItems[0].hsn_code;
+      finalGuardsCount = parsedBillItems.reduce((s, it) => s + (parseInt(it.guards_count) || 0), 0) || finalGuardsCount;
+      finalTotalDutyDays = parsedBillItems.reduce((s, it) => s + (parseInt(it.total_duty_days) || 0), 0) || finalTotalDutyDays;
+    }
+
+    const billItemsToSave = parsedBillItems !== undefined 
+      ? (parsedBillItems ? JSON.stringify(parsedBillItems) : null)
+      : (invoice.bill_items ? (typeof invoice.bill_items === 'string' ? invoice.bill_items : JSON.stringify(invoice.bill_items)) : null);
 
     const result = await query(
       `UPDATE invoices SET 
-        amount_subtotal = $1, discount_amount = $2, total_amount = $3, final_amount = $4,
-        payment_due = $5, tax_type = $6, cgst_amount = $7, sgst_amount = $8, igst_amount = $9,
-        is_rcm_applicable = $10, due_date = $11, notes = $12, duty_days_worked = $13,
-        status = $14, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $15 RETURNING *`,
+        invoice_number = $1, invoice_date = $2, billing_period_start = $3, billing_period_end = $4,
+        amount_subtotal = $5, discount_amount = $6, total_amount = $7, round_off = $8, final_amount = $9,
+        payment_due = $10, tax_type = $11, cgst_amount = $12, sgst_amount = $13, igst_amount = $14,
+        is_rcm_applicable = $15, due_date = $16, notes = $17, duty_days_worked = $18,
+        status = $19, site_name = $20, bank_account_id = $21, particular = $22,
+        rate_per_day = $23, monthly_rate = $24, guards_count = $25, total_duty_days = $26,
+        hsn_code = $27, bill_items = $28, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $29 RETURNING *`,
       [
-        sub, disc, total_amount, final_amount, payment_due,
+        finalInvoiceNumber, invoice_date || invoice.invoice_date,
+        billing_period_start || invoice.billing_period_start, billing_period_end || invoice.billing_period_end,
+        sub, disc, total_amount, round_off, final_amount, Math.max(0, payment_due),
         taxType, cgst_amount, sgst_amount, igst_amount, 
-        is_rcm_applicable === undefined ? invoice.is_rcm_applicable : (is_rcm_applicable ? 1 : 0),
-        due_date || invoice.due_date, notes || invoice.notes, 
+        applyRcm, due_date || invoice.due_date, notes !== undefined ? notes : invoice.notes, 
         duty_days_worked || invoice.duty_days_worked,
-        status, req.params.id
+        status, finalSiteName, finalBankId, finalParticular,
+        finalRatePerDay, finalMonthlyRate, finalGuardsCount, finalTotalDutyDays,
+        finalHsnCode, billItemsToSave, req.params.id
       ]
     );
 
-    res.json({ success: true, message: 'Invoice updated successfully', data: result.rows[0] });
+    const updatedRow = result.rows[0];
+    let resBillItems = [];
+    if (updatedRow.bill_items) {
+      try {
+        resBillItems = typeof updatedRow.bill_items === 'string' ? JSON.parse(updatedRow.bill_items) : updatedRow.bill_items;
+      } catch (e) {
+        resBillItems = [];
+      }
+    }
+
+    res.json({ success: true, message: 'Invoice updated successfully', data: { ...updatedRow, bill_items: Array.isArray(resBillItems) ? resBillItems : [] } });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'invoices' });
     logger.error('Update invoice error:', error);
     res.status(500).json({ success: false, message: 'Failed to update invoice' });
+  }
+});
+
+// POST /api/invoices/:id/cancel (Cancel Bill)
+router.post('/:id/cancel', async (req, res) => {
+  try {
+    const invoiceCheck = await query('SELECT * FROM invoices WHERE id = $1', [req.params.id]);
+    if (invoiceCheck.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Invoice not found' });
+    }
+    const inv = invoiceCheck.rows[0];
+    if (inv.status === 'cancelled') {
+      return res.json({ success: true, message: 'Invoice is already cancelled', data: inv });
+    }
+
+    const result = await query(
+      `UPDATE invoices SET status = 'cancelled', payment_due = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+
+    res.json({ success: true, message: `Invoice ${inv.invoice_number} has been cancelled`, data: result.rows[0] });
+  } catch (error) {
+    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'invoices' });
+    logger.error('Cancel invoice error:', error);
+    res.status(500).json({ success: false, message: 'Failed to cancel invoice' });
   }
 });
 

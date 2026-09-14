@@ -250,7 +250,9 @@ class RecurringInvoiceService {
     if (!recurring.is_rcm_applicable) {
       totalAmount = totalAmount.plus(cgst).plus(sgst).plus(igst);
     }
-    const finalAmount = totalAmount.toDecimalPlaces(2);
+    const rawTotal = parseFloat(totalAmount.toDecimalPlaces(2).toString());
+    const roundedFinal = Math.round(rawTotal);
+    const roundOff = parseFloat((roundedFinal - rawTotal).toFixed(2));
 
     // Generate invoice number
     const invoiceNumber = await this._generateInvoiceNumber(startDate);
@@ -263,9 +265,9 @@ class RecurringInvoiceService {
       `INSERT INTO invoices 
         (client_id, invoice_number, invoice_date, due_date, billing_period_start, billing_period_end,
          amount_subtotal, tax_rate, tax_amount, cgst_amount, sgst_amount, igst_amount,
-         discount_amount, final_amount, payment_due, status, 
+         discount_amount, total_amount, round_off, final_amount, payment_due, status, 
          recurring_invoice_id, is_recurring, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'draft', $16, 1, $17)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'draft', $18, 1, $19)`,
       [
         recurring.client_id,
         invoiceNumber,
@@ -280,8 +282,10 @@ class RecurringInvoiceService {
         parseFloat(sgst.toString()),
         parseFloat(igst.toString()),
         parseFloat(discountDec.toString()),
-        parseFloat(finalAmount.toString()),
-        parseFloat(finalAmount.toString()),
+        rawTotal,
+        roundOff,
+        roundedFinal,
+        roundedFinal,
         id,
         recurring.created_by,
       ]

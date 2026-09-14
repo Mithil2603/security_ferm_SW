@@ -40,6 +40,7 @@ router.get('/', async (req, res) => {
       backupService.getBackupSettings(),
       backupService.getActiveBackupDir()
     ]);
+    const uploadsInfo = backupService.getUploadsInfo();
     const populatedSettings = {
       ...settings,
       backup_destination_path: settings.backup_destination_path || activeDir
@@ -49,7 +50,8 @@ router.get('/', async (req, res) => {
       data: {
         backups,
         settings: populatedSettings,
-        active_path: activeDir
+        active_path: activeDir,
+        uploads_info: uploadsInfo
       }
     });
   } catch (error) {
@@ -228,6 +230,22 @@ router.delete('/:filename', async (req, res) => {
     res.json({ success: true, message: 'Backup file deleted successfully' });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to delete backup' });
+  }
+});
+
+// GET /api/backups/attachments/download - Standalone attachments ZIP download
+router.get('/attachments/download', async (req, res) => {
+  try {
+    const backupInfo = await backupService.createAttachmentsBackup();
+    res.download(backupInfo.path, backupInfo.filename);
+  } catch (error) {
+    logError({
+      error, req,
+      severity: ERROR_SEVERITY.HIGH, category: ERROR_CATEGORY.BACKUP,
+      feature: 'backups-attachments-download',
+      extra: { operation: 'download_attachments' }
+    });
+    res.status(500).json({ success: false, message: 'Failed to generate attachments backup' });
   }
 });
 

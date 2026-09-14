@@ -48,7 +48,7 @@
 | **⭐ Bank Reconciliation** | Match software records against bank statements to verify every rupee |
 
 ### Why These Features Matter
-- **Eliminate Tally/QuickBooks** — No more paying for separate accounting software
+- **Eliminate External Accounting Software** — No more paying for separate accounting software
 - **Loan-Ready Reports** — Generate a Balance Sheet instantly when a bank asks for one
 - **CA-Compliant** — Your Chartered Accountant can audit directly from the software
 - **Fraud Protection** — Bank Reconciliation catches data-entry mistakes and internal fraud

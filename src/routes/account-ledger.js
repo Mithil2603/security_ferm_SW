@@ -6,35 +6,52 @@ const logger = require('../utils/logger');
 const { logError } = require('../utils/errorLogger');
 
 router.use(authMiddleware);
-router.use(requirePermission('manage_invoices', 'manage_expenses', 'view_reports', 'manage_payroll'));
+router.use(requirePermission('manage_invoices', 'manage_expenses', 'view_reports', 'manage_payroll', 'view_vouchers'));
 
 /**
- * Format a Date object or ISO string to standard Indian Tally format: D-MMM-YY
+ * Convert a Date object or date string to YYYY-MM-DD
+ */
+function toDateString(d) {
+  if (!d) return '';
+  if (typeof d === 'string') {
+    const match = d.match(/^\d{4}-\d{2}-\d{2}/);
+    if (match) return match[0];
+  }
+  try {
+    const date = new Date(d);
+    if (isNaN(date.getTime())) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  } catch (_) {
+    return '';
+  }
+}
+
+/**
+ * Format a Date object or ISO string to standard Indian accounting format: D-MMM-YY
  * e.g. 2025-04-03 -> 3-Apr-25
  */
-function formatTallyDate(dateStr) {
-  if (!dateStr) return '';
-  try {
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return String(dateStr);
-    const day = d.getDate();
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const month = months[d.getMonth()];
-    const year = String(d.getFullYear()).slice(-2);
-    return `${day}-${month}-${year}`;
-  } catch (_) {
-    return String(dateStr);
-  }
+function formatAccountingDate(dateVal) {
+  if (!dateVal) return '';
+  const str = toDateString(dateVal);
+  if (!str) return String(dateVal);
+  const [y, m, d] = str.split('-').map(Number);
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const month = months[m - 1] || '';
+  const yearShort = String(y).slice(-2);
+  return `${d}-${month}-${yearShort}`;
 }
 
 /**
  * Determine the Financial Year of a given date (1-Apr to 31-Mar)
  * e.g. 2025-08-27 -> 2025-26
  */
-function getFinancialYear(dateStr) {
-  const d = new Date(dateStr);
-  const year = d.getFullYear();
-  const month = d.getMonth() + 1; // 1-12
+function getFinancialYear(dateVal) {
+  const str = toDateString(dateVal);
+  if (!str) return '2025-26';
+  const [year, month] = str.split('-').map(Number);
   if (month >= 4) {
     const nextYear = String(year + 1).slice(-2);
     return `${year}-${nextYear}`;
@@ -50,8 +67,25 @@ function getFinancialYear(dateStr) {
  */
 router.get('/parties', async (req, res) => {
   try {
+    // Auto-sync any unlinked vendor names from expenses into the vendors table
+    try {
+      const unlinkedVendors = await query(`
+        SELECT DISTINCT TRIM(vendor_name) as vname 
+        FROM expenses 
+        WHERE vendor_name IS NOT NULL AND TRIM(vendor_name) != ''
+      `);
+      for (const row of (unlinkedVendors.rows || [])) {
+        if (row.vname) {
+          const existing = await query(`SELECT id FROM vendors WHERE LOWER(TRIM(name)) = LOWER(TRIM($1))`, [row.vname]);
+          if (existing.rows.length === 0) {
+            await query(`INSERT INTO vendors (name, is_active) VALUES ($1, 1)`, [row.vname]);
+          }
+        }
+      }
+    } catch (_) {}
+
     const [clientsRes, vendorsRes, bankRes] = await Promise.all([
-      query(`SELECT id, name, client_code, phone, email, address, city, state, gst_number, is_active FROM clients ORDER BY name ASC`),
+      query(`SELECT id, name, phone, email, address, city, state, postal_code, gst_number, is_active FROM clients ORDER BY name ASC`),
       query(`SELECT id, name, contact_info, payment_terms_days, is_active FROM vendors ORDER BY name ASC`),
       query(`SELECT id, account_name, account_type, account_number, bank_name, ifsc_code, is_active FROM bank_accounts ORDER BY account_name ASC`)
     ]);
@@ -118,11 +152,11 @@ router.get('/', async (req, res) => {
       party = {
         id: c.id,
         name: c.name,
-        code: c.client_code,
+        code: c.client_code || '',
         address: c.address || '',
         city: c.city || '',
         state: c.state || '',
-        pincode: c.pincode || '',
+        pincode: c.postal_code || c.pincode || '',
         phone: c.phone || '',
         email: c.email || '',
         gst_number: c.gst_number || c.gstin || '',
@@ -193,27 +227,47 @@ router.get('/', async (req, res) => {
       const pmtRes = await query(`
         SELECT 
           p.id, p.payment_date as tx_date, p.amount_paid as amount, 
-          p.payment_method, p.transaction_reference, p.created_at
+          p.payment_method, p.transaction_reference, p.created_at, p.tds_deducted,
+          ba.account_name as bank_acc_name, ba.bank_name as bank_name
         FROM payments p
         JOIN invoices i ON p.invoice_id = i.id
+        LEFT JOIN bank_accounts ba ON i.bank_account_id = ba.id
         WHERE i.client_id = $1
       `, [party_id]);
 
       pmtRes.rows.forEach(pmt => {
-        let bankName = primaryBankName;
+        let bankName = (pmt.bank_name || pmt.bank_acc_name || primaryBankName).toUpperCase();
         if (pmt.payment_method === 'cash') {
           bankName = 'Cash';
         }
-        allTransactions.push({
-          id: `pmt-${pmt.id}`,
-          date: pmt.tx_date,
-          particulars: `By ${bankName}`,
-          vch_type: 'Receipt',
-          vch_no: pmt.transaction_reference || `${pmt.id}`,
-          debit: 0,
-          credit: parseFloat(pmt.amount) || 0,
-          created_at: pmt.created_at || pmt.tx_date
-        });
+        const amt = parseFloat(pmt.amount) || 0;
+        if (amt > 0) {
+          allTransactions.push({
+            id: `pmt-${pmt.id}`,
+            date: pmt.tx_date,
+            particulars: `By ${bankName}`,
+            vch_type: 'Receipt',
+            vch_no: pmt.transaction_reference || `${pmt.id}`,
+            debit: 0,
+            credit: amt,
+            created_at: pmt.created_at || pmt.tx_date
+          });
+        }
+
+        // TDS Deducted Contra Entry (By TDS Receivable)
+        const tdsAmt = parseFloat(pmt.tds_deducted) || 0;
+        if (tdsAmt > 0) {
+          allTransactions.push({
+            id: `pmt-${pmt.id}-tds`,
+            date: pmt.tx_date,
+            particulars: 'By TDS Receivable',
+            vch_type: 'Journal',
+            vch_no: pmt.transaction_reference ? `${pmt.transaction_reference}/TDS` : `TDS-${pmt.id}`,
+            debit: 0,
+            credit: tdsAmt,
+            created_at: pmt.created_at || pmt.tx_date
+          });
+        }
       });
 
       // Vouchers (Direct receipts, credit notes, debit notes, journals)
@@ -255,12 +309,23 @@ router.get('/', async (req, res) => {
             created_at: v.created_at
           });
         } else if (['bank_receipt', 'cash_receipt'].includes(v.voucher_type)) {
-          const bankName = (v.debit_bank || v.debit_acc || 'HDFC BANK').toUpperCase();
+          const bankName = (v.debit_bank || v.debit_acc || primaryBankName).toUpperCase();
           allTransactions.push({
             id: `vch-${v.id}`,
             date: v.tx_date,
             particulars: `By ${bankName}`,
             vch_type: 'Receipt',
+            vch_no: v.voucher_number,
+            debit: 0,
+            credit: amt,
+            created_at: v.created_at
+          });
+        } else if (v.voucher_type === 'journal') {
+          allTransactions.push({
+            id: `vch-${v.id}`,
+            date: v.tx_date,
+            particulars: v.narration ? `By ${v.narration}` : 'By Journal',
+            vch_type: 'Journal',
             vch_no: v.voucher_number,
             debit: 0,
             credit: amt,
@@ -274,17 +339,18 @@ router.get('/', async (req, res) => {
       const expRes = await query(`
         SELECT 
           id, expense_date as tx_date, amount, category, 
-          receipt_number, description, created_at
+          receipt_number, description, created_at, payment_method
         FROM expenses 
-        WHERE vendor_id = $1 AND status != 'rejected'
-      `, [party_id]);
+        WHERE (vendor_id = $1 OR (vendor_id IS NULL AND LOWER(TRIM(vendor_name)) = LOWER(TRIM($2))))
+          AND status != 'rejected'
+      `, [party_id, party.name]);
 
       expRes.rows.forEach(exp => {
-        const categoryName = (exp.category || 'Purchase').toUpperCase();
+        const cat = (exp.category || 'Purchase').toUpperCase().replace(/_/g, ' ');
         allTransactions.push({
           id: `exp-${exp.id}`,
           date: exp.tx_date,
-          particulars: `By ${categoryName} 18%`,
+          particulars: `By ${cat} 18%`,
           vch_type: 'Purchase',
           vch_no: exp.receipt_number || `EXP-${exp.id}`,
           debit: 0,
@@ -319,7 +385,7 @@ router.get('/', async (req, res) => {
         });
       });
 
-      // Vouchers for Vendor (bank_payment, cash_payment, debit_note, credit_note)
+      // Vouchers for Vendor (bank_payment, cash_payment, debit_note, credit_note, journal)
       const vchRes = await query(`
         SELECT 
           v.id, v.voucher_number, v.voucher_date as tx_date, v.voucher_type,
@@ -336,7 +402,7 @@ router.get('/', async (req, res) => {
       vchRes.rows.forEach(v => {
         const amt = parseFloat(v.amount) || 0;
         if (['bank_payment', 'cash_payment'].includes(v.voucher_type)) {
-          const bankName = (v.credit_bank || v.credit_acc || 'HDFC BANK').toUpperCase();
+          const bankName = (v.credit_bank || v.credit_acc || primaryBankName).toUpperCase();
           allTransactions.push({
             id: `vch-${v.id}`,
             date: v.tx_date,
@@ -367,6 +433,17 @@ router.get('/', async (req, res) => {
             vch_no: v.voucher_number,
             debit: 0,
             credit: amt,
+            created_at: v.created_at
+          });
+        } else if (v.voucher_type === 'journal') {
+          allTransactions.push({
+            id: `vch-${v.id}`,
+            date: v.tx_date,
+            particulars: v.narration ? `To ${v.narration}` : 'To Journal',
+            vch_type: 'Journal',
+            vch_no: v.voucher_number,
+            debit: amt,
+            credit: 0,
             created_at: v.created_at
           });
         }
@@ -420,18 +497,18 @@ router.get('/', async (req, res) => {
     let prePeriodCredit = 0;
     const periodTransactions = [];
 
-    const fromDateObj = from_date ? new Date(from_date) : null;
-    const toDateObj = to_date ? new Date(to_date) : null;
+    const fromDateStr = toDateString(from_date);
+    const toDateStr = toDateString(to_date);
 
     allTransactions.forEach(tx => {
-      const txDate = new Date(tx.date);
-      if (fromDateObj && txDate < fromDateObj) {
+      const txDateStr = toDateString(tx.date);
+      if (fromDateStr && txDateStr < fromDateStr) {
         prePeriodDebit += tx.debit;
         prePeriodCredit += tx.credit;
-      } else if (!toDateObj || txDate <= toDateObj) {
+      } else if (!toDateStr || txDateStr <= toDateStr) {
         periodTransactions.push({
           ...tx,
-          date_formatted: formatTallyDate(tx.date)
+          date_formatted: formatAccountingDate(tx.date)
         });
       }
     });
@@ -458,20 +535,61 @@ router.get('/', async (req, res) => {
     let rollingBalance = netPrePeriod;
 
     sortedFys.forEach((fy) => {
-      const rows = fyMap.get(fy) || [];
+      const rawRows = fyMap.get(fy) || [];
       const segOpeningAmt = Math.abs(rollingBalance);
-      const segOpeningSide = rollingBalance >= 0 ? 'debit' : 'credit';
+      
+      // Determine Opening side according to account classification:
+      let segOpeningSide = 'debit';
+      let segOpeningParticulars = 'To Opening Balance';
+
+      if (party_type === 'vendor') {
+        // Creditor: normal balance is Credit (we owe vendor)
+        segOpeningSide = rollingBalance <= 0 ? 'credit' : 'debit';
+        segOpeningParticulars = segOpeningSide === 'credit' ? 'By Opening Balance' : 'To Opening Balance';
+      } else {
+        // Debtor / Bank: normal balance is Debit (customer owes us / positive cash)
+        segOpeningSide = rollingBalance >= 0 ? 'debit' : 'credit';
+        segOpeningParticulars = segOpeningSide === 'debit' ? 'To Opening Balance' : 'By Opening Balance';
+      }
 
       let segDebitTotal = segOpeningSide === 'debit' ? segOpeningAmt : 0;
       let segCreditTotal = segOpeningSide === 'credit' ? segOpeningAmt : 0;
 
-      rows.forEach(r => {
+      // Calculate on-screen progressive running balance for each transaction row
+      let curBalance = (segOpeningSide === 'debit' ? 1 : -1) * segOpeningAmt;
+      if (party_type === 'vendor') {
+        curBalance = (segOpeningSide === 'credit' ? 1 : -1) * segOpeningAmt;
+      }
+
+      const rows = rawRows.map(r => {
         segDebitTotal += r.debit;
         segCreditTotal += r.credit;
+
+        if (party_type === 'vendor') {
+          // Credit increases payable, Debit decreases payable
+          curBalance += (r.credit - r.debit);
+          const runningAmt = Math.abs(curBalance);
+          const runningSide = curBalance >= 0 ? 'Cr' : 'Dr';
+          return {
+            ...r,
+            running_balance: runningAmt,
+            running_balance_side: runningSide
+          };
+        } else {
+          // Client or Bank: Debit increases receivable, Credit decreases receivable
+          curBalance += (r.debit - r.credit);
+          const runningAmt = Math.abs(curBalance);
+          const runningSide = curBalance >= 0 ? 'Dr' : 'Cr';
+          return {
+            ...r,
+            running_balance: runningAmt,
+            running_balance_side: runningSide
+          };
+        }
       });
 
       const segClosingAmt = Math.abs(segDebitTotal - segCreditTotal);
-      // If debit > credit, closing balance is on credit side (By Closing Balance) to balance
+      // If debit > credit, closing entry is on credit side (By Closing Balance) to balance columns
       const segClosingSide = segDebitTotal >= segCreditTotal ? 'credit' : 'debit';
       const segClosingParticulars = segDebitTotal >= segCreditTotal ? 'By Closing Balance' : 'To Closing Balance';
 
@@ -489,7 +607,7 @@ router.get('/', async (req, res) => {
         opening_balance: segOpeningAmt > 0 ? {
           amount: segOpeningAmt,
           side: segOpeningSide,
-          particulars: segOpeningSide === 'debit' ? 'To Opening Balance' : 'By Opening Balance',
+          particulars: segOpeningParticulars,
           date_formatted: fyStart
         } : null,
         rows,
@@ -503,13 +621,21 @@ router.get('/', async (req, res) => {
         equalized_total: equalizedTotal
       });
 
-      // Rolling balance forward for next FY
+      // Rolling balance forward for next FY (net debit - credit)
       rollingBalance = (segDebitTotal >= segCreditTotal ? 1 : -1) * segClosingAmt;
     });
 
     // Period summary
-    const periodFromFormatted = from_date ? formatTallyDate(from_date) : (periodTransactions[0] ? periodTransactions[0].date_formatted : formatTallyDate(new Date()));
-    const periodToFormatted = to_date ? formatTallyDate(to_date) : (periodTransactions[periodTransactions.length - 1] ? periodTransactions[periodTransactions.length - 1].date_formatted : formatTallyDate(new Date()));
+    const periodFromFormatted = from_date ? formatAccountingDate(from_date) : (periodTransactions[0] ? periodTransactions[0].date_formatted : formatAccountingDate(new Date()));
+    const periodToFormatted = to_date ? formatAccountingDate(to_date) : (periodTransactions[periodTransactions.length - 1] ? periodTransactions[periodTransactions.length - 1].date_formatted : formatAccountingDate(new Date()));
+
+    // Determine final balance Dr/Cr side accurately for Party vs Vendor
+    let finalBalSide = 'Dr';
+    if (party_type === 'vendor') {
+      finalBalSide = rollingBalance <= 0 ? 'Cr' : 'Dr';
+    } else {
+      finalBalSide = rollingBalance >= 0 ? 'Dr' : 'Cr';
+    }
 
     res.json({
       success: true,
@@ -526,7 +652,7 @@ router.get('/', async (req, res) => {
         segments,
         total_transactions: periodTransactions.length,
         final_balance: Math.abs(rollingBalance),
-        final_balance_side: rollingBalance >= 0 ? 'Dr' : 'Cr'
+        final_balance_side: finalBalSide
       }
     });
 

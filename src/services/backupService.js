@@ -172,6 +172,13 @@ async function createBackup(customDir = null) {
     archive.on('error', reject);
     archive.pipe(output);
     archive.file(dumpPath, { name: dumpFilename });
+
+    // Bundle all attachments (uploads directory) into the full backup
+    const uploadsDir = path.resolve(process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads'));
+    if (fs.existsSync(uploadsDir)) {
+      archive.directory(uploadsDir, 'uploads');
+    }
+
     archive.finalize();
   });
 
@@ -293,8 +300,91 @@ async function deleteBackup(filename) {
   return false;
 }
 
+/**
+ * Returns info about the uploads directory (path, file count, size)
+ */
+function getUploadsInfo() {
+  const uploadsDir = path.resolve(process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads'));
+  let filesCount = 0;
+  let totalBytes = 0;
+
+  function scanDir(dir) {
+    if (!fs.existsSync(dir)) return;
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          scanDir(full);
+        } else if (entry.isFile()) {
+          filesCount++;
+          try {
+            totalBytes += fs.statSync(full).size;
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  scanDir(uploadsDir);
+
+  return {
+    path: uploadsDir,
+    exists: fs.existsSync(uploadsDir),
+    filesCount,
+    totalBytes,
+    totalFormatted: totalBytes < 1024 * 1024 
+      ? `${(totalBytes / 1024).toFixed(1)} KB` 
+      : `${(totalBytes / (1024 * 1024)).toFixed(1)} MB`
+  };
+}
+
+/**
+ * Creates a standalone ZIP backup of all uploads/attachments.
+ */
+async function createAttachmentsBackup(targetDir = null) {
+  const backupDir = targetDir || await getActiveBackupDir();
+  if (!fs.existsSync(backupDir)) {
+    fs.mkdirSync(backupDir, { recursive: true });
+  }
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filename = `attachments-backup-${timestamp}.zip`;
+  const zipPath = path.join(backupDir, filename);
+
+  const uploadsDir = path.resolve(process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads'));
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+
+  await new Promise((resolve, reject) => {
+    const output = fs.createWriteStream(zipPath);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+
+    output.on('close', () => {
+      logger.info(`✅ Attachments backup created: ${filename} (${archive.pointer()} bytes)`);
+      resolve(zipPath);
+    });
+
+    archive.on('error', reject);
+    archive.pipe(output);
+    archive.directory(uploadsDir, false);
+    archive.finalize();
+  });
+
+  const stats = fs.statSync(zipPath);
+  return {
+    filename,
+    path: zipPath,
+    sizeBytes: stats.size,
+    createdAt: stats.mtime
+  };
+}
+
 module.exports = {
   createBackup,
+  createAttachmentsBackup,
+  getUploadsInfo,
   cleanOldBackups,
   getAvailableBackups,
   getBackupSettings,

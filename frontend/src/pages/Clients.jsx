@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 
-import { Building2, Plus, Search, MapPin, Mail, Phone, Edit2, Trash2, CheckCircle2, XCircle, X, CalendarDays, AlertCircle, FileEdit, FileText, Download, Upload, FileSpreadsheet, Printer, ExternalLink, BookOpen } from 'lucide-react';
+import { Building2, Plus, Search, MapPin, Mail, Phone, Edit2, Trash2, CheckCircle2, XCircle, X, CalendarDays, AlertCircle, FileEdit, FileText, Download, Upload, FileSpreadsheet, Printer, ExternalLink, BookOpen, Shield, Users, Calculator, ArrowLeftRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { format } from 'date-fns';
@@ -12,11 +12,28 @@ import Toast from '../components/Toast';
 import { toast, confirmDialog } from '../context/ToastContext';
 import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
 
+const COMMON_DESIGNATIONS = [
+  'Security Supervisor',
+  'Security Guard',
+  'Security Lady Guard',
+  'Gunman',
+  'Bouncer',
+  'Head Guard',
+  'Security Officer'
+];
+
 const emptyForm = {
   name: '', address: '', city: '', state: 'Gujarat', postal_code: '',
   email: '', phone: '', contact_person: '', gst_number: '',
   client_type: 'regular',
-  monthly_rate: '', contract_start_date: '', contract_end_date: '', notes: '', is_active: true
+  monthly_rate: '', contract_start_date: '', contract_end_date: '', notes: '', is_active: true,
+  employee_count: 1,
+  timeline_unit: 'months',
+  timeline_duration: 1,
+  rate_per_day: '',
+  total_timeline_amount: '',
+  addon_days: '',
+  guard_categories: []
 };
 
 export default function Clients() {
@@ -43,6 +60,212 @@ export default function Clients() {
   const [submitting, setSubmitting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+
+  // Helper to compute end date given start date, unit, and duration
+  const getCalculatedEndDate = (startDate, unit, duration) => {
+    if (!startDate) return '';
+    const s = new Date(startDate + 'T00:00:00');
+    if (isNaN(s.getTime())) return '';
+    const dur = Math.max(1, parseInt(duration) || 1);
+    if (unit === 'months') {
+      s.setMonth(s.getMonth() + dur);
+      s.setDate(s.getDate() - 1);
+    } else {
+      s.setDate(s.getDate() + dur - 1);
+    }
+    return format(s, 'yyyy-MM-dd');
+  };
+
+  // Helper to compute number of days between two dates inclusive
+  const getDaysBetween = (startStr, endStr) => {
+    if (!startStr || !endStr) return 1;
+    const s = new Date(startStr + 'T00:00:00');
+    const e = new Date(endStr + 'T00:00:00');
+    if (isNaN(s.getTime()) || isNaN(e.getTime())) return 1;
+    return Math.max(1, Math.ceil((e - s) / (1000 * 60 * 60 * 24)) + 1);
+  };
+
+  // Live Two-Way Rate Synchronization Handlers
+  const handleRatePerDayChange = (val) => {
+    const guards = Math.max(1, parseInt(formData.employee_count) || 1);
+    const days = getDaysBetween(formData.contract_start_date, formData.contract_end_date);
+    if (val !== '' && !isNaN(parseFloat(val)) && parseFloat(val) > 0) {
+      const r = parseFloat(val);
+      const dailySite = r * guards;
+      const timelineTotal = parseFloat((dailySite * days).toFixed(2));
+      const monthly = parseFloat((dailySite * 30).toFixed(2));
+      setFormData(prev => ({
+        ...prev,
+        rate_per_day: val,
+        total_timeline_amount: timelineTotal,
+        monthly_rate: monthly
+      }));
+    } else {
+      setFormData(prev => ({ ...prev, rate_per_day: val }));
+    }
+  };
+
+  const handleTimelineTotalChange = (val) => {
+    const guards = Math.max(1, parseInt(formData.employee_count) || 1);
+    const days = getDaysBetween(formData.contract_start_date, formData.contract_end_date);
+    if (val !== '' && !isNaN(parseFloat(val)) && parseFloat(val) > 0 && days > 0 && guards > 0) {
+      const tot = parseFloat(val);
+      const dailySite = tot / days;
+      const rateDay = parseFloat((dailySite / guards).toFixed(2));
+      const monthly = parseFloat((dailySite * 30).toFixed(2));
+      setFormData(prev => ({
+        ...prev,
+        total_timeline_amount: val,
+        rate_per_day: rateDay,
+        monthly_rate: monthly
+      }));
+    } else {
+      setFormData(prev => ({ ...prev, total_timeline_amount: val }));
+    }
+  };
+
+  const handleEmployeeCountChange = (val) => {
+    const newGuards = Math.max(1, parseInt(val) || 1);
+    const days = getDaysBetween(formData.contract_start_date, formData.contract_end_date);
+    if (formData.rate_per_day !== '' && parseFloat(formData.rate_per_day) > 0) {
+      const r = parseFloat(formData.rate_per_day);
+      const dailySite = r * newGuards;
+      const timelineTotal = parseFloat((dailySite * days).toFixed(2));
+      const monthly = parseFloat((dailySite * 30).toFixed(2));
+      setFormData(prev => ({
+        ...prev,
+        employee_count: val,
+        total_timeline_amount: timelineTotal,
+        monthly_rate: monthly
+      }));
+    } else if (formData.total_timeline_amount !== '' && parseFloat(formData.total_timeline_amount) > 0) {
+      const tot = parseFloat(formData.total_timeline_amount);
+      const dailySite = tot / days;
+      const rateDay = parseFloat((dailySite / newGuards).toFixed(2));
+      setFormData(prev => ({
+        ...prev,
+        employee_count: val,
+        rate_per_day: rateDay
+      }));
+    } else {
+      setFormData(prev => ({ ...prev, employee_count: val }));
+    }
+  };
+
+  const handleTimelineUnitChange = (newUnit) => {
+    const start = formData.contract_start_date || format(new Date(), 'yyyy-MM-dd');
+    const dur = formData.timeline_duration || 1;
+    const newEnd = getCalculatedEndDate(start, newUnit, dur);
+    const newDays = getDaysBetween(start, newEnd);
+    const guards = Math.max(1, parseInt(formData.employee_count) || 1);
+    if (formData.rate_per_day !== '' && parseFloat(formData.rate_per_day) > 0) {
+      const r = parseFloat(formData.rate_per_day);
+      const dailySite = r * guards;
+      const timelineTotal = parseFloat((dailySite * newDays).toFixed(2));
+      setFormData(prev => ({
+        ...prev,
+        timeline_unit: newUnit,
+        contract_end_date: newEnd,
+        total_timeline_amount: timelineTotal
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        timeline_unit: newUnit,
+        contract_end_date: newEnd
+      }));
+    }
+  };
+
+  const handleTimelineDurationChange = (newDur) => {
+    const start = formData.contract_start_date || format(new Date(), 'yyyy-MM-dd');
+    const unit = formData.timeline_unit || 'months';
+    const newEnd = getCalculatedEndDate(start, unit, newDur);
+    const newDays = getDaysBetween(start, newEnd);
+    const guards = Math.max(1, parseInt(formData.employee_count) || 1);
+    if (formData.rate_per_day !== '' && parseFloat(formData.rate_per_day) > 0) {
+      const r = parseFloat(formData.rate_per_day);
+      const dailySite = r * guards;
+      const timelineTotal = parseFloat((dailySite * newDays).toFixed(2));
+      setFormData(prev => ({
+        ...prev,
+        timeline_duration: newDur,
+        contract_end_date: newEnd,
+        total_timeline_amount: timelineTotal
+      }));
+    } else if (formData.total_timeline_amount !== '' && parseFloat(formData.total_timeline_amount) > 0) {
+      const tot = parseFloat(formData.total_timeline_amount);
+      const dailySite = tot / newDays;
+      const rateDay = parseFloat((dailySite / guards).toFixed(2));
+      setFormData(prev => ({
+        ...prev,
+        timeline_duration: newDur,
+        contract_end_date: newEnd,
+        rate_per_day: rateDay
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        timeline_duration: newDur,
+        contract_end_date: newEnd
+      }));
+    }
+  };
+
+  const handleStartDateChange = (newStart) => {
+    const unit = formData.timeline_unit || 'months';
+    const dur = formData.timeline_duration || 1;
+    const newEnd = getCalculatedEndDate(newStart, unit, dur);
+    const newDays = getDaysBetween(newStart, newEnd);
+    const guards = Math.max(1, parseInt(formData.employee_count) || 1);
+    if (formData.rate_per_day !== '' && parseFloat(formData.rate_per_day) > 0) {
+      const r = parseFloat(formData.rate_per_day);
+      const dailySite = r * guards;
+      const timelineTotal = parseFloat((dailySite * newDays).toFixed(2));
+      setFormData(prev => ({
+        ...prev,
+        contract_start_date: newStart,
+        contract_end_date: newEnd,
+        total_timeline_amount: timelineTotal
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        contract_start_date: newStart,
+        contract_end_date: newEnd
+      }));
+    }
+  };
+
+  const handleEndDateChange = (newEnd) => {
+    const start = formData.contract_start_date;
+    const newDays = getDaysBetween(start, newEnd);
+    const guards = Math.max(1, parseInt(formData.employee_count) || 1);
+    if (formData.rate_per_day !== '' && parseFloat(formData.rate_per_day) > 0) {
+      const r = parseFloat(formData.rate_per_day);
+      const dailySite = r * guards;
+      const timelineTotal = parseFloat((dailySite * newDays).toFixed(2));
+      setFormData(prev => ({
+        ...prev,
+        contract_end_date: newEnd,
+        total_timeline_amount: timelineTotal
+      }));
+    } else if (formData.total_timeline_amount !== '' && parseFloat(formData.total_timeline_amount) > 0) {
+      const tot = parseFloat(formData.total_timeline_amount);
+      const dailySite = tot / newDays;
+      const rateDay = parseFloat((dailySite / guards).toFixed(2));
+      setFormData(prev => ({
+        ...prev,
+        contract_end_date: newEnd,
+        rate_per_day: rateDay
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        contract_end_date: newEnd
+      }));
+    }
+  };
 
   // Debounce search input — only this effect touches debouncedSearch
   useEffect(() => {
@@ -107,15 +330,137 @@ export default function Clients() {
     setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
   };
 
+  const handleCategoryChange = (index, field, value) => {
+    setFormData(prev => {
+      const updated = [...(prev.guard_categories || [])];
+      const row = { ...updated[index], [field]: value };
+      
+      // Auto-compute rate_per_day as monthly_rate / 31 if monthly_rate changed
+      if (field === 'monthly_rate') {
+        const m = parseFloat(value);
+        if (m > 0) {
+          row.rate_per_day = parseFloat((m / 31).toFixed(2));
+        } else {
+          row.rate_per_day = '';
+        }
+      }
+      
+      updated[index] = row;
+      
+      // Auto-aggregate counts and rates
+      const totalGuards = updated.reduce((sum, c) => sum + (parseInt(c.guards_count) || 0), 0) || 1;
+      const totalMonthly = updated.reduce((sum, c) => {
+        const cnt = parseInt(c.guards_count) || 1;
+        const rate = parseFloat(c.monthly_rate) || 0;
+        return sum + (cnt * rate);
+      }, 0);
+
+      const days = getDaysBetween(prev.contract_start_date, prev.contract_end_date);
+      const dailySite = updated.reduce((sum, c) => {
+        const cnt = parseInt(c.guards_count) || 1;
+        const rDay = parseFloat(c.rate_per_day) || (parseFloat(c.monthly_rate) > 0 ? parseFloat(c.monthly_rate) / 31 : 0);
+        return sum + (cnt * rDay);
+      }, 0);
+      const timelineTotal = parseFloat((dailySite * days).toFixed(2));
+      const avgRatePerDay = totalGuards > 0 ? parseFloat((dailySite / totalGuards).toFixed(2)) : 0;
+
+      return {
+        ...prev,
+        guard_categories: updated,
+        employee_count: totalGuards,
+        monthly_rate: totalMonthly > 0 ? totalMonthly : prev.monthly_rate,
+        rate_per_day: avgRatePerDay > 0 ? avgRatePerDay : prev.rate_per_day,
+        total_timeline_amount: timelineTotal > 0 ? timelineTotal : prev.total_timeline_amount
+      };
+    });
+  };
+
+  const handleAddCategory = () => {
+    setFormData(prev => {
+      const current = prev.guard_categories || [];
+      const updated = [
+        ...current,
+        { role: 'Security Guard', guards_count: 1, monthly_rate: '', rate_per_day: '', hsn_code: '998525' }
+      ];
+      const totalGuards = updated.reduce((sum, c) => sum + (parseInt(c.guards_count) || 0), 0) || 1;
+      return {
+        ...prev,
+        guard_categories: updated,
+        employee_count: totalGuards
+      };
+    });
+  };
+
+  const handleRemoveCategory = (index) => {
+    setFormData(prev => {
+      const current = prev.guard_categories || [];
+      if (current.length <= 1) return prev;
+      const updated = current.filter((_, i) => i !== index);
+      const totalGuards = updated.reduce((sum, c) => sum + (parseInt(c.guards_count) || 0), 0) || 1;
+      const totalMonthly = updated.reduce((sum, c) => {
+        const cnt = parseInt(c.guards_count) || 1;
+        const rate = parseFloat(c.monthly_rate) || 0;
+        return sum + (cnt * rate);
+      }, 0);
+      const days = getDaysBetween(prev.contract_start_date, prev.contract_end_date);
+      const dailySite = updated.reduce((sum, c) => {
+        const cnt = parseInt(c.guards_count) || 1;
+        const rDay = parseFloat(c.rate_per_day) || (parseFloat(c.monthly_rate) > 0 ? parseFloat(c.monthly_rate) / 31 : 0);
+        return sum + (cnt * rDay);
+      }, 0);
+      const timelineTotal = parseFloat((dailySite * days).toFixed(2));
+      const avgRatePerDay = totalGuards > 0 ? parseFloat((dailySite / totalGuards).toFixed(2)) : 0;
+
+      return {
+        ...prev,
+        guard_categories: updated,
+        employee_count: totalGuards,
+        monthly_rate: totalMonthly > 0 ? totalMonthly : prev.monthly_rate,
+        rate_per_day: avgRatePerDay > 0 ? avgRatePerDay : prev.rate_per_day,
+        total_timeline_amount: timelineTotal > 0 ? timelineTotal : prev.total_timeline_amount
+      };
+    });
+  };
+
   const openCreateModal = () => {
     setEditingClient(null);
-    setFormData({ ...emptyForm });
+    const today = format(new Date(), 'yyyy-MM-dd');
+    const endDate = getCalculatedEndDate(today, 'months', 1);
+    setFormData({
+      ...emptyForm,
+      contract_start_date: today,
+      contract_end_date: endDate,
+      timeline_unit: 'months',
+      timeline_duration: 1,
+      employee_count: 1,
+      guard_categories: [
+        { role: 'Security Guard', guards_count: 1, monthly_rate: '', rate_per_day: '', hsn_code: '998525' }
+      ]
+    });
     setError('');
     setIsModalOpen(true);
   };
 
   const openEditModal = (client) => {
     setEditingClient(client);
+    let cats = [];
+    if (client.guard_categories) {
+      try {
+        cats = typeof client.guard_categories === 'string' ? JSON.parse(client.guard_categories) : client.guard_categories;
+      } catch (e) {
+        cats = [];
+      }
+    }
+    if (!Array.isArray(cats) || cats.length === 0) {
+      cats = [{
+        role: 'Security Guard',
+        guards_count: client.employee_count || 1,
+        monthly_rate: client.monthly_rate !== null && client.monthly_rate !== undefined ? client.monthly_rate : '',
+        rate_per_day: client.rate_per_day !== null && client.rate_per_day !== undefined ? client.rate_per_day : '',
+        hsn_code: '998525'
+      }];
+    }
+
     setFormData({
       name: client.name || '',
       address: client.address || '',
@@ -132,6 +477,13 @@ export default function Clients() {
       contract_end_date: client.contract_end_date ? client.contract_end_date.substring(0, 10) : '',
       notes: client.notes || '',
       is_active: client.is_active !== undefined ? client.is_active : true,
+      employee_count: client.employee_count || 1,
+      timeline_unit: client.timeline_unit || 'months',
+      timeline_duration: client.timeline_duration || 1,
+      rate_per_day: client.rate_per_day !== null && client.rate_per_day !== undefined ? client.rate_per_day : '',
+      total_timeline_amount: client.total_timeline_amount !== null && client.total_timeline_amount !== undefined ? client.total_timeline_amount : '',
+      addon_days: '',
+      guard_categories: cats
     });
     setError('');
     setIsModalOpen(true);
@@ -152,6 +504,24 @@ export default function Clients() {
     setSubmitting(true);
     try {
       const payload = { ...formData };
+      payload.employee_count = parseInt(payload.employee_count) || 1;
+      payload.timeline_duration = parseInt(payload.timeline_duration) || 1;
+      if (payload.rate_per_day !== '' && !isNaN(parseFloat(payload.rate_per_day))) {
+        payload.rate_per_day = parseFloat(payload.rate_per_day);
+      }
+      if (payload.total_timeline_amount !== '' && !isNaN(parseFloat(payload.total_timeline_amount))) {
+        payload.total_timeline_amount = parseFloat(payload.total_timeline_amount);
+      }
+      if (payload.monthly_rate !== '' && !isNaN(parseFloat(payload.monthly_rate))) {
+        payload.monthly_rate = parseFloat(payload.monthly_rate);
+      }
+      if (payload.addon_days !== '' && !isNaN(parseInt(payload.addon_days))) {
+        payload.addon_days = parseInt(payload.addon_days);
+      }
+      if (Array.isArray(formData.guard_categories) && formData.guard_categories.length > 0) {
+        payload.guard_categories = formData.guard_categories;
+      }
+
       if (payload.client_type === 'event') {
         payload.monthly_rate = parseFloat(payload.monthly_rate) || 0;
         if (!payload.contract_start_date) {
@@ -501,7 +871,38 @@ export default function Clients() {
                         </div>
                       ) : (
                         <>
-                          <div className="font-semibold text-slate-900">₹{parseFloat(client.monthly_rate || 0).toLocaleString('en-IN')}/mo</div>
+                          <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              <Shield className="w-3 h-3 text-indigo-600" />
+                              {client.employee_count || 1} Guard{(client.employee_count || 1) > 1 ? 's' : ''}
+                            </span>
+                            {client.addon_days > 0 && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                +{client.addon_days} add-on days
+                              </span>
+                            )}
+                          </div>
+                          {Array.isArray(client.guard_categories) && client.guard_categories.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mb-1.5">
+                              {client.guard_categories.map((c, idx) => (
+                                <span key={idx} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-700 border border-slate-200">
+                                  {c.role || 'Guard'}: {c.guards_count || 1} {c.monthly_rate ? `(₹${parseFloat(c.monthly_rate).toLocaleString('en-IN')})` : ''}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          <div className="font-bold text-slate-900 text-sm flex items-baseline gap-1">
+                            <span>₹{parseFloat(client.rate_per_day || 0).toLocaleString('en-IN')}<span className="text-[10px] font-normal text-slate-500">/day/guard</span></span>
+                          </div>
+                          <div className="text-xs text-slate-600">
+                            Timeline Total: <span className="font-semibold text-slate-800">₹{parseFloat(client.total_timeline_amount || client.monthly_rate || 0).toLocaleString('en-IN')}</span>
+                            <span className="text-slate-400 text-[11px]"> ({client.timeline_duration || 1} {client.timeline_unit || 'mo'})</span>
+                          </div>
+                          {parseFloat(client.monthly_rate) > 0 && (
+                            <div className="text-[11px] text-slate-400">
+                              Standard: ₹{parseFloat(client.monthly_rate).toLocaleString('en-IN')}/mo
+                            </div>
+                          )}
                           {client.contract_end_date ? (() => {
                             const daysLeft = Math.ceil((new Date(client.contract_end_date + 'T00:00:00') - new Date()) / (1000 * 60 * 60 * 24));
                             const isExpired = daysLeft < 0;
@@ -768,23 +1169,6 @@ export default function Clients() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Monthly Rate (₹) {formData.client_type === 'regular' ? '*' : '(Optional for Event clients)'}
-                  </label>
-                  <input 
-                    required={formData.client_type === 'regular'} 
-                    type="number" 
-                    min="0" 
-                    step="0.01" 
-                    name="monthly_rate" 
-                    value={formData.monthly_rate} 
-                    onChange={handleInputChange} 
-                    placeholder={formData.client_type === 'event' ? '0.00 (Lump-sum per event)' : 'Monthly contract rate'}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent" 
-                  />
-                </div>
-
-                <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Contact Person</label>
                   <input type="text" name="contact_person" value={formData.contact_person} onChange={handleInputChange} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent" />
                 </div>
@@ -804,23 +1188,385 @@ export default function Clients() {
                   <input type="text" name="gst_number" value={formData.gst_number} onChange={handleInputChange} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent" />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Contract Start Date {formData.client_type === 'regular' ? '*' : '(Optional)'}
-                  </label>
-                  <input 
-                    required={formData.client_type === 'regular'} 
-                    type="date" 
-                    name="contract_start_date" 
-                    value={formData.contract_start_date} 
-                    onChange={handleInputChange} 
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent" 
-                  />
-                </div>
+                {/* Guard Deployment & Timeline Section */}
+                <div className="col-span-1 md:col-span-2 border-t border-slate-200 pt-4 mt-2">
+                  {(() => {
+                    const guardsCount = Math.max(1, parseInt(formData.employee_count) || 1);
+                    const daysCount = getDaysBetween(formData.contract_start_date, formData.contract_end_date);
+                    return (
+                      <>
+                        <div className="flex items-center justify-between mb-3">
+                          <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                            <Shield className="w-4 h-4 text-teal-600" />
+                            Guard Deployment & Contract Timeline
+                          </h4>
+                          <span className="text-xs text-slate-500">
+                            {daysCount} Days × {guardsCount} Guards = <strong className="text-slate-800">{daysCount * guardsCount} Guard-Days</strong>
+                          </span>
+                        </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Contract End Date (Optional)</label>
-                  <input type="date" name="contract_end_date" value={formData.contract_end_date} onChange={handleInputChange} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent" />
+                        {/* Guard Categories & Rate Breakdown */}
+                        <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-3 mb-4">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <h5 className="text-xs font-bold text-slate-900 uppercase tracking-wide flex items-center gap-1.5">
+                                <Users className="w-4 h-4 text-teal-600" />
+                                Guard Categories & Rate Breakdown
+                              </h5>
+                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                Add guard designations (Supervisor, Guard, Lady Guard, etc.) with specific counts and monthly rates.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleAddCategory}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-lg transition-colors cursor-pointer"
+                            >
+                              <Plus className="w-3.5 h-3.5" /> Add Category
+                            </button>
+                          </div>
+
+                          <div className="space-y-2.5">
+                            {(formData.guard_categories || []).map((cat, idx) => (
+                              <div key={idx} className="p-3 bg-white rounded-lg border border-slate-200 shadow-2xs grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
+                                <div className="sm:col-span-4">
+                                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                                    Category #{idx + 1} Designation *
+                                  </label>
+                                  <input
+                                    type="text"
+                                    list={`designation-list-${idx}`}
+                                    value={cat.role || ''}
+                                    onChange={(e) => handleCategoryChange(idx, 'role', e.target.value)}
+                                    placeholder="e.g. Security Supervisor"
+                                    className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-md focus:ring-2 focus:ring-teal-500"
+                                  />
+                                  <datalist id={`designation-list-${idx}`}>
+                                    {COMMON_DESIGNATIONS.map(d => <option key={d} value={d} />)}
+                                  </datalist>
+                                </div>
+
+                                <div className="sm:col-span-2">
+                                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                                    Guards *
+                                  </label>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    value={cat.guards_count || ''}
+                                    onChange={(e) => handleCategoryChange(idx, 'guards_count', e.target.value)}
+                                    placeholder="1"
+                                    className="w-full px-2.5 py-1.5 text-xs text-center border border-slate-200 rounded-md focus:ring-2 focus:ring-teal-500 font-bold"
+                                  />
+                                </div>
+
+                                <div className="sm:col-span-2">
+                                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                                    Monthly Rate (₹)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={cat.monthly_rate || ''}
+                                    onChange={(e) => handleCategoryChange(idx, 'monthly_rate', e.target.value)}
+                                    placeholder="e.g. 19500"
+                                    className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-md focus:ring-2 focus:ring-teal-500"
+                                  />
+                                </div>
+
+                                <div className="sm:col-span-2">
+                                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                                    Daily Rate (₹)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={cat.rate_per_day || ''}
+                                    onChange={(e) => handleCategoryChange(idx, 'rate_per_day', e.target.value)}
+                                    placeholder="e.g. 629"
+                                    className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-md focus:ring-2 focus:ring-teal-500"
+                                  />
+                                </div>
+
+                                <div className="sm:col-span-2 flex items-center justify-between sm:justify-end gap-2">
+                                  <div className="text-[11px] font-bold text-teal-800 text-right">
+                                    ₹{(((parseInt(cat.guards_count) || 1) * (parseFloat(cat.monthly_rate) || 0))).toLocaleString('en-IN')}/mo
+                                  </div>
+                                  {(formData.guard_categories || []).length > 1 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveCategory(idx)}
+                                      className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer"
+                                      title="Remove category"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                          {/* Guard Count */}
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1">
+                              Employee Count (Guards) *
+                            </label>
+                            <div className="relative">
+                              <input
+                                type="number"
+                                min="1"
+                                required
+                                name="employee_count"
+                                value={formData.employee_count}
+                                onChange={(e) => handleEmployeeCountChange(e.target.value)}
+                                placeholder="e.g. 2"
+                                className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                              />
+                              <Users className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                            </div>
+                            <span className="text-[11px] text-slate-500 mt-0.5 block">Total guards deployed</span>
+                          </div>
+
+                          {/* Timeline Unit */}
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1">
+                              Timeline Type *
+                            </label>
+                            <div className="flex rounded-lg border border-slate-200 p-0.5 bg-slate-100">
+                              <button
+                                type="button"
+                                onClick={() => handleTimelineUnitChange('months')}
+                                className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                  formData.timeline_unit === 'months'
+                                    ? 'bg-white text-teal-700 shadow-xs border border-slate-200'
+                                    : 'text-slate-600 hover:text-slate-900'
+                                }`}
+                              >
+                                By Months
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleTimelineUnitChange('days')}
+                                className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                  formData.timeline_unit === 'days'
+                                    ? 'bg-white text-teal-700 shadow-xs border border-slate-200'
+                                    : 'text-slate-600 hover:text-slate-900'
+                                }`}
+                              >
+                                By Days
+                              </button>
+                            </div>
+                            <span className="text-[11px] text-slate-500 mt-0.5 block">
+                              {formData.timeline_unit === 'months' ? 'Monthly agreement' : 'Fixed-day contract'}
+                            </span>
+                          </div>
+
+                          {/* Duration */}
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1">
+                              Duration ({formData.timeline_unit === 'months' ? 'Months' : 'Days'}) *
+                            </label>
+                            <input
+                              type="number"
+                              min="1"
+                              required
+                              name="timeline_duration"
+                              value={formData.timeline_duration}
+                              onChange={(e) => handleTimelineDurationChange(e.target.value)}
+                              placeholder={formData.timeline_unit === 'months' ? 'e.g. 1, 2, 6' : 'e.g. 20, 61'}
+                              className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                            />
+                            <span className="text-[11px] text-slate-500 mt-0.5 block">
+                              {formData.timeline_duration || 1} {formData.timeline_unit}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Date Pickers */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1">
+                              Contract Start Date *
+                            </label>
+                            <input
+                              type="date"
+                              required
+                              name="contract_start_date"
+                              value={formData.contract_start_date}
+                              onChange={(e) => handleStartDateChange(e.target.value)}
+                              className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1">
+                              Contract End Date ({daysCount} days)
+                            </label>
+                            <input
+                              type="date"
+                              name="contract_end_date"
+                              value={formData.contract_end_date}
+                              onChange={(e) => handleEndDateChange(e.target.value)}
+                              className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Dual Amount Palettes (Two-Way Live Sync) */}
+                        <div className="bg-gradient-to-br from-slate-50 to-teal-50/40 p-4 rounded-xl border border-teal-200/80 mb-4">
+                          <div className="flex items-center justify-between mb-3 pb-2 border-b border-teal-100">
+                            <div className="flex items-center gap-2">
+                              <Calculator className="w-4 h-4 text-teal-700" />
+                              <span className="text-xs font-bold text-slate-900 uppercase tracking-wide">
+                                Dual Amount Palettes (Live Two-Way Sync)
+                              </span>
+                            </div>
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-teal-700 bg-white px-2 py-0.5 rounded-full border border-teal-200 shadow-2xs">
+                              <ArrowLeftRight className="w-3 h-3 text-teal-600" /> Auto Synchronized
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {/* Palette 1: Per Day Billing */}
+                            <div className="bg-white p-3.5 rounded-lg border border-slate-200 shadow-2xs space-y-2.5">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-bold text-slate-800">Option 1: Per Day Rate</span>
+                                <span className="text-[10px] text-teal-700 font-semibold bg-teal-50 px-1.5 py-0.5 rounded">Per Guard / Day</span>
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-medium text-slate-600 mb-1">Rate per Guard / Day (₹)</label>
+                                <div className="relative">
+                                  <span className="absolute left-3 top-2 text-sm text-slate-400">₹</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="e.g. 500"
+                                    value={formData.rate_per_day}
+                                    onChange={(e) => handleRatePerDayChange(e.target.value)}
+                                    className="w-full pl-7 pr-3 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-teal-500 font-semibold text-slate-900"
+                                  />
+                                </div>
+                              </div>
+                              <div className="pt-2 border-t border-slate-100 text-[11px] space-y-1 text-slate-600">
+                                <div className="flex justify-between">
+                                  <span>Total Daily Site Cost ({guardsCount} Guards):</span>
+                                  <span className="font-bold text-slate-800">
+                                    ₹{((parseFloat(formData.rate_per_day) || 0) * guardsCount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}/day
+                                  </span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>30-Day Monthly Standard:</span>
+                                  <span className="font-medium text-slate-700">
+                                    ₹{parseFloat(formData.monthly_rate || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}/mo
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Palette 2: Complete Timeline Total */}
+                            <div className="bg-white p-3.5 rounded-lg border border-slate-200 shadow-2xs space-y-2.5">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-bold text-slate-800">Option 2: Timeline Total</span>
+                                <span className="text-[10px] text-teal-700 font-semibold bg-teal-50 px-1.5 py-0.5 rounded">For Full Timeline</span>
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-medium text-slate-600 mb-1">Total Timeline Amount (₹)</label>
+                                <div className="relative">
+                                  <span className="absolute left-3 top-2 text-sm text-slate-400">₹</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="e.g. 61000"
+                                    value={formData.total_timeline_amount}
+                                    onChange={(e) => handleTimelineTotalChange(e.target.value)}
+                                    className="w-full pl-7 pr-3 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-teal-500 font-semibold text-slate-900"
+                                  />
+                                </div>
+                              </div>
+                              <div className="pt-2 border-t border-slate-100 text-[11px] space-y-1 text-slate-600">
+                                <div className="flex justify-between">
+                                  <span>Timeline Duration:</span>
+                                  <span className="font-bold text-slate-800">{daysCount} Days ({daysCount * guardsCount} Guard-Days)</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>Effective Rate / Guard / Day:</span>
+                                  <span className="font-medium text-slate-700">
+                                    ₹{parseFloat(formData.rate_per_day || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}/day
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <p className="text-[11px] text-teal-800 mt-2.5 flex items-center gap-1.5">
+                            <span>💡</span>
+                            <span>
+                              Type in <strong>either</strong> palette — typing ₹61,000 for 61 days calculates the daily rate (₹500/day/guard); typing ₹500 calculates the total timeline amount.
+                            </span>
+                          </p>
+                        </div>
+
+                        {/* Edit Client - Add on (days) Extension */}
+                        {editingClient && (
+                          <div className="bg-amber-50/70 p-4 rounded-xl border border-amber-200 mb-4">
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                <Plus className="w-4 h-4 text-amber-700" />
+                                <span className="text-xs font-bold text-amber-900 uppercase tracking-wide">
+                                  Contract Extension — Add on (days)
+                                </span>
+                              </div>
+                              {editingClient.addon_days > 0 && (
+                                <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-200 text-amber-900 rounded-full">
+                                  Previously added: +{editingClient.addon_days} days
+                                </span>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-xs font-medium text-slate-700 mb-1">
+                                  Add on Days (+Days)
+                                </label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  name="addon_days"
+                                  value={formData.addon_days}
+                                  onChange={(e) => setFormData(prev => ({ ...prev, addon_days: e.target.value }))}
+                                  placeholder="e.g. 5, 10"
+                                  className="w-full px-3 py-1.5 text-sm border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500 bg-white"
+                                />
+                                <span className="text-[11px] text-slate-500 mt-0.5 block">Extend contract expiry by extra days</span>
+                              </div>
+                              {parseInt(formData.addon_days) > 0 && (() => {
+                                const addDays = parseInt(formData.addon_days);
+                                const baseEnd = formData.contract_end_date || formData.contract_start_date || format(new Date(), 'yyyy-MM-dd');
+                                const ext = new Date(baseEnd + 'T00:00:00');
+                                ext.setDate(ext.getDate() + addDays);
+                                const extStr = format(ext, 'dd MMM yyyy');
+                                const rDay = parseFloat(formData.rate_per_day) || 0;
+                                const addCost = addDays * guardsCount * rDay;
+                                const newTotal = (parseFloat(formData.total_timeline_amount) || 0) + addCost;
+                                return (
+                                  <div className="p-2.5 bg-white/80 rounded-lg border border-amber-300 text-xs space-y-1 text-slate-700">
+                                    <div>Extended Expiry: <strong className="text-emerald-700">{extStr}</strong> (+{addDays} days)</div>
+                                    <div>Additional Cost: <strong className="text-amber-800">+₹{addCost.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong> ({addDays}d × {guardsCount}g × ₹{rDay})</div>
+                                    <div className="pt-1 border-t border-amber-200">New Timeline Total: <strong className="text-slate-900">₹{newTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong></div>
+                                  </div>
+                                );
+                              })()}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
 
                 {editingClient && (
@@ -938,7 +1684,7 @@ export default function Clients() {
                     </div>
                   </div>
 
-                  {/* Standard 6-Column Tally Ledger Table */}
+                  {/* Standard 6-Column Double-Entry Ledger Table */}
                   <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
                     <table className="w-full text-xs text-left border-collapse">
                       <thead>

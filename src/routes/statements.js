@@ -25,11 +25,11 @@ router.get('/', async (req, res) => {
     }
     if (from_date) {
       conditions.push(`generated_at >= $${paramIdx++}`);
-      params.push(from_date);
+      params.push(`${from_date} 00:00:00`);
     }
     if (to_date) {
-      conditions.push(`generated_at <= $${paramIdx++} || ' 23:59:59'`);
-      params.push(to_date);
+      conditions.push(`generated_at <= $${paramIdx++}`);
+      params.push(`${to_date} 23:59:59`);
     }
     if (party_name) {
       conditions.push(`party_name LIKE $${paramIdx++}`);
@@ -88,8 +88,8 @@ router.get('/export', async (req, res) => {
     let paramIdx = 1;
 
     if (domain) { conditions.push(`domain = $${paramIdx++}`); params.push(domain); }
-    if (from_date) { conditions.push(`generated_at >= $${paramIdx++}`); params.push(from_date); }
-    if (to_date) { conditions.push(`generated_at <= $${paramIdx++} || ' 23:59:59'`); params.push(to_date); }
+    if (from_date) { conditions.push(`generated_at >= $${paramIdx++}`); params.push(`${from_date} 00:00:00`); }
+    if (to_date) { conditions.push(`generated_at <= $${paramIdx++}`); params.push(`${to_date} 23:59:59`); }
     if (party_name) { conditions.push(`party_name LIKE $${paramIdx++}`); params.push(`%${party_name}%`); }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -152,14 +152,149 @@ router.get('/:id', async (req, res) => {
     }
 
     const stmt = result.rows[0];
-    // Parse JSON data
+    let data = {};
     try {
-      stmt.statement_data = JSON.parse(stmt.statement_data);
+      data = typeof stmt.statement_data === 'string' ? JSON.parse(stmt.statement_data) : (stmt.statement_data || {});
     } catch (e) {
-    logError(e, typeof req !== 'undefined' ? req : {}, { feature: 'statements' });
-      // Already an object or invalid JSON — leave as is
+      data = {};
     }
 
+    // Dynamic hydration from source records if core fields are missing
+    if (stmt.domain === 'invoice') {
+      const isPayment = stmt.reference_type === 'payment' || stmt.statement_number?.startsWith('PMT-');
+      if (isPayment) {
+        if (!data.amount_paid || !data.invoice_number) {
+          try {
+            const pmtRes = await query(
+              `SELECT p.*, i.invoice_number, i.final_amount as invoice_total, i.payment_received as total_received,
+                      i.tds_deducted as total_tds, i.payment_due as remaining_due, i.status as invoice_status,
+                      c.name as client_name, c.gst_number as client_gst
+               FROM payments p
+               JOIN invoices i ON p.invoice_id = i.id
+               JOIN clients c ON i.client_id = c.id
+               WHERE p.id = $1 OR i.id = $2 LIMIT 1`,
+              [stmt.reference_id, stmt.reference_id]
+            );
+            if (pmtRes.rows.length > 0) {
+              const p = pmtRes.rows[0];
+              data = {
+                ...p,
+                ...data,
+                invoice_number: data.invoice_number || p.invoice_number,
+                client_name: data.client_name || p.client_name || stmt.party_name,
+                amount_paid: data.amount_paid || p.amount_paid || stmt.total_amount,
+                payment_date: data.payment_date || p.payment_date,
+                payment_method: data.payment_method || p.payment_method,
+                transaction_reference: data.transaction_reference || p.transaction_reference,
+                invoice_total: data.invoice_total || p.invoice_total,
+                status: data.status || p.invoice_status
+              };
+            }
+          } catch (_) {}
+        }
+      } else {
+        // Standard invoice
+        if (!data.final_amount || !data.invoice_number || !data.amount_subtotal) {
+          try {
+            const invRes = await query(
+              `SELECT i.*, c.name as client_name, c.address as client_address, c.city as client_city,
+                      c.state as client_state, c.gst_number as client_gst, c.phone as client_phone, c.email as client_email
+               FROM invoices i
+               JOIN clients c ON i.client_id = c.id
+               WHERE i.id = $1 OR i.invoice_number = $2 LIMIT 1`,
+              [stmt.reference_id, stmt.statement_number]
+            );
+            if (invRes.rows.length > 0) {
+              const inv = invRes.rows[0];
+              data = { ...inv, ...data };
+            }
+          } catch (_) {}
+        }
+      }
+    } else if (stmt.domain === 'payroll') {
+      if (!data.net_salary || !data.employee_name || data.employee_name.includes('undefined')) {
+        try {
+          const payRes = await query(
+            `SELECT p.*, e.full_name as employee_name, e.employee_id as emp_id
+             FROM payroll p
+             JOIN employees e ON p.employee_id = e.id
+             WHERE p.id = $1 LIMIT 1`,
+            [stmt.reference_id]
+          );
+          if (payRes.rows.length > 0) {
+            data = { ...payRes.rows[0], ...data, employee_name: payRes.rows[0].employee_name, emp_id: payRes.rows[0].emp_id };
+          } else {
+            const slipRes = await query(
+              `SELECT s.*, e.full_name as employee_name, e.employee_id as emp_id
+               FROM salary_slips s
+               JOIN employees e ON s.employee_id = e.id
+               WHERE s.id = $1 LIMIT 1`,
+              [stmt.reference_id]
+            );
+            if (slipRes.rows.length > 0) {
+              data = { ...slipRes.rows[0], ...data, employee_name: slipRes.rows[0].employee_name, emp_id: slipRes.rows[0].emp_id };
+            }
+          }
+        } catch (_) {}
+      }
+    } else if (stmt.domain === 'vendor') {
+      if (!data.amount && !data.expense_amount) {
+        try {
+          const expRes = await query(
+            `SELECT e.*, v.name as vendor_name
+             FROM expenses e
+             LEFT JOIN vendors v ON e.vendor_id = v.id
+             WHERE e.id = $1 LIMIT 1`,
+            [stmt.reference_id]
+          );
+          if (expRes.rows.length > 0) {
+            data = { ...expRes.rows[0], ...data };
+          }
+        } catch (_) {}
+      }
+    } else if (stmt.domain === 'gst') {
+      if (!data.taxable_value || !data.invoice_number) {
+        try {
+          const gstInvNum = stmt.statement_number.replace(/^GST-/, '');
+          const gstRes = await query(
+            `SELECT i.*, c.name as client_name, c.gst_number as client_gst
+             FROM invoices i
+             JOIN clients c ON i.client_id = c.id
+             WHERE i.id = $1 OR i.invoice_number = $2 LIMIT 1`,
+            [stmt.reference_id, gstInvNum]
+          );
+          if (gstRes.rows.length > 0) {
+            const i = gstRes.rows[0];
+            data = {
+              invoice_number: i.invoice_number,
+              client_name: i.client_name,
+              client_gst: i.client_gst,
+              taxable_value: i.amount_subtotal,
+              tax_type: i.tax_type,
+              cgst: i.cgst_amount,
+              sgst: i.sgst_amount,
+              igst: i.igst_amount,
+              total: i.final_amount,
+              is_rcm: i.is_rcm_applicable,
+              ...data
+            };
+          }
+        } catch (_) {}
+      }
+    }
+
+    // Top-level fallbacks from stmt columns
+    data.statement_number = data.statement_number || stmt.statement_number;
+    data.party_name = data.party_name || stmt.party_name;
+    data.client_name = data.client_name || stmt.party_name;
+    data.total_amount = data.total_amount !== undefined ? data.total_amount : stmt.total_amount;
+    data.tax_amount = data.tax_amount !== undefined ? data.tax_amount : stmt.tax_amount;
+    data.period_from = data.period_from || stmt.period_from;
+    data.period_to = data.period_to || stmt.period_to;
+    data.billing_period_start = data.billing_period_start || stmt.period_from;
+    data.billing_period_end = data.billing_period_end || stmt.period_to;
+
+    stmt.statement_data = data;
     res.json({ success: true, data: stmt });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'statements' });

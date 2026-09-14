@@ -320,11 +320,11 @@ function App() {
             <Route path="/invoices" element={<ProtectedRoute permission="manage_invoices"><Invoices /></ProtectedRoute>} />
             <Route path="/payroll" element={<ProtectedRoute permission="manage_payroll"><Payroll /></ProtectedRoute>} />
             <Route path="/ledger" element={<ProtectedRoute permission="manage_payroll"><Ledger /></ProtectedRoute>} />
-            <Route path="/account-ledger" element={<ProtectedRoute permission="view_reports"><AccountLedger /></ProtectedRoute>} />
-            <Route path="/party-ledger" element={<Navigate to="/account-ledger" replace />} />
+            <Route path="/account-ledger" element={<ProtectedRoute permission={['view_reports', 'manage_invoices', 'manage_expenses']}><AccountLedger /></ProtectedRoute>} />
+            <Route path="/party-ledger" element={<ProtectedRoute permission={['view_reports', 'manage_invoices']}><AccountLedger defaultType="client" /></ProtectedRoute>} />
             <Route path="/expenses" element={<ProtectedRoute permission="manage_expenses"><Expenses /></ProtectedRoute>} />
             <Route path="/vendor-statements" element={<ProtectedRoute permission="manage_expenses"><VendorStatements /></ProtectedRoute>} />
-            <Route path="/vendor-ledger" element={<Navigate to="/vendor-statements" replace />} />
+            <Route path="/vendor-ledger" element={<ProtectedRoute permission={['view_reports', 'manage_expenses']}><AccountLedger defaultType="vendor" /></ProtectedRoute>} />
             <Route path="/budgets" element={<ProtectedRoute permission="manage_budgets"><Budgets /></ProtectedRoute>} />
             <Route path="/reports" element={<ProtectedRoute permission="view_reports"><Reports /></ProtectedRoute>} />
             <Route path="/tax-reports" element={<ProtectedRoute permission="view_reports"><TaxReports /></ProtectedRoute>} />

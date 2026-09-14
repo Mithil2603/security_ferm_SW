@@ -3,7 +3,8 @@ import {
   UserSquare2, Plus, Search, Edit2, Trash2, CheckCircle2, XCircle, 
   ShieldCheck, X, Upload, FileText, Download, 
   ExternalLink, Eye, Phone, Mail, MapPin, Calendar, CreditCard, Building, User,
-  ArrowUpDown, ArrowUp, ArrowDown
+  ArrowUpDown, ArrowUp, ArrowDown, Camera, Image as ImageIcon, Paperclip, RefreshCw, FileCheck,
+  FolderOpen, Copy, Check, HardDrive
 } from 'lucide-react';
 import api from '../services/api';
 import { getServerBaseUrl, getApiBaseUrl } from '../utils/apiUrl';
@@ -17,6 +18,14 @@ import { toast, confirmDialog } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
 import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
 import { formatAadhar, maskAadhar, maskPan, maskBankAccount } from '../utils/formatters';
+
+const docCategoryMeta = {
+  photo: { label: 'Employee Photo', icon: Camera, color: 'text-purple-600', bg: 'bg-purple-50', border: 'border-purple-200', accept: 'image/jpeg,image/png,image/webp', desc: 'Passport-size photo (JPG, PNG)' },
+  aadhar_card: { label: 'Aadhar Card', icon: ShieldCheck, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-200', accept: '.pdf,image/jpeg,image/png,image/webp', desc: 'Front & Back copy (PDF, Image)' },
+  pan_card: { label: 'PAN Card', icon: CreditCard, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-200', accept: '.pdf,image/jpeg,image/png,image/webp', desc: 'PAN Card copy (PDF, Image)' },
+  bank_details: { label: 'Bank Account Details', icon: Building, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-200', accept: '.pdf,image/jpeg,image/png,image/webp', desc: 'Cancelled Cheque or Passbook (PDF, Image)' },
+  other: { label: 'Other Document', icon: Paperclip, color: 'text-slate-600', bg: 'bg-slate-50', border: 'border-slate-200', accept: '.pdf,image/jpeg,image/png,image/webp', desc: 'Police verification, Experience letter, etc.' }
+};
 
 const formatSafeJoiningDate = (dateVal) => {
   if (!dateVal) return { formatted: '—', tenure: '' };
@@ -76,8 +85,43 @@ export default function Employees() {
   const [salaryStructures, setSalaryStructures] = useState([]);
   const [clientsList, setClientsList] = useState([]);
   const [documents, setDocuments] = useState([]);
-  const [uploadingDoc, setUploadingDoc] = useState(false);
+  const [uploadingDoc, setUploadingDoc] = useState(null);
+  const [stagedDocs, setStagedDocs] = useState({
+    photo: null,
+    aadhar_card: null,
+    pan_card: null,
+    bank_details: null,
+  });
+  const [stagedOtherDocs, setStagedOtherDocs] = useState([]); // [{ id, title, file }]
+  const [newOtherDocTitle, setNewOtherDocTitle] = useState('');
+  const [newOtherDocFile, setNewOtherDocFile] = useState(null);
+  const [docsStoragePath, setDocsStoragePath] = useState('');
+  const [copiedStoragePath, setCopiedStoragePath] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+
+  const handleCopyStoragePath = (customPath) => {
+    const pathToCopy = customPath || docsStoragePath;
+    if (!pathToCopy) return;
+    navigator.clipboard.writeText(pathToCopy);
+    setCopiedStoragePath(true);
+    toast.success('Document storage path copied to clipboard!');
+    setTimeout(() => setCopiedStoragePath(false), 2500);
+  };
+
+  const handleAddOtherDocSlot = () => {
+    setStagedOtherDocs(prev => [
+      ...prev,
+      { id: 'other_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4), title: '', file: null }
+    ]);
+  };
+
+  const handleUpdateOtherDocSlot = (slotId, field, val) => {
+    setStagedOtherDocs(prev => prev.map(slot => slot.id === slotId ? { ...slot, [field]: val } : slot));
+  };
+
+  const handleRemoveOtherDocSlot = (slotId) => {
+    setStagedOtherDocs(prev => prev.filter(slot => slot.id !== slotId));
+  };
 
   const fetchEmployees = async () => {
     try {
@@ -94,12 +138,15 @@ export default function Employees() {
 
   const fetchDropdownData = async () => {
     try {
-      const [ssRes, clRes] = await Promise.all([
+      const [ssRes, clRes, storageRes] = await Promise.all([
         api.get('/employees/meta/salary-structures'),
         api.get('/clients?limit=200'),
+        api.get('/employees/docs/storage-path').catch(() => null)
       ]);
       setSalaryStructures(ssRes.data || []);
       setClientsList(clRes.data || []);
+      const sp = storageRes?.data?.storage_path || storageRes?.storage_path;
+      if (sp) setDocsStoragePath(sp);
     } catch (err) {
       console.error('Failed to fetch dropdown data', err);
     }
@@ -109,6 +156,8 @@ export default function Employees() {
     try {
       const response = await api.get(`/employees/${empId}/docs`);
       setDocuments(response.data || []);
+      const sp = response.storage_path || response.data?.storage_path;
+      if (sp) setDocsStoragePath(sp);
     } catch (err) {
       console.error('Failed to fetch documents', err);
     }
@@ -146,6 +195,16 @@ export default function Employees() {
   const openCreateModal = () => {
     setEditingEmp(null);
     setFormData({ ...emptyForm });
+    setStagedDocs({
+      photo: null,
+      aadhar_card: null,
+      pan_card: null,
+      bank_details: null,
+    });
+    setStagedOtherDocs([]);
+    setNewOtherDocTitle('');
+    setNewOtherDocFile(null);
+    setDocuments([]);
     setError('');
     fetchDropdownData();
     setIsModalOpen(true);
@@ -153,6 +212,15 @@ export default function Employees() {
 
   const openEditModal = (emp) => {
     setEditingEmp(emp);
+    setStagedDocs({
+      photo: null,
+      aadhar_card: null,
+      pan_card: null,
+      bank_details: null,
+    });
+    setStagedOtherDocs([]);
+    setNewOtherDocTitle('');
+    setNewOtherDocFile(null);
     setFormData({
       full_name: emp.full_name || '', phone: emp.phone || '', email: emp.email || '',
       date_of_birth: emp.date_of_birth ? emp.date_of_birth.substring(0, 10) : '',
@@ -229,11 +297,59 @@ export default function Employees() {
         await api.put(`/employees/${editingEmp.id}`, payload);
         toast.success('Employee updated successfully!');
       } else {
-        await api.post('/employees', payload);
+        const createRes = await api.post('/employees', payload);
+        const newEmp = createRes.data;
+
+        // Upload any staged core attachments for the newly registered employee
+        const stagedEntries = Object.entries(stagedDocs).filter(([_, file]) => file !== null);
+        if (stagedEntries.length > 0 && newEmp?.id) {
+          for (const [docType, file] of stagedEntries) {
+            try {
+              const fd = new FormData();
+              fd.append('document', file);
+              fd.append('document_type', docType);
+              await api.post(`/employees/${newEmp.id}/upload-doc`, fd, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+              });
+            } catch (upErr) {
+              console.error(`Failed to upload ${docType}:`, upErr);
+            }
+          }
+        }
+
+        // Upload any staged custom "other" documents
+        if (stagedOtherDocs.length > 0 && newEmp?.id) {
+          for (const item of stagedOtherDocs) {
+            if (item.file) {
+              try {
+                const fd = new FormData();
+                fd.append('document', item.file);
+                fd.append('document_type', 'other');
+                if (item.title && item.title.trim()) {
+                  fd.append('title', item.title.trim());
+                }
+                await api.post(`/employees/${newEmp.id}/upload-doc`, fd, {
+                  headers: { 'Content-Type': 'multipart/form-data' }
+                });
+              } catch (upErr) {
+                console.error(`Failed to upload other doc (${item.title}):`, upErr);
+              }
+            }
+          }
+        }
         toast.success('Employee registered successfully!');
       }
       setIsModalOpen(false);
       setEditingEmp(null);
+      setStagedDocs({
+        photo: null,
+        aadhar_card: null,
+        pan_card: null,
+        bank_details: null,
+      });
+      setStagedOtherDocs([]);
+      setNewOtherDocTitle('');
+      setNewOtherDocFile(null);
       fetchEmployees();
     } catch (err) {
       const msg = err.errors && Array.isArray(err.errors)
@@ -246,31 +362,35 @@ export default function Employees() {
     }
   };
 
-  const handleDocumentUpload = async (e) => {
-    if (!editingEmp) return;
-    const file = e.target.files[0];
-    if (!file) return;
-
-    setUploadingDoc(true);
+  const handleDirectDocUpload = async (docType, file, title = '') => {
+    if (!editingEmp || !file) return;
+    setUploadingDoc(docType === 'other' ? (title || 'other') : docType);
     const formData = new FormData();
     formData.append('document', file);
+    formData.append('document_type', docType);
+    if (title && title.trim()) {
+      formData.append('title', title.trim());
+    }
 
     try {
       await api.post(`/employees/${editingEmp.id}/upload-doc`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
-      toast.success('Document uploaded successfully');
+      toast.success(`${title || docCategoryMeta[docType]?.label || 'Document'} uploaded successfully`);
       fetchDocuments(editingEmp.id);
+      fetchEmployees();
+      setNewOtherDocTitle('');
+      setNewOtherDocFile(null);
     } catch (err) {
-      toast.error(err.message || 'Failed to upload document');
+      toast.error(err.response?.data?.message || err.message || 'Failed to upload document');
     } finally {
-      setUploadingDoc(false);
-      e.target.value = '';
+      setUploadingDoc(null);
     }
   };
 
   const handleDeleteDocument = async (docId, fileName) => {
-    if (!editingEmp) return;
+    const empId = editingEmp?.id || viewingEmp?.id;
+    if (!empId) return;
     const confirmed = await confirmDialog({
       title: 'Delete Document',
       message: `Are you sure you want to delete "${fileName || 'this document'}"?`,
@@ -280,9 +400,10 @@ export default function Employees() {
     if (!confirmed) return;
 
     try {
-      await api.delete(`/employees/${editingEmp.id}/docs/${docId}`);
+      await api.delete(`/employees/${empId}/docs/${docId}`);
       toast.success('Document deleted successfully');
-      fetchDocuments(editingEmp.id);
+      fetchDocuments(empId);
+      fetchEmployees();
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Failed to delete document');
     }
@@ -478,8 +599,17 @@ export default function Employees() {
                         onClick={() => openViewModal(emp)}
                         title="Click to view details"
                       >
-                        <div className="w-10 h-10 rounded-full bg-slate-100 group-hover/emp:bg-teal-100 group-hover/emp:text-teal-700 flex items-center justify-center text-slate-600 font-bold border border-slate-200 transition-colors">
-                          {emp.full_name.charAt(0)}
+                        <div className="w-10 h-10 rounded-full bg-slate-100 group-hover/emp:bg-teal-100 group-hover/emp:text-teal-700 flex items-center justify-center text-slate-600 font-bold border border-slate-200 transition-colors overflow-hidden shrink-0">
+                          {emp.photo_url ? (
+                            <img 
+                              src={`${getServerBaseUrl()}/uploads/docs/${emp.photo_url}`} 
+                              alt={emp.full_name} 
+                              className="w-full h-full object-cover" 
+                              onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                            />
+                          ) : (
+                            emp.full_name.charAt(0)
+                          )}
                         </div>
                         <div>
                           <div className="font-semibold text-slate-900 group-hover/emp:text-teal-600 transition-colors">{emp.full_name}</div>
@@ -789,75 +919,521 @@ export default function Employees() {
                 </div>
               )}
 
-              {/* KYC Documents Section */}
-              {editingEmp && (
-                <div className="mt-6 border-t border-slate-100 pt-6">
-                  <h4 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3 flex items-center justify-between">
-                    <span>KYC & Documents</span>
-                    <label className={`cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${uploadingDoc ? 'bg-slate-100 text-slate-400' : 'bg-teal-50 text-teal-700 hover:bg-teal-100'}`}>
-                      <Upload className="w-3.5 h-3.5" />
-                      {uploadingDoc ? 'Uploading...' : 'Upload Document'}
-                      <input type="file" className="hidden" accept=".pdf,image/*" onChange={handleDocumentUpload} disabled={uploadingDoc} />
-                    </label>
-                  </h4>
-                  
-                  {documents.length === 0 ? (
-                    <div className="text-sm text-slate-500 italic py-3 text-center bg-slate-50 rounded-lg border border-dashed border-slate-200">
-                      No documents uploaded yet.
+              {/* Attachments & KYC Documents Section (Aadhar, PAN, Bank Details, Photo, Other) */}
+              <div className="mt-6 border-t border-slate-200 pt-6">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-800 uppercase tracking-wide flex items-center gap-2">
+                      <Paperclip className="w-4 h-4 text-teal-600" />
+                      Employee Attachments & KYC Documents
+                    </h4>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Upload Aadhar card, PAN card, Bank details document, Employee photo, and other optional files.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Local Drive Storage Location Display */}
+                <div className="mb-4 p-3 bg-slate-50 rounded-xl border border-slate-200/90 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="p-1.5 rounded-lg bg-white text-teal-600 border border-slate-200 shrink-0">
+                      <FolderOpen className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
+                        Local Drive Storage Folder:
+                      </span>
+                      <span className="font-mono text-xs text-slate-800 font-semibold truncate block select-all" title={docsStoragePath || 'c:\\Users\\mithi\\OneDrive\\Documents\\Freelance Project\\security_ferm_SW\\uploads\\docs'}>
+                        {docsStoragePath || 'c:\\Users\\mithi\\OneDrive\\Documents\\Freelance Project\\security_ferm_SW\\uploads\\docs'}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyStoragePath(docsStoragePath || 'c:\\Users\\mithi\\OneDrive\\Documents\\Freelance Project\\security_ferm_SW\\uploads\\docs')}
+                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-teal-700 hover:text-teal-800 bg-white hover:bg-teal-50 px-3 py-1.5 rounded-lg border border-teal-200 transition-colors shadow-2xs shrink-0 cursor-pointer"
+                  >
+                    {copiedStoragePath ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        <span className="text-emerald-700">Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5 text-teal-600" />
+                        <span>Copy Path</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* The 4 core document types */}
+                  {[
+                    { key: 'photo', label: 'Employee Photo', icon: Camera, color: 'text-purple-600', bg: 'bg-purple-50', border: 'border-purple-200', accept: 'image/jpeg,image/png,image/webp', desc: 'Passport size photo (JPG, PNG)' },
+                    { key: 'aadhar_card', label: 'Aadhar Card', icon: ShieldCheck, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-200', accept: '.pdf,image/jpeg,image/png,image/webp', desc: 'Aadhar Card copy (PDF or Image)' },
+                    { key: 'pan_card', label: 'PAN Card', icon: CreditCard, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-200', accept: '.pdf,image/jpeg,image/png,image/webp', desc: 'PAN Card copy (PDF or Image)' },
+                    { key: 'bank_details', label: 'Bank Account Details', icon: Building, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-200', accept: '.pdf,image/jpeg,image/png,image/webp', desc: 'Cancelled Cheque or Passbook (PDF/Image)' },
+                  ].map(({ key, label, icon: CatIcon, color, bg, border, accept, desc }) => {
+                    if (editingEmp) {
+                      // Edit mode: show uploaded document or upload slot
+                      const existingDoc = documents.find(d => d.document_type === key);
+                      const isUploading = uploadingDoc === key;
+
+                      return (
+                        <div key={key} className={`p-4 rounded-xl border ${border} ${bg} flex flex-col justify-between transition-all shadow-xs`}>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2.5">
+                              <div className={`p-2 rounded-lg bg-white ${color} shadow-xs border border-slate-100 shrink-0`}>
+                                <CatIcon className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <span className="text-xs font-bold text-slate-800 block">{label}</span>
+                                <span className="text-[11px] text-slate-500">{desc}</span>
+                              </div>
+                            </div>
+                            {existingDoc && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-200">
+                                <CheckCircle2 className="w-3 h-3" /> Attached
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="mt-3 pt-3 border-t border-slate-200/60 flex items-center justify-between">
+                            {existingDoc ? (
+                              <div className="flex items-center justify-between w-full">
+                                <div 
+                                  className="flex items-center gap-2 truncate cursor-pointer mr-2"
+                                  onClick={() => window.open(`${getServerBaseUrl()}/uploads/docs/${existingDoc.file_path}`, '_blank')}
+                                  title="Click to view file"
+                                >
+                                  {key === 'photo' ? (
+                                    <img 
+                                      src={`${getServerBaseUrl()}/uploads/docs/${existingDoc.file_path}`} 
+                                      alt="Photo" 
+                                      className="w-8 h-8 rounded-full object-cover border border-purple-200 shrink-0" 
+                                    />
+                                  ) : (
+                                    <FileText className="w-4 h-4 text-slate-500 shrink-0" />
+                                  )}
+                                  <span className="text-xs font-medium text-slate-700 hover:text-teal-700 truncate underline decoration-dotted">
+                                    {existingDoc.file_name}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDownloadDocument(existingDoc)}
+                                    className="p-1.5 text-teal-600 hover:text-teal-700 hover:bg-white rounded-lg transition-colors border border-transparent hover:border-teal-200"
+                                    title="Download"
+                                  >
+                                    <Download className="w-3.5 h-3.5" />
+                                  </button>
+                                  <label className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-white rounded-lg transition-colors border border-transparent hover:border-blue-200 cursor-pointer" title="Replace file">
+                                    <RefreshCw className="w-3.5 h-3.5" />
+                                    <input 
+                                      type="file" 
+                                      className="hidden" 
+                                      accept={accept} 
+                                      onChange={(e) => {
+                                        if (e.target.files?.[0]) {
+                                          handleDirectDocUpload(key, e.target.files[0]);
+                                          e.target.value = '';
+                                        }
+                                      }}
+                                    />
+                                  </label>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteDocument(existingDoc.id, existingDoc.file_name)}
+                                    className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-white rounded-lg transition-colors border border-transparent hover:border-rose-200"
+                                    title="Remove document"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <label className={`w-full py-2 px-3 rounded-lg border border-dashed border-slate-300 bg-white hover:bg-slate-50 flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-700 cursor-pointer transition-colors ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                                <Upload className="w-3.5 h-3.5 text-slate-400" />
+                                {isUploading ? 'Uploading...' : `Upload ${label}`}
+                                <input 
+                                  type="file" 
+                                  className="hidden" 
+                                  accept={accept} 
+                                  onChange={(e) => {
+                                    if (e.target.files?.[0]) {
+                                      handleDirectDocUpload(key, e.target.files[0]);
+                                      e.target.value = '';
+                                    }
+                                  }}
+                                />
+                              </label>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    } else {
+                      // Onboarding mode: staged file selection
+                      const stagedFile = stagedDocs[key];
+                      return (
+                        <div key={key} className={`p-4 rounded-xl border ${border} ${bg} flex flex-col justify-between transition-all shadow-xs`}>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2.5">
+                              <div className={`p-2 rounded-lg bg-white ${color} shadow-xs border border-slate-100 shrink-0`}>
+                                <CatIcon className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <span className="text-xs font-bold text-slate-800 block">{label}</span>
+                                <span className="text-[11px] text-slate-500">{desc}</span>
+                              </div>
+                            </div>
+                            {stagedFile && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-100 text-teal-700 border border-teal-200">
+                                <CheckCircle2 className="w-3 h-3" /> Selected
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="mt-3 pt-3 border-t border-slate-200/60">
+                            {stagedFile ? (
+                              <div className="flex items-center justify-between bg-white px-3 py-2 rounded-lg border border-slate-200">
+                                <div className="flex items-center gap-2 truncate mr-2">
+                                  {key === 'photo' && stagedFile.type.startsWith('image/') ? (
+                                    <img 
+                                      src={URL.createObjectURL(stagedFile)} 
+                                      alt="Photo preview" 
+                                      className="w-7 h-7 rounded-full object-cover border border-purple-200 shrink-0" 
+                                    />
+                                  ) : (
+                                    <FileCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                                  )}
+                                  <span className="text-xs font-medium text-slate-800 truncate" title={stagedFile.name}>
+                                    {stagedFile.name}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400 shrink-0">
+                                    ({(stagedFile.size / 1024).toFixed(0)} KB)
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setStagedDocs(prev => ({ ...prev, [key]: null }))}
+                                  className="p-1 text-slate-400 hover:text-rose-600 rounded-md hover:bg-rose-50 transition-colors"
+                                  title="Remove selection"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ) : (
+                              <label className="w-full py-2 px-3 rounded-lg border border-dashed border-slate-300 bg-white hover:bg-slate-50 flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-700 cursor-pointer transition-colors">
+                                <Upload className="w-3.5 h-3.5 text-slate-400" />
+                                Select {label}
+                                <input 
+                                  type="file" 
+                                  className="hidden" 
+                                  accept={accept} 
+                                  onChange={(e) => {
+                                    if (e.target.files?.[0]) {
+                                      const f = e.target.files[0];
+                                      setStagedDocs(prev => ({ ...prev, [key]: f }));
+                                      e.target.value = '';
+                                    }
+                                  }}
+                                />
+                              </label>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    }
+                  })}
+
+                  {/* Other / Additional Documents Card */}
+                  {!editingEmp ? (
+                    <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 flex flex-col justify-between transition-all shadow-xs md:col-span-2">
+                      <div className="flex items-center justify-between gap-2 mb-3">
+                        <div className="flex items-center gap-2">
+                          <div className="p-2 rounded-lg bg-white text-slate-600 shadow-xs border border-slate-100 shrink-0">
+                            <Paperclip className="w-4 h-4 text-teal-600" />
+                          </div>
+                          <div>
+                            <span className="text-xs font-bold text-slate-800 block">
+                              Other Documents & Custom Attachments
+                            </span>
+                            <span className="text-[11px] text-slate-500">
+                              Police verification, Driving license, Agreement, Medical certificate, etc. (PDF or Image)
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleAddOtherDocSlot}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>+ Add Other Document</span>
+                        </button>
+                      </div>
+
+                      {/* Slots list */}
+                      {stagedOtherDocs.length === 0 ? (
+                        <div 
+                          onClick={handleAddOtherDocSlot}
+                          className="py-6 px-4 rounded-xl border border-dashed border-slate-300 bg-white hover:bg-teal-50/40 cursor-pointer flex flex-col items-center justify-center text-center transition-all group"
+                        >
+                          <Paperclip className="w-6 h-6 text-slate-400 group-hover:text-teal-600 mb-1.5 transition-colors" />
+                          <span className="text-xs font-bold text-slate-700 group-hover:text-teal-700">
+                            + Click here to add another document
+                          </span>
+                          <span className="text-[11px] text-slate-400 mt-0.5">
+                            Upload unlimited custom files with your own title (e.g. Police Verification, Driving License)
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {stagedOtherDocs.map((slot, idx) => (
+                            <div key={slot.id} className="p-3 bg-white rounded-xl border border-slate-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                              <div className="flex-1 w-full sm:w-auto">
+                                <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                                  Document Title #{idx + 1}
+                                </label>
+                                <input
+                                  type="text"
+                                  value={slot.title}
+                                  onChange={(e) => handleUpdateOtherDocSlot(slot.id, 'title', e.target.value)}
+                                  placeholder="e.g. Police Verification, Driving License, Agreement..."
+                                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-medium text-slate-800 focus:ring-2 focus:ring-teal-500 focus:outline-none bg-slate-50/50"
+                                />
+                              </div>
+
+                              <div className="flex-1 w-full sm:w-auto">
+                                <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                                  File (PDF or Image)
+                                </label>
+                                {slot.file ? (
+                                  <div className="flex items-center justify-between px-3 py-1.5 bg-slate-50 rounded-lg border border-slate-200">
+                                    <div className="flex items-center gap-2 truncate mr-2">
+                                      <FileCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                                      <span className="text-xs font-medium text-slate-800 truncate" title={slot.file.name}>
+                                        {slot.file.name}
+                                      </span>
+                                      <span className="text-[10px] text-slate-400 shrink-0">
+                                        ({(slot.file.size / 1024).toFixed(0)} KB)
+                                      </span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUpdateOtherDocSlot(slot.id, 'file', null)}
+                                      className="p-1 text-slate-400 hover:text-rose-600 rounded-md hover:bg-rose-50"
+                                      title="Remove file"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <label className="w-full py-1.5 px-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 hover:bg-slate-100 flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-700 cursor-pointer transition-colors">
+                                    <Upload className="w-3.5 h-3.5 text-slate-400" />
+                                    <span>Select File</span>
+                                    <input
+                                      type="file"
+                                      className="hidden"
+                                      accept=".pdf,image/jpeg,image/png,image/webp"
+                                      onChange={(e) => {
+                                        if (e.target.files?.[0]) {
+                                          handleUpdateOtherDocSlot(slot.id, 'file', e.target.files[0]);
+                                          e.target.value = '';
+                                        }
+                                      }}
+                                    />
+                                  </label>
+                                )}
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveOtherDocSlot(slot.id)}
+                                className="sm:mt-5 p-2 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg border border-transparent hover:border-rose-200 transition-colors shrink-0 cursor-pointer"
+                                title="Remove document slot"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          ))}
+
+                          <button
+                            type="button"
+                            onClick={handleAddOtherDocSlot}
+                            className="w-full py-2 rounded-lg border border-dashed border-teal-300 bg-teal-50/50 hover:bg-teal-50 text-teal-700 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>+ Add Another Document</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ) : (
-                    <ul className="space-y-2">
-                      {documents.map(doc => (
-                        <li 
-                          key={doc.id} 
-                          className="flex justify-between items-center p-3 border border-slate-200 rounded-lg bg-white shadow-sm hover:shadow-md hover:border-slate-300 transition-all group"
-                        >
-                          <div 
-                            className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
-                            onClick={() => window.open(`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`, '_blank')}
-                            title="Click anywhere to view document in new window"
-                          >
-                            <div className="p-2 bg-slate-100 group-hover:bg-teal-50 group-hover:text-teal-600 rounded-lg text-slate-500 transition-colors shrink-0">
-                              <FileText className="w-4 h-4" />
-                            </div>
-                            <div className="truncate">
-                              <div className="flex items-center gap-1.5">
-                                <p className="text-sm font-medium text-slate-800 group-hover:text-teal-600 transition-colors truncate">{doc.file_name}</p>
-                                <ExternalLink className="w-3.5 h-3.5 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                              </div>
-                              <p className="text-xs text-slate-400">Uploaded {format(new Date(doc.uploaded_at), 'MMM dd, yyyy')}</p>
-                            </div>
+                    <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/80 shadow-xs md:col-span-2 space-y-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <div className="p-2 rounded-lg bg-white text-teal-600 shadow-xs border border-slate-100 shrink-0">
+                            <Paperclip className="w-4 h-4" />
                           </div>
-                          <div className="flex items-center gap-1 shrink-0 ml-2">
-                            <button 
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDownloadDocument(doc);
-                              }}
-                              className="p-1.5 text-teal-600 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer"
-                              title="Download Document"
-                            >
-                              <Download className="w-4 h-4" />
-                            </button>
+                          <div>
+                            <span className="text-xs font-bold text-slate-800 block">
+                              Other Documents & Custom Attachments
+                            </span>
+                            <span className="text-[11px] text-slate-500">
+                              Upload Police Verification, Driving License, Agreements, or any other documents.
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Form to Upload a New Other Document */}
+                      <div className="p-3.5 bg-white rounded-xl border border-teal-200/70 shadow-xs">
+                        <span className="text-xs font-bold text-teal-800 block mb-2">
+                          + Upload New Custom Document
+                        </span>
+                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+                          <div className="sm:col-span-5">
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                              Document Title
+                            </label>
+                            <input
+                              type="text"
+                              value={newOtherDocTitle}
+                              onChange={(e) => setNewOtherDocTitle(e.target.value)}
+                              placeholder="e.g. Police Verification, Driving License..."
+                              className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-medium text-slate-800 focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-4">
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                              Select File (PDF or Image)
+                            </label>
+                            {newOtherDocFile ? (
+                              <div className="flex items-center justify-between px-2.5 py-1.5 bg-slate-50 rounded-lg border border-slate-200">
+                                <span className="text-xs font-medium text-slate-800 truncate" title={newOtherDocFile.name}>
+                                  {newOtherDocFile.name}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setNewOtherDocFile(null)}
+                                  className="p-0.5 text-slate-400 hover:text-rose-600 rounded"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ) : (
+                              <label className="w-full py-1.5 px-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 hover:bg-slate-100 flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-700 cursor-pointer transition-colors">
+                                <Upload className="w-3.5 h-3.5 text-slate-400" />
+                                <span>Choose File</span>
+                                <input
+                                  type="file"
+                                  className="hidden"
+                                  accept=".pdf,image/jpeg,image/png,image/webp"
+                                  onChange={(e) => {
+                                    if (e.target.files?.[0]) {
+                                      setNewOtherDocFile(e.target.files[0]);
+                                      e.target.value = '';
+                                    }
+                                  }}
+                                />
+                              </label>
+                            )}
+                          </div>
+
+                          <div className="sm:col-span-3">
                             <button
                               type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteDocument(doc.id, doc.file_name);
+                              disabled={!newOtherDocFile || uploadingDoc === 'other' || uploadingDoc === newOtherDocTitle}
+                              onClick={() => {
+                                if (newOtherDocFile) {
+                                  handleDirectDocUpload('other', newOtherDocFile, newOtherDocTitle.trim() || 'Other Document');
+                                }
                               }}
-                              className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                              title="Delete Document"
+                              className="w-full py-2 px-3 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5 cursor-pointer"
                             >
-                              <Trash2 className="w-4 h-4" />
+                              {uploadingDoc === 'other' || (newOtherDocTitle && uploadingDoc === newOtherDocTitle) ? (
+                                <>
+                                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                  <span>Uploading...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Upload className="w-3.5 h-3.5" />
+                                  <span>Upload File</span>
+                                </>
+                              )}
                             </button>
                           </div>
-                        </li>
-                      ))}
-                    </ul>
+                        </div>
+                      </div>
+
+                      {/* List of Existing Other Documents */}
+                      {documents.filter(d => d.document_type === 'other' || !['photo', 'aadhar_card', 'pan_card', 'bank_details'].includes(d.document_type)).length > 0 && (
+                        <div className="space-y-2 pt-2 border-t border-slate-200">
+                          <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                            Attached Documents ({documents.filter(d => d.document_type === 'other' || !['photo', 'aadhar_card', 'pan_card', 'bank_details'].includes(d.document_type)).length})
+                          </span>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {documents
+                              .filter(d => d.document_type === 'other' || !['photo', 'aadhar_card', 'pan_card', 'bank_details'].includes(d.document_type))
+                              .map(doc => (
+                                <div key={doc.id} className="flex items-center justify-between p-2.5 bg-white rounded-xl border border-slate-200 hover:border-teal-200 transition-all shadow-2xs">
+                                  <div 
+                                    className="flex items-center gap-2.5 truncate cursor-pointer mr-2"
+                                    onClick={() => window.open(`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`, '_blank')}
+                                    title="Click to view file"
+                                  >
+                                    <div className="p-1.5 rounded-lg bg-teal-50 text-teal-700 border border-teal-100 shrink-0">
+                                      <Paperclip className="w-3.5 h-3.5" />
+                                    </div>
+                                    <div className="truncate">
+                                      <span className="text-xs font-bold text-slate-800 block truncate">
+                                        {doc.title || 'Additional Document'}
+                                      </span>
+                                      <span className="text-[11px] text-slate-500 hover:text-teal-600 truncate block underline decoration-dotted">
+                                        {doc.file_name}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => window.open(`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`, '_blank')}
+                                      className="p-1.5 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                                      title="View Document"
+                                    >
+                                      <ExternalLink className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDownloadDocument(doc)}
+                                      className="p-1.5 text-teal-600 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer"
+                                      title="Download Document"
+                                    >
+                                      <Download className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteDocument(doc.id, doc.title || doc.file_name)}
+                                      className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                      title="Delete Document"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
+              </div>
 
               <div className="col-span-full mt-6">
                 <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
@@ -902,8 +1478,17 @@ export default function Employees() {
               {/* Profile Card Banner */}
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl bg-gradient-to-r from-teal-50/80 via-slate-50 to-indigo-50/50 border border-teal-100/80">
                 <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 rounded-2xl bg-teal-600 text-white flex items-center justify-center text-2xl font-bold shadow-sm shadow-teal-600/30 shrink-0">
-                    {viewingEmp.full_name?.charAt(0) || 'E'}
+                  <div className="w-14 h-14 rounded-2xl bg-teal-600 text-white flex items-center justify-center text-2xl font-bold shadow-sm shadow-teal-600/30 shrink-0 overflow-hidden border border-teal-200">
+                    {viewingEmp.photo_url ? (
+                      <img 
+                        src={`${getServerBaseUrl()}/uploads/docs/${viewingEmp.photo_url}`} 
+                        alt={viewingEmp.full_name} 
+                        className="w-full h-full object-cover" 
+                        onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                      />
+                    ) : (
+                      viewingEmp.full_name?.charAt(0) || 'E'
+                    )}
                   </div>
                   <div>
                     <h2 className="text-xl font-bold text-slate-900">{viewingEmp.full_name}</h2>
@@ -1117,55 +1702,166 @@ export default function Employees() {
                 </div>
               </div>
 
-              {/* Uploaded Documents */}
+              {/* KYC & Attachments Section */}
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
-                    <FileText className="w-4 h-4 text-teal-600" />
-                    Uploaded Documents ({documents.length})
+                    <Paperclip className="w-4 h-4 text-teal-600" />
+                    KYC Documents & Attachments ({documents.length})
                   </h4>
                 </div>
-                {documents.length === 0 ? (
-                  <div className="text-sm text-slate-500 italic py-4 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                    No documents uploaded for this employee.
+
+                {/* Local Drive Storage Location Banner in View Modal */}
+                <div className="mb-3.5 p-3 bg-slate-50 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="p-1.5 rounded-lg bg-white text-teal-600 border border-slate-200 shrink-0">
+                      <FolderOpen className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                        Local Drive Storage Folder:
+                      </span>
+                      <span className="font-mono text-xs text-slate-800 font-semibold truncate block select-all" title={docsStoragePath || 'c:\\Users\\mithi\\OneDrive\\Documents\\Freelance Project\\security_ferm_SW\\uploads\\docs'}>
+                        {docsStoragePath || 'c:\\Users\\mithi\\OneDrive\\Documents\\Freelance Project\\security_ferm_SW\\uploads\\docs'}
+                      </span>
+                    </div>
                   </div>
-                ) : (
-                  <ul className="space-y-2">
-                    {documents.map(doc => (
-                      <li 
-                        key={doc.id} 
-                        className="flex justify-between items-center p-3 border border-slate-200 rounded-xl bg-white shadow-sm hover:shadow-md hover:border-slate-300 transition-all group"
-                      >
-                        <div 
-                          className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
-                          onClick={() => window.open(`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`, '_blank')}
-                          title="Click to view document in new window"
-                        >
-                          <div className="p-2 bg-slate-100 group-hover:bg-teal-50 group-hover:text-teal-600 rounded-lg text-slate-500 transition-colors shrink-0">
-                            <FileText className="w-4 h-4" />
-                          </div>
-                          <div className="truncate">
-                            <div className="flex items-center gap-1.5">
-                              <p className="text-sm font-medium text-slate-800 group-hover:text-teal-600 transition-colors truncate">{doc.file_name}</p>
-                              <ExternalLink className="w-3.5 h-3.5 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                  <button
+                    type="button"
+                    onClick={() => handleCopyStoragePath(docsStoragePath || 'c:\\Users\\mithi\\OneDrive\\Documents\\Freelance Project\\security_ferm_SW\\uploads\\docs')}
+                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-teal-700 hover:text-teal-800 bg-white hover:bg-teal-50 px-2.5 py-1.5 rounded-lg border border-teal-200 transition-colors shadow-2xs shrink-0 cursor-pointer"
+                  >
+                    {copiedStoragePath ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        <span className="text-emerald-700">Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5 text-teal-600" />
+                        <span>Copy Path</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {[
+                    { key: 'photo', label: 'Employee Photo', icon: Camera, color: 'text-purple-600', bg: 'bg-purple-50/60', border: 'border-purple-200/80' },
+                    { key: 'aadhar_card', label: 'Aadhar Card', icon: ShieldCheck, color: 'text-blue-600', bg: 'bg-blue-50/60', border: 'border-blue-200/80' },
+                    { key: 'pan_card', label: 'PAN Card', icon: CreditCard, color: 'text-amber-600', bg: 'bg-amber-50/60', border: 'border-amber-200/80' },
+                    { key: 'bank_details', label: 'Bank Account Document', icon: Building, color: 'text-emerald-600', bg: 'bg-emerald-50/60', border: 'border-emerald-200/80' },
+                  ].map(({ key, label, icon: CatIcon, color, bg, border }) => {
+                    const doc = documents.find(d => d.document_type === key);
+                    return (
+                      <div key={key} className={`p-3.5 rounded-xl border ${border} ${bg} flex items-center justify-between gap-3`}>
+                        <div className="flex items-center gap-3 min-w-0">
+                          {key === 'photo' && doc ? (
+                            <img 
+                              src={`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`} 
+                              alt="Photo" 
+                              className="w-10 h-10 rounded-lg object-cover border border-purple-200 shrink-0" 
+                            />
+                          ) : (
+                            <div className={`p-2.5 rounded-lg bg-white ${color} shadow-xs border border-slate-100 shrink-0`}>
+                              <CatIcon className="w-4 h-4" />
                             </div>
-                            <p className="text-xs text-slate-400">Uploaded {format(new Date(doc.uploaded_at), 'MMM dd, yyyy')}</p>
+                          )}
+                          <div className="truncate">
+                            <span className="text-xs font-bold text-slate-800 block truncate">{label}</span>
+                            {doc ? (
+                              <span 
+                                className="text-[11px] text-slate-500 truncate block hover:text-teal-700 cursor-pointer underline decoration-dotted" 
+                                onClick={() => window.open(`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`, '_blank')}
+                                title="Click to view file"
+                              >
+                                {doc.file_name}
+                              </span>
+                            ) : (
+                              <span className="text-[11px] text-slate-400 italic">Not uploaded</span>
+                            )}
                           </div>
                         </div>
-                        <button 
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDownloadDocument(doc);
-                          }}
-                          className="p-2 text-teal-600 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer shrink-0 ml-2"
-                          title="Download Document"
-                        >
-                          <Download className="w-4 h-4" />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+
+                        {doc ? (
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => window.open(`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`, '_blank')}
+                              className="p-1.5 text-slate-600 hover:text-teal-700 hover:bg-white rounded-lg transition-colors border border-transparent hover:border-slate-200 cursor-pointer"
+                              title="View Document"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadDocument(doc)}
+                              className="p-1.5 text-teal-600 hover:text-teal-700 hover:bg-white rounded-lg transition-colors border border-transparent hover:border-teal-200 cursor-pointer"
+                              title="Download Document"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] font-semibold text-slate-400 bg-white px-2 py-0.5 rounded border border-slate-200 shrink-0">
+                            Missing
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Additional Other Documents in View Modal */}
+                {documents.filter(d => d.document_type === 'other' || !['photo', 'aadhar_card', 'pan_card', 'bank_details'].includes(d.document_type)).length > 0 && (
+                  <div className="mt-4 space-y-2">
+                    <span className="text-xs font-bold text-slate-600 uppercase tracking-wider block">
+                      Other Attachments
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {documents
+                        .filter(d => d.document_type === 'other' || !['photo', 'aadhar_card', 'pan_card', 'bank_details'].includes(d.document_type))
+                        .map(doc => (
+                          <div key={doc.id} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                            <div 
+                              className="flex items-center gap-2.5 truncate cursor-pointer mr-2"
+                              onClick={() => window.open(`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`, '_blank')}
+                              title="Click to view file"
+                            >
+                              <div className="p-1.5 rounded-lg bg-white text-teal-600 border border-slate-200 shadow-2xs shrink-0">
+                                <Paperclip className="w-3.5 h-3.5" />
+                              </div>
+                              <div className="truncate">
+                                <span className="text-xs font-bold text-slate-800 block truncate">
+                                  {doc.title || 'Additional Document'}
+                                </span>
+                                <span className="text-[11px] text-slate-500 hover:text-teal-600 truncate block underline decoration-dotted">
+                                  {doc.file_name}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => window.open(`${getServerBaseUrl()}/uploads/docs/${doc.file_path}`, '_blank')}
+                                className="p-1.5 text-slate-600 hover:text-teal-700 hover:bg-white rounded-lg transition-colors cursor-pointer"
+                                title="View Document"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadDocument(doc)}
+                                className="p-1.5 text-teal-600 hover:text-teal-700 hover:bg-white rounded-lg transition-colors cursor-pointer"
+                                title="Download"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
                 )}
               </div>
             </div>

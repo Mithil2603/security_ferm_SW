@@ -137,6 +137,11 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET /api/employees/docs/storage-path
+router.get('/docs/storage-path', (req, res) => {
+  res.json({ success: true, storage_path: uploadDir });
+});
+
 // GET /api/employees/:id
 router.get('/:id', async (req, res) => {
   try {
@@ -507,10 +512,48 @@ router.post('/:id/upload-doc', upload.single('document'), async (req, res) => {
       return res.status(400).json({ success: false, message: 'No file uploaded' });
     }
 
+    const docType = req.body.document_type || req.body.doc_type || 'other';
+    const validDocTypes = ['photo', 'aadhar_card', 'pan_card', 'bank_details', 'other'];
+    const finalDocType = validDocTypes.includes(docType) ? docType : 'other';
+
+    // If single-instance document type, clean up old file and records
+    if (['photo', 'aadhar_card', 'pan_card', 'bank_details'].includes(finalDocType)) {
+      const oldDocs = await query(
+        'SELECT id, file_path FROM employee_documents WHERE employee_id = $1 AND document_type = $2',
+        [req.params.id, finalDocType]
+      );
+      for (const oldDoc of oldDocs.rows) {
+        if (oldDoc.file_path) {
+          const oldFile = path.join(uploadDir, oldDoc.file_path);
+          if (fs.existsSync(oldFile)) {
+            try { fs.unlinkSync(oldFile); } catch (_) {}
+          }
+        }
+      }
+      if (oldDocs.rows.length > 0) {
+        await query(
+          'DELETE FROM employee_documents WHERE employee_id = $1 AND document_type = $2',
+          [req.params.id, finalDocType]
+        );
+      }
+    }
+
+    const docTitle = req.body.title || req.body.document_title || null;
+    const fileSize = req.file.size || null;
+    const mimeType = req.file.mimetype || null;
+
     const result = await query(
-      'INSERT INTO employee_documents (employee_id, file_name, file_path) VALUES ($1, $2, $3) RETURNING *',
-      [req.params.id, req.file.originalname, req.file.filename]
+      `INSERT INTO employee_documents (employee_id, file_name, file_path, document_type, title, file_size, mime_type) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [req.params.id, req.file.originalname, req.file.filename, finalDocType, docTitle, fileSize, mimeType]
     );
+
+    // If doc_type is photo, update photo_url on employees table
+    if (finalDocType === 'photo') {
+      await query('UPDATE employees SET photo_url = $1 WHERE id = $2', [req.file.filename, req.params.id]);
+    }
+
+    await logAudit(req, 'employees', req.params.id, 'update', `Uploaded ${finalDocType} document: ${req.file.originalname}`);
 
     res.json({ success: true, message: 'Document uploaded successfully', data: result.rows[0] });
   } catch (error) {
@@ -524,10 +567,19 @@ router.post('/:id/upload-doc', upload.single('document'), async (req, res) => {
 router.get('/:id/docs', async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, file_name, file_path, uploaded_at FROM employee_documents WHERE employee_id = $1 ORDER BY uploaded_at DESC',
+      `SELECT id, employee_id, file_name, file_path, document_type, title, file_size, mime_type, uploaded_at 
+       FROM employee_documents WHERE employee_id = $1 
+       ORDER BY 
+         CASE document_type 
+           WHEN 'photo' THEN 1 
+           WHEN 'aadhar_card' THEN 2 
+           WHEN 'pan_card' THEN 3 
+           WHEN 'bank_details' THEN 4 
+           ELSE 5 
+         END, uploaded_at DESC`,
       [req.params.id]
     );
-    res.json({ success: true, data: result.rows });
+    res.json({ success: true, data: result.rows, storage_path: uploadDir });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
     res.status(500).json({ success: false, message: 'Failed to fetch documents' });
@@ -539,7 +591,7 @@ router.delete('/:id/docs/:docId', async (req, res) => {
   try {
     const { id, docId } = req.params;
     const docRes = await query(
-      'SELECT file_path FROM employee_documents WHERE id = $1 AND employee_id = $2',
+      'SELECT file_path, document_type FROM employee_documents WHERE id = $1 AND employee_id = $2',
       [docId, id]
     );
 
@@ -547,19 +599,26 @@ router.delete('/:id/docs/:docId', async (req, res) => {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
 
-    const filePath = docRes.rows[0].file_path;
+    const { file_path: filePath, document_type: docType } = docRes.rows[0];
     await query(
       'DELETE FROM employee_documents WHERE id = $1 AND employee_id = $2',
       [docId, id]
     );
 
+    // If this was the employee photo, clear photo_url
+    if (docType === 'photo') {
+      await query('UPDATE employees SET photo_url = NULL WHERE id = $1', [id]);
+    }
+
     // Delete file from disk if exists
     if (filePath) {
-      const fullPath = path.join(baseUploadPath, 'docs', filePath);
+      const fullPath = path.join(uploadDir, filePath);
       if (fs.existsSync(fullPath)) {
         try { fs.unlinkSync(fullPath); } catch (_) {}
       }
     }
+
+    await logAudit(req, 'employees', id, 'delete', `Deleted document ID ${docId} (${docType})`);
 
     res.json({ success: true, message: 'Document deleted successfully' });
   } catch (error) {

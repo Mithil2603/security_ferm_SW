@@ -133,8 +133,8 @@ export default function VendorStatements() {
     <div className="space-y-6 animate-fade-in">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 print:hidden">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Vendor Ledger</h1>
-          <p className="text-sm text-slate-500 mt-1">View expense statements and payment history for your vendors.</p>
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Vendor Statements (Expense Summary)</h1>
+          <p className="text-sm text-slate-500 mt-1">View invoice-level expense breakdowns and payment receipts for vendors.</p>
         </div>
         <div className="flex items-center gap-3 w-full sm:w-auto">
           <div className="relative flex-1 sm:w-64">
@@ -151,13 +151,12 @@ export default function VendorStatements() {
             </select>
           </div>
           <button
-            onClick={() => navigate(`/account-ledger?type=vendor&id=${selectedVendorId}`)}
-            disabled={!selectedVendorId}
-            className="flex items-center gap-2 px-3.5 py-2 bg-teal-50 border border-teal-200 text-teal-700 rounded-xl hover:bg-teal-100 transition-colors shadow-xs disabled:opacity-50 font-medium text-sm cursor-pointer"
-            title="View Tally-standard Double-Entry Ledger"
+            onClick={() => navigate(`/vendor-ledger?id=${selectedVendorId || ''}`)}
+            className="flex items-center gap-2 px-3.5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl transition-colors shadow-xs font-semibold text-sm cursor-pointer"
+            title="View Official Double-Entry Ledger"
           >
             <BookOpen className="w-4 h-4" />
-            <span className="hidden sm:inline">Formal Ledger</span>
+            <span className="hidden sm:inline">Vendor Ledger</span>
           </button>
           <button
             onClick={handlePrint}

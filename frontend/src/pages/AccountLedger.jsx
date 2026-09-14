@@ -3,21 +3,26 @@ import { useSearchParams } from 'react-router-dom';
 import { 
   BookOpen, Printer, Download, Search, Building2, 
   Calendar, RefreshCw, Landmark, Users, Truck, 
-  ChevronDown, FileText, CheckCircle2, ArrowRight
+  ChevronDown, FileText, CheckCircle2, ArrowRight,
+  Eye, Check, ShieldCheck
 } from 'lucide-react';
 import api from '../services/api';
 import { format } from 'date-fns';
 import * as XLSX from 'xlsx';
 import { toast } from '../context/ToastContext';
 
-export default function AccountLedger() {
+export default function AccountLedger({ defaultType }) {
   const [parties, setParties] = useState({ clients: [], vendors: [], bank_accounts: [] });
   const [loadingParties, setLoadingParties] = useState(true);
   
+  const [searchParams, setSearchParams] = useSearchParams();
+
   // Selection
-  const [partyType, setPartyType] = useState('client'); // 'client' | 'vendor' | 'bank_account'
-  const [selectedPartyId, setSelectedPartyId] = useState('');
+  const initialType = searchParams.get('type') || defaultType || 'client';
+  const [partyType, setPartyType] = useState(initialType); // 'client' | 'vendor' | 'bank_account'
+  const [selectedPartyId, setSelectedPartyId] = useState(searchParams.get('id') || '');
   const [searchTerm, setSearchTerm] = useState('');
+  const [showRunningBalance, setShowRunningBalance] = useState(true);
   
   // Dates: default to current Indian Financial Year (1-Apr to 31-Mar)
   const getCurrentFYDates = () => {
@@ -32,7 +37,6 @@ export default function AccountLedger() {
     };
   };
 
-  const [searchParams] = useSearchParams();
   const [dateRange, setDateRange] = useState(() => {
     const qFrom = searchParams.get('from');
     const qTo = searchParams.get('to');
@@ -54,8 +58,8 @@ export default function AccountLedger() {
       const partyData = res?.data?.clients ? res.data : (res?.clients ? res : res?.data);
       if (partyData) {
         setParties(partyData);
-        const qType = searchParams.get('type') || 'client';
-        const qId = searchParams.get('id') || '';
+        const qType = searchParams.get('type') || defaultType || partyType || 'client';
+        const qId = searchParams.get('id') || selectedPartyId || '';
 
         setPartyType(qType);
 
@@ -74,16 +78,41 @@ export default function AccountLedger() {
     }
   };
 
-  // Switch party type
+  // React to URL query params or defaultType prop changes
+  useEffect(() => {
+    const qType = searchParams.get('type') || defaultType;
+    const qId = searchParams.get('id');
+
+    if (qType && ['client', 'vendor', 'bank_account'].includes(qType) && qType !== partyType) {
+      setPartyType(qType);
+      const list = qType === 'vendor' ? parties.vendors : (qType === 'bank_account' ? parties.bank_accounts : parties.clients);
+      if (qId && list && list.some(p => String(p.id) === String(qId))) {
+        setSelectedPartyId(Number(qId) || qId);
+      } else if (list && list.length > 0) {
+        setSelectedPartyId(list[0].id);
+      }
+    } else if (qId && String(qId) !== String(selectedPartyId)) {
+      setSelectedPartyId(Number(qId) || qId);
+    }
+  }, [searchParams, defaultType, parties]);
+
+  // Switch party type tab
   const handleTypeChange = (newType) => {
     setPartyType(newType);
     setSearchTerm('');
     const list = newType === 'client' ? parties.clients : (newType === 'vendor' ? parties.vendors : parties.bank_accounts);
     if (list && list.length > 0) {
       setSelectedPartyId(list[0].id);
+      setSearchParams({ type: newType, id: list[0].id });
     } else {
       setSelectedPartyId('');
+      setSearchParams({ type: newType });
     }
+  };
+
+  const handleSelectParty = (id) => {
+    setSelectedPartyId(id);
+    setSearchParams({ type: partyType, id });
   };
 
   // Fetch Ledger Statement
@@ -154,7 +183,7 @@ export default function AccountLedger() {
     window.print();
   };
 
-  // Excel Export Handler
+  // Excel Export Handler (Including Running Balance)
   const handleExportExcel = () => {
     if (!ledgerData || !ledgerData.segments) {
       toast.error('No ledger data available to export');
@@ -162,66 +191,87 @@ export default function AccountLedger() {
     }
 
     const rows = [];
-    // Header
+    // Company Header
     rows.push([ledgerData.agency?.name || 'KHETLAJI INDUSTRIES']);
     rows.push([ledgerData.agency?.address || '']);
     rows.push([ledgerData.agency?.email ? `E-Mail: ${ledgerData.agency.email}` : '']);
     rows.push([]);
     rows.push([ledgerData.party?.name || 'Party Name']);
-    rows.push(['Ledger Account']);
-    rows.push([ledgerData.party?.address || '']);
+    rows.push([`Ledger Account — ${ledgerData.party?.account_type || (partyType === 'client' ? 'Sundry Debtors' : 'Sundry Creditors')}`]);
+    if (ledgerData.party?.address) rows.push([ledgerData.party.address]);
+    if (ledgerData.party?.gst_number) rows.push([`GSTIN: ${ledgerData.party.gst_number}`]);
     rows.push([`Period: ${ledgerData.period?.display || ''}`]);
     rows.push([]);
 
     // Table Header
-    rows.push(['Date', 'Particulars', 'Vch Type', 'Vch No.', 'Debit', 'Credit']);
+    if (showRunningBalance) {
+      rows.push(['Date', 'Particulars', 'Vch Type', 'Vch No.', 'Debit', 'Credit', 'Balance']);
+    } else {
+      rows.push(['Date', 'Particulars', 'Vch Type', 'Vch No.', 'Debit', 'Credit']);
+    }
 
     ledgerData.segments.forEach(seg => {
       if (seg.opening_balance) {
-        rows.push([
+        const opRow = [
           seg.opening_balance.date_formatted,
           seg.opening_balance.particulars,
           '',
           '',
           seg.opening_balance.side === 'debit' ? seg.opening_balance.amount : '',
           seg.opening_balance.side === 'credit' ? seg.opening_balance.amount : ''
-        ]);
+        ];
+        if (showRunningBalance) {
+          opRow.push(`${seg.opening_balance.amount} ${seg.opening_balance.side === 'debit' ? 'Dr' : 'Cr'}`);
+        }
+        rows.push(opRow);
       }
 
       seg.rows.forEach(r => {
-        rows.push([
+        const txRow = [
           r.date_formatted,
           r.particulars,
           r.vch_type,
           r.vch_no,
           r.debit > 0 ? r.debit : '',
           r.credit > 0 ? r.credit : ''
-        ]);
+        ];
+        if (showRunningBalance) {
+          txRow.push(`${r.running_balance} ${r.running_balance_side}`);
+        }
+        rows.push(txRow);
       });
 
       // Subtotals
-      rows.push(['', '', '', 'Subtotal', seg.subtotal_debit, seg.subtotal_credit]);
+      const subRow = ['', '', '', 'Subtotal', seg.subtotal_debit, seg.subtotal_credit];
+      if (showRunningBalance) subRow.push('');
+      rows.push(subRow);
 
       // Closing Balance
       if (seg.closing_balance) {
-        rows.push([
+        const clRow = [
           '',
           seg.closing_balance.particulars,
           '',
           '',
           seg.closing_balance.side === 'debit' ? seg.closing_balance.amount : '',
           seg.closing_balance.side === 'credit' ? seg.closing_balance.amount : ''
-        ]);
+        ];
+        if (showRunningBalance) {
+          clRow.push(`${seg.closing_balance.amount} ${seg.closing_balance.side === 'debit' ? 'Dr' : 'Cr'}`);
+        }
+        rows.push(clRow);
       }
 
       // Equalized Totals
-      rows.push(['', '', '', 'Total', seg.equalized_total, seg.equalized_total]);
+      const totRow = ['', '', '', 'Total', seg.equalized_total, seg.equalized_total];
+      if (showRunningBalance) totRow.push('');
+      rows.push(totRow);
       rows.push([]);
     });
 
     const ws = XLSX.utils.aoa_to_sheet(rows);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Ledger');
+    XLSX.utils.book_append_sheet(wb, ws, 'Account_Ledger');
     const safeName = (ledgerData.party?.name || 'Account').replace(/[^a-zA-Z0-9]/g, '_');
     XLSX.writeFile(wb, `Ledger_${safeName}_${ledgerData.period?.from_formatted || ''}_to_${ledgerData.period?.to_formatted || ''}.xlsx`);
     toast.success('Ledger exported to Excel');
@@ -232,6 +282,23 @@ export default function AccountLedger() {
     return Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
+  // Dynamic Headings & Subtitles
+  const getPageTitle = () => {
+    if (partyType === 'vendor') return 'Vendor Ledger (Sundry Creditors)';
+    if (partyType === 'bank_account') return 'Bank & Cash Account Ledger';
+    return 'Party Ledger (Sundry Debtors)';
+  };
+
+  const getPageSubtitle = () => {
+    if (partyType === 'vendor') {
+      return 'Official double-entry ledger for vendors & suppliers with purchases, payments, contra accounts, and period balancing.';
+    }
+    if (partyType === 'bank_account') {
+      return 'Official double-entry ledger statement for bank accounts and cash in hand.';
+    }
+    return 'Official double-entry ledger for clients & debtors with sales invoices, bank receipts, TDS receivable, and period balancing.';
+  };
+
   return (
     <div className="space-y-6 animate-fade-in pb-12">
       {/* Top Header Controls (Hidden during print) */}
@@ -240,13 +307,25 @@ export default function AccountLedger() {
           <div>
             <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2.5">
               <BookOpen className="w-6 h-6 text-teal-600" />
-              Party Ledger (Account Statement)
+              {getPageTitle()}
             </h1>
             <p className="text-slate-500 text-sm mt-1">
-              Standard Indian double-entry ledger with opening balance, voucher details, and period balancing.
+              {getPageSubtitle()}
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setShowRunningBalance(!showRunningBalance)}
+              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all border flex items-center gap-2 cursor-pointer ${
+                showRunningBalance 
+                  ? 'bg-teal-50 text-teal-700 border-teal-200' 
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+              }`}
+              title="Toggle Running Balance (Dr/Cr) Column"
+            >
+              <Eye className="w-4 h-4" />
+              <span>{showRunningBalance ? '7-Col Running Bal' : '6-Col Print View'}</span>
+            </button>
             <button
               onClick={handlePrint}
               disabled={!ledgerData}
@@ -273,37 +352,37 @@ export default function AccountLedger() {
             <button
               type="button"
               onClick={() => handleTypeChange('client')}
-              className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                 partyType === 'client' 
                   ? 'bg-white text-teal-700 shadow-xs' 
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <Building2 className="w-3.5 h-3.5" />
-              Clients (Debtors)
+              <Building2 className="w-4 h-4" />
+              Party Ledger (Clients / Debtors)
             </button>
             <button
               type="button"
               onClick={() => handleTypeChange('vendor')}
-              className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                 partyType === 'vendor' 
                   ? 'bg-white text-teal-700 shadow-xs' 
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <Truck className="w-3.5 h-3.5" />
-              Vendors (Creditors)
+              <Truck className="w-4 h-4" />
+              Vendor Ledger (Suppliers / Creditors)
             </button>
             <button
               type="button"
               onClick={() => handleTypeChange('bank_account')}
-              className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                 partyType === 'bank_account' 
                   ? 'bg-white text-teal-700 shadow-xs' 
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <Landmark className="w-3.5 h-3.5" />
+              <Landmark className="w-4 h-4" />
               Bank & Cash Accounts
             </button>
           </div>
@@ -312,11 +391,11 @@ export default function AccountLedger() {
             {/* Party Selector */}
             <div className="md:col-span-1">
               <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
-                Select {partyType === 'client' ? 'Client' : partyType === 'vendor' ? 'Vendor' : 'Bank Account'}
+                Select {partyType === 'client' ? 'Client (Debtor)' : partyType === 'vendor' ? 'Vendor (Creditor)' : 'Bank / Cash Account'}
               </label>
               <select
                 value={selectedPartyId}
-                onChange={(e) => setSelectedPartyId(e.target.value)}
+                onChange={(e) => handleSelectParty(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-medium bg-white text-slate-800 focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all shadow-xs"
               >
                 {currentPartyList.map(p => (
@@ -402,9 +481,12 @@ export default function AccountLedger() {
             <p className="text-xs text-slate-400 mt-1">Select an account and date range above to view its statement.</p>
           </div>
         ) : (
-          <div className="font-sans text-slate-900 max-w-4xl mx-auto print:max-w-full">
-            {/* Page Number (Top Right) */}
-            <div className="flex justify-end text-xs font-medium text-slate-600 mb-2">
+          <div className="font-sans text-slate-900 max-w-5xl mx-auto print:max-w-full">
+            {/* Page Number & Statement Stamp (Top Right) */}
+            <div className="flex justify-between items-center text-xs font-medium text-slate-500 mb-2">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
+                Official Double-Entry Ledger
+              </span>
               <span>Page 1</span>
             </div>
 
@@ -429,13 +511,21 @@ export default function AccountLedger() {
               <h2 className="text-base sm:text-lg font-black uppercase tracking-wide text-slate-900">
                 {ledgerData.party?.name}
               </h2>
-              <p className="text-xs font-semibold text-slate-700 tracking-wide mt-0.5">
+              <p className="text-xs font-bold text-slate-700 tracking-wide mt-0.5">
                 Ledger Account
+                <span className="text-slate-500 font-medium ml-1.5">
+                  ({ledgerData.party?.account_type || (partyType === 'client' ? 'Sundry Debtors' : 'Sundry Creditors')})
+                </span>
               </p>
               {ledgerData.party?.address && (
                 <p className="text-xs text-slate-600 mt-1 font-medium max-w-lg mx-auto whitespace-pre-line leading-relaxed">
                   {ledgerData.party.address}
                   {ledgerData.party?.city ? `, ${ledgerData.party.city}` : ''}
+                </p>
+              )}
+              {ledgerData.party?.gst_number && (
+                <p className="text-[11px] font-mono text-slate-600 mt-0.5">
+                  GSTIN: <span className="font-bold text-slate-800">{ledgerData.party.gst_number}</span>
                 </p>
               )}
               {/* Period Date Display */}
@@ -444,30 +534,65 @@ export default function AccountLedger() {
               </p>
             </div>
 
-            {/* 3. The 6-Column Tally Ledger Table */}
+            {/* Summary Pill on screen (Hidden on print) */}
+            <div className="print:hidden mb-4 flex items-center justify-between bg-slate-50 border border-slate-200 px-4 py-2.5 rounded-xl text-xs">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-slate-600">Total Transactions:</span>
+                <span className="font-bold text-slate-900">{ledgerData.total_transactions || 0}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-slate-600">Net Period Balance:</span>
+                <span className={`font-mono font-black text-sm px-2 py-0.5 rounded-md ${
+                  ledgerData.final_balance_side === 'Dr' 
+                    ? (partyType === 'client' ? 'bg-amber-100 text-amber-900' : 'bg-teal-100 text-teal-900')
+                    : (partyType === 'vendor' ? 'bg-rose-100 text-rose-900' : 'bg-emerald-100 text-emerald-900')
+                }`}>
+                  ₹{fmtCurrency(ledgerData.final_balance)} {ledgerData.final_balance_side}
+                  <span className="text-[10px] font-medium ml-1">
+                    {partyType === 'client' 
+                      ? (ledgerData.final_balance_side === 'Dr' ? '(Receivable)' : '(Advance Received)')
+                      : (ledgerData.final_balance_side === 'Cr' ? '(Payable)' : '(Advance Paid)')
+                    }
+                  </span>
+                </span>
+              </div>
+            </div>
+
+            {/* 3. The Ledger Table (6 or 7 Columns) */}
             <div className="overflow-x-auto print:overflow-visible">
               <table className="w-full text-xs border-collapse">
                 <thead>
                   <tr className="border-t border-b border-slate-900 text-slate-900 font-bold">
                     <th className="py-2.5 px-3 text-left w-24">Date</th>
                     <th className="py-2.5 px-3 text-left">Particulars</th>
-                    <th className="py-2.5 px-3 text-left w-28">Vch Type</th>
+                    <th className="py-2.5 px-3 text-left w-24">Vch Type</th>
                     <th className="py-2.5 px-3 text-left w-28">Vch No.</th>
                     <th className="py-2.5 px-3 text-right w-28">Debit</th>
                     <th className="py-2.5 px-3 text-right w-28">Credit</th>
+                    {showRunningBalance && (
+                      <th className="py-2.5 px-3 text-right w-28 print:hidden">Balance</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 print:divide-none">
                   {ledgerData.segments.map((seg, sIdx) => (
-                    <SegmentRows key={sIdx} seg={seg} isFirst={sIdx === 0} fmtCurrency={fmtCurrency} />
+                    <SegmentRows 
+                      key={sIdx} 
+                      seg={seg} 
+                      isFirst={sIdx === 0} 
+                      fmtCurrency={fmtCurrency}
+                      showRunningBalance={showRunningBalance}
+                      partyType={partyType}
+                    />
                   ))}
                 </tbody>
               </table>
             </div>
 
             {/* Print Footer Notice */}
-            <div className="mt-8 pt-4 border-t border-slate-200 text-[10px] text-slate-500 text-right print:block hidden">
-              Generated on {format(new Date(), 'dd-MMM-yyyy HH:mm')} • Security Firm Management System
+            <div className="mt-8 pt-4 border-t border-slate-200 text-[10px] text-slate-500 flex justify-between items-center print:flex hidden">
+              <span>Security Firm Management System • Official Ledger</span>
+              <span>Generated on {format(new Date(), 'dd-MMM-yyyy HH:mm')}</span>
             </div>
           </div>
         )}
@@ -490,6 +615,9 @@ export default function AccountLedger() {
           }
           .print\\:block {
             display: block !important;
+          }
+          .print\\:flex {
+            display: flex !important;
           }
           table {
             border-collapse: collapse !important;
@@ -519,12 +647,12 @@ export default function AccountLedger() {
 /**
  * Sub-component for rendering a Financial Year Segment (with year rollover support like PDF 2)
  */
-function SegmentRows({ seg, fmtCurrency }) {
+function SegmentRows({ seg, fmtCurrency, showRunningBalance, partyType }) {
   return (
     <>
       {/* 1. Opening Balance Row (if present) */}
       {seg.opening_balance && (
-        <tr className="font-semibold text-slate-900">
+        <tr className="font-semibold text-slate-900 bg-slate-50/50 print:bg-transparent">
           <td className="py-2 px-3 text-left whitespace-nowrap">{seg.opening_balance.date_formatted}</td>
           <td className="py-2 px-3 text-left font-bold">{seg.opening_balance.particulars}</td>
           <td className="py-2 px-3 text-left"></td>
@@ -535,6 +663,14 @@ function SegmentRows({ seg, fmtCurrency }) {
           <td className="py-2 px-3 text-right font-mono font-bold">
             {seg.opening_balance.side === 'credit' ? fmtCurrency(seg.opening_balance.amount) : ''}
           </td>
+          {showRunningBalance && (
+            <td className="py-2 px-3 text-right font-mono font-bold text-slate-900 whitespace-nowrap print:hidden">
+              {fmtCurrency(seg.opening_balance.amount)}
+              <span className="text-[10px] font-bold text-slate-600 ml-1">
+                {seg.opening_balance.side === 'debit' ? 'Dr' : 'Cr'}
+              </span>
+            </td>
+          )}
         </tr>
       )}
 
@@ -559,6 +695,16 @@ function SegmentRows({ seg, fmtCurrency }) {
           <td className="py-1.5 px-3 text-right font-mono font-medium text-slate-900">
             {r.credit > 0 ? fmtCurrency(r.credit) : ''}
           </td>
+          {showRunningBalance && (
+            <td className="py-1.5 px-3 text-right font-mono font-semibold text-slate-800 whitespace-nowrap print:hidden">
+              {fmtCurrency(r.running_balance)}
+              <span className={`text-[10px] font-bold ml-1 ${
+                r.running_balance_side === 'Dr' ? 'text-amber-700' : 'text-teal-700'
+              }`}>
+                {r.running_balance_side}
+              </span>
+            </td>
+          )}
         </tr>
       ))}
 
@@ -571,6 +717,7 @@ function SegmentRows({ seg, fmtCurrency }) {
         <td className="py-2 px-3 text-right font-mono text-slate-800">
           {fmtCurrency(seg.subtotal_credit)}
         </td>
+        {showRunningBalance && <td className="print:hidden"></td>}
       </tr>
 
       {/* 4. Closing Balance Row */}
@@ -586,6 +733,14 @@ function SegmentRows({ seg, fmtCurrency }) {
           <td className="py-2 px-3 text-right font-mono font-bold">
             {seg.closing_balance.side === 'credit' ? fmtCurrency(seg.closing_balance.amount) : ''}
           </td>
+          {showRunningBalance && (
+            <td className="py-2 px-3 text-right font-mono font-bold text-slate-900 whitespace-nowrap print:hidden">
+              {fmtCurrency(seg.closing_balance.amount)}
+              <span className="text-[10px] font-bold text-slate-600 ml-1">
+                {seg.closing_balance.side === 'debit' ? 'Dr' : 'Cr'}
+              </span>
+            </td>
+          )}
         </tr>
       )}
 
@@ -598,11 +753,12 @@ function SegmentRows({ seg, fmtCurrency }) {
         <td className="py-2 px-3 text-right font-mono font-black text-slate-950 text-xs sm:text-sm">
           {fmtCurrency(seg.equalized_total)}
         </td>
+        {showRunningBalance && <td className="print:hidden"></td>}
       </tr>
 
       {/* Spacing between multi-year segments */}
       <tr>
-        <td colSpan="6" className="py-3"></td>
+        <td colSpan={showRunningBalance ? 7 : 6} className="py-3"></td>
       </tr>
     </>
   );
