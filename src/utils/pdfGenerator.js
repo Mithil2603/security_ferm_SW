@@ -66,8 +66,8 @@ function generateInvoicePDF(invoice, client, agencySettings, dataCallback, endCa
 
   const agencyName = agencySettings?.agency_name || process.env.COMPANY_NAME || 'EAGLE EYE SECURITY SERVICE';
   const agencyAddress = getStr(agencySettings?.agency_address, 'Office Adress:- 418, SHIVALIK SATYAMEV, BOPAL-AMBLI JUNCTION, AHMEDABAD-380058');
-  const agencyPhone = getStr(agencySettings?.agency_phone, '8320932214');
-  const agencyEmail = getStr(agencySettings?.agency_email, 'info@egleeyesecuritygroup.in');
+  const agencyPhone = getStr(agencySettings?.agency_phone, '8320931124');
+  const agencyEmail = getStr(agencySettings?.agency_email, 'info@eagleeyesecuritygroup.in');
   const agencyGst = getStr(agencySettings?.gst_number, '24AVYPP2011K1ZB');
   const agencyPan = getStr(agencySettings?.pan_number, agencyGst.length >= 10 ? agencyGst.substring(2, 12) : 'AVYPP2011K');
   const hsnCode = getStr(agencySettings?.hsn_code, '998525');
@@ -197,8 +197,8 @@ function generateInvoicePDF(invoice, client, agencySettings, dataCallback, endCa
     doc.moveTo(startX, gridTop + 18).lineTo(endX, gridTop + 18).stroke();
     // Row 2 separator at +37 (line above Address & Invoice No)
     doc.moveTo(startX, gridTop + 37).lineTo(endX, gridTop + 37).stroke();
-    // Row 3 separator at +56 (line below Address & Invoice No)
-    doc.moveTo(startX, gridTop + 56).lineTo(endX, gridTop + 56).stroke();
+    // Row 3 separator at +73 (line below Address & Site Name, above GST NO & Bill Date)
+    doc.moveTo(startX, gridTop + 73).lineTo(endX, gridTop + 73).stroke();
 
     // Row 1: Left PARTY NAME, Right INVOICE BILL
     doc.font('Helvetica-Bold').fontSize(9).fillColor('#000000').text('PARTY NAME', startX + 6, gridTop + 4.5);
@@ -210,7 +210,7 @@ function generateInvoicePDF(invoice, client, agencySettings, dataCallback, endCa
     doc.font('Helvetica-Bold').fontSize(10).text(displayClientName, startX + 6, gridTop + 22.5, { width: splitX - startX - 12 });
     doc.font('Helvetica-Bold').fontSize(11).text(`RCM BILL   ${isRcm ? 'YES' : 'NO'}`, splitX, gridTop + 22, { width: endX - splitX, align: 'center' });
 
-    // Extract site name and clean address so site name NEVER appears in Row 3 (Address)
+    // Extract site name and clean address
     const rawAddress = [
       client?.address || invoice.client_address,
       client?.city || invoice.client_city,
@@ -236,26 +236,26 @@ function generateInvoicePDF(invoice, client, agencySettings, dataCallback, endCa
       .replace(/^[,-\s]+|[,-\s]+$/g, '')
       .trim();
 
-    // Row 3 Left: Client Address | Row 3 Right: INVOICE NO.
+    // Row 3 Left: Client Address & Site Name (Below Address field!)
     if (cleanAddress) {
-      drawFittedText(doc, cleanAddress, startX + 6, gridTop + 41.5, splitX - startX - 12, 8, 6.5, { lineGap: 1 });
+      drawFittedText(doc, cleanAddress, startX + 6, gridTop + 41, splitX - startX - 12, 8, 6.5, { lineGap: 1 });
     }
-    doc.font('Helvetica-Bold').fontSize(8.5).text(`INVOICE NO. ${invoice.invoice_number}`, splitX + 8, gridTop + 41.5);
-
-    // Row 4: Left GST NO & Site name, Right BILL DATE
-    const clientGst = client?.gst_number || invoice.client_gst || 'N/A';
-    doc.font('Helvetica-Bold').fontSize(8.5).text(`GST NO. ${clientGst}`, startX + 6, gridTop + 60.5);
-
     if (detectedSiteName) {
       doc.font('Helvetica-Bold').fontSize(8.5);
       const sitePrefix = 'Site name: - ';
       const prefW = doc.widthOfString(sitePrefix);
-      doc.text(sitePrefix, startX + 6, gridTop + 75.5);
+      doc.text(sitePrefix, startX + 6, gridTop + 57.5);
       const maxSiteWidth = splitX - startX - 12 - prefW;
-      drawFittedText(doc, detectedSiteName, startX + 6 + prefW, gridTop + 75.5, maxSiteWidth, 8.5, 6.5, { underline: true });
+      drawFittedText(doc, detectedSiteName, startX + 6 + prefW, gridTop + 57.5, maxSiteWidth, 8.5, 6.5);
     }
 
-    doc.font('Helvetica-Bold').fontSize(8.5).text(`BILL DATE: - ${formattedBillDate}`, splitX + 8, gridTop + 60.5);
+    // Row 3 Right: INVOICE NO.
+    doc.font('Helvetica-Bold').fontSize(8.5).text(`INVOICE NO. ${invoice.invoice_number}`, splitX + 8, gridTop + 41.5);
+
+    // Row 4: Left GST NO, Right BILL DATE
+    const clientGst = client?.gst_number || invoice.client_gst || 'N/A';
+    doc.font('Helvetica-Bold').fontSize(8.5).text(`GST NO. ${clientGst}`, startX + 6, gridTop + 77);
+    doc.font('Helvetica-Bold').fontSize(8.5).text(`BILL DATE: - ${formattedBillDate}`, splitX + 8, gridTop + 77);
 
     return gridTop + gridHeight;
   }
@@ -352,7 +352,7 @@ function generateInvoicePDF(invoice, client, agencySettings, dataCallback, endCa
     doc.font('Helvetica-Bold').fontSize(8.5);
     const prefix = 'Rs in word:- ';
     const pWidth = doc.widthOfString(prefix);
-    doc.text(prefix, startX + 6, wordsLineY + 5.5, { underline: true });
+    doc.text(prefix, startX + 6, wordsLineY + 5.5);
     drawFittedText(doc, amountInWords, startX + 6 + pWidth + 2, wordsLineY + 5.5, tableWidth - 14 - pWidth, 8.5, 6.5, { align: 'left' });
 
     // --- Outside Below Box: Footer Note & Jurisdiction ---

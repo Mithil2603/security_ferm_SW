@@ -603,8 +603,10 @@ export default function Clients() {
   const downloadStatementExcel = () => {
     if (!statementData || !statementData.segments) return;
     const rows = [
-      [statementData.agency?.name || 'KHETLAJI INDUSTRIES'],
-      [statementData.agency?.address || ''],
+      [statementData.agency?.name || statementData.agency?.agency_name || 'EAGLE EYE SECURITY SERVICE'],
+      [statementData.agency?.address || statementData.agency?.agency_address || 'Office Adress:- 418, SHIVALIK SATYAMEV, BOPAL-AMBLI JUNCTION, AHMEDABAD-380058'],
+      [`MOBILE NO. ${statementData.agency?.phone || statementData.agency?.agency_phone || '8320931124'}`],
+      [`EMAIL.ID:- ${statementData.agency?.email || statementData.agency?.agency_email || 'info@eagleeyesecuritygroup.in'}`],
       [],
       [statementData.party?.name || statementClient?.name || 'Client Ledger'],
       ['Ledger Account'],

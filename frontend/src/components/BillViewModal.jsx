@@ -12,8 +12,8 @@ export default function BillViewModal({ isOpen, onClose, invoice, onEdit, onCanc
 
   const agencyName = 'EAGLE EYE SECURITY SERVICE';
   const agencyAddress = 'Office Adress:- 418, SHIVALIK SATYAMEV, BOPAL-AMBLI JUNCTION, AHMEDABAD-380058';
-  const agencyMobile = 'MOBILE NO.8320932214';
-  const agencyEmail = 'EMAIL.ID:- info@egleeyesecuritygroup.in';
+  const agencyMobile = 'MOBILE NO.8320931124';
+  const agencyEmail = 'EMAIL.ID:- info@eagleeyesecuritygroup.in';
   const agencyGst = 'GST NO. 24AVYPP2011K1ZB';
   const agencyPan = 'PAN NO. AVYPP2011K';
 
@@ -317,27 +317,27 @@ export default function BillViewModal({ isOpen, onClose, invoice, onEdit, onCanc
                 </div>
               </div>
 
-              {/* Row 3: Client Address (Left) & INVOICE NO. (Right) - with line above and below */}
+              {/* Row 3: Client Address & Site Name (Left) & INVOICE NO. (Right) */}
               <div className="grid grid-cols-12 border-b border-black">
-                <div className="col-span-7 p-1.5 pl-2 border-r border-black flex items-center text-xs text-slate-800 leading-snug">
-                  {clientAddress || '—'}
+                <div className="col-span-7 p-1.5 pl-2 border-r border-black flex flex-col justify-center space-y-1 text-xs text-slate-800 leading-snug">
+                  <div>{clientAddress || '—'}</div>
+                  {siteName && (
+                    <div className="font-bold text-black">
+                      Site name: - <span className="font-semibold">{siteName}</span>
+                    </div>
+                  )}
                 </div>
                 <div className="col-span-5 p-1.5 pl-3 sm:pl-4 flex items-center font-bold text-xs sm:text-sm uppercase tracking-tight">
                   INVOICE NO. {invoice.invoice_number}
                 </div>
               </div>
 
-              {/* Row 4: GST No & Site Name (Left) | Bill Date (Right) */}
+              {/* Row 4: GST No (Left) | Bill Date (Right) */}
               <div className="grid grid-cols-12 border-b border-black font-bold text-xs sm:text-sm">
-                <div className="col-span-7 p-1.5 pl-2 border-r border-black flex flex-col justify-center space-y-1">
+                <div className="col-span-7 p-1.5 pl-2 border-r border-black flex items-center">
                   <div className="uppercase tracking-tight">
                     GST NO. {clientGst}
                   </div>
-                  {siteName && (
-                    <div className="font-bold text-black">
-                      Site name: - <span className="font-semibold underline">{siteName}</span>
-                    </div>
-                  )}
                 </div>
                 <div className="col-span-5 p-1.5 pl-3 sm:pl-4 flex items-center">
                   <div className="uppercase tracking-tight">
@@ -470,7 +470,7 @@ export default function BillViewModal({ isOpen, onClose, invoice, onEdit, onCanc
 
               {/* Amount in Words: Full-Width Row Bounded By Horizontal Lines (Exact Benchmark Layout) */}
               <div className="border-t border-black py-2 px-2.5 sm:px-3 text-xs sm:text-sm font-bold leading-snug print-avoid-break">
-                <span className="underline">Rs in word:-</span> {amountInWords}
+                <span>Rs in word:-</span> {amountInWords}
               </div>
             </div>
 

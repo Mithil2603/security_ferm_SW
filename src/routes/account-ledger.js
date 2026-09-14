@@ -119,19 +119,27 @@ router.get('/', async (req, res) => {
 
     // 1. Fetch Agency Settings (for official print header)
     let agency = {
-      name: 'KHETLAJI INDUSTRIES',
-      address: 'Ground Floor, 44, Suvan Business Park, Opp.Bharat Textile Mills, Rakhial',
+      name: 'EAGLE EYE SECURITY SERVICE',
+      address: 'Office Adress:- 418, SHIVALIK SATYAMEV, BOPAL-AMBLI JUNCTION, AHMEDABAD-380058',
       city: 'Ahmedabad',
       state: 'Gujarat',
-      email: 'khetlajiindustries79@gmail.com',
-      phone: '',
-      gstin: ''
+      email: 'info@eagleeyesecuritygroup.in',
+      phone: '8320931124',
+      gstin: '24AVYPP2011K1ZB'
     };
     try {
       const agencyRes = await query(`SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'`);
       if (agencyRes.rows.length > 0 && agencyRes.rows[0].setting_value) {
         const parsed = JSON.parse(agencyRes.rows[0].setting_value);
-        agency = { ...agency, ...parsed };
+        agency = {
+          ...agency,
+          name: parsed.agency_name || agency.name,
+          address: parsed.agency_address || agency.address,
+          email: parsed.agency_email || agency.email,
+          phone: parsed.agency_phone || agency.phone,
+          gstin: parsed.gst_number || agency.gstin,
+          ...parsed
+        };
       }
     } catch (_) {}
 

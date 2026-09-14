@@ -192,9 +192,10 @@ export default function AccountLedger({ defaultType }) {
 
     const rows = [];
     // Company Header
-    rows.push([ledgerData.agency?.name || 'KHETLAJI INDUSTRIES']);
-    rows.push([ledgerData.agency?.address || '']);
-    rows.push([ledgerData.agency?.email ? `E-Mail: ${ledgerData.agency.email}` : '']);
+    rows.push([ledgerData.agency?.name || ledgerData.agency?.agency_name || 'EAGLE EYE SECURITY SERVICE']);
+    rows.push([ledgerData.agency?.address || ledgerData.agency?.agency_address || 'Office Adress:- 418, SHIVALIK SATYAMEV, BOPAL-AMBLI JUNCTION, AHMEDABAD-380058']);
+    rows.push([`MOBILE NO. ${ledgerData.agency?.phone || ledgerData.agency?.agency_phone || '8320931124'}`]);
+    rows.push([`EMAIL.ID:- ${ledgerData.agency?.email || ledgerData.agency?.agency_email || 'info@eagleeyesecuritygroup.in'}`]);
     rows.push([]);
     rows.push([ledgerData.party?.name || 'Party Name']);
     rows.push([`Ledger Account — ${ledgerData.party?.account_type || (partyType === 'client' ? 'Sundry Debtors' : 'Sundry Creditors')}`]);
@@ -493,17 +494,17 @@ export default function AccountLedger({ defaultType }) {
             {/* 1. Header Block: Centered Agency Details (Matching PDF Benchmark) */}
             <div className="text-center pb-4 mb-4">
               <h1 className="text-lg sm:text-xl font-black uppercase tracking-wide text-slate-900">
-                {ledgerData.agency?.name || 'KHETLAJI INDUSTRIES'}
+                {ledgerData.agency?.name || ledgerData.agency?.agency_name || 'EAGLE EYE SECURITY SERVICE'}
               </h1>
-              <p className="text-xs text-slate-700 mt-1 font-medium leading-relaxed max-w-md mx-auto">
-                {ledgerData.agency?.address}
-                {ledgerData.agency?.city ? `, ${ledgerData.agency.city}` : ''}
+              <p className="text-xs text-slate-700 mt-1 font-medium leading-relaxed max-w-xl mx-auto">
+                {ledgerData.agency?.address || ledgerData.agency?.agency_address || 'Office Adress:- 418, SHIVALIK SATYAMEV, BOPAL-AMBLI JUNCTION, AHMEDABAD-380058'}
               </p>
-              {ledgerData.agency?.email && (
-                <p className="text-xs text-slate-700 mt-0.5 font-medium">
-                  E-Mail : {ledgerData.agency.email}
-                </p>
-              )}
+              <p className="text-xs text-slate-700 mt-0.5 font-medium">
+                MOBILE NO. {ledgerData.agency?.phone || ledgerData.agency?.agency_phone || '8320931124'}
+              </p>
+              <p className="text-xs text-slate-700 mt-0.5 font-medium">
+                EMAIL.ID:- {ledgerData.agency?.email || ledgerData.agency?.agency_email || 'info@eagleeyesecuritygroup.in'}
+              </p>
             </div>
 
             {/* 2. Party Block: Account Title & Address */}
