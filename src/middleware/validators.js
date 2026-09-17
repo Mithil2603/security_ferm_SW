@@ -132,6 +132,7 @@ const createEmployeeSchema = Joi.object({
   date_of_birth: Joi.date().iso().max('now').optional().allow('', null)
     .messages({ 'date.max': 'Date of birth cannot be in the future' })
     .label('Date of birth'),
+  gender: Joi.string().valid('Male', 'Female', 'Other').optional().allow('', null).label('Gender'),
   address: Joi.string().max(500).optional().allow('', null).label('Address'),
   aadhar_number: Joi.string()
     .pattern(/^(\d{12}|[X\d-]{12,16})$/i)

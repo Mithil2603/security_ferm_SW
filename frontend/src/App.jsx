@@ -19,6 +19,7 @@ import Payroll from './pages/Payroll';
 import Ledger from './pages/Ledger';
 import AccountLedger from './pages/AccountLedger';
 import Expenses from './pages/Expenses';
+import Vendors from './pages/Vendors';
 import VendorStatements from './pages/VendorStatements';
 import Reports from './pages/Reports';
 import TaxReports from './pages/TaxReports';
@@ -323,6 +324,7 @@ function App() {
             <Route path="/account-ledger" element={<ProtectedRoute permission={['view_reports', 'manage_invoices', 'manage_expenses']}><AccountLedger /></ProtectedRoute>} />
             <Route path="/party-ledger" element={<ProtectedRoute permission={['view_reports', 'manage_invoices']}><AccountLedger defaultType="client" /></ProtectedRoute>} />
             <Route path="/expenses" element={<ProtectedRoute permission="manage_expenses"><Expenses /></ProtectedRoute>} />
+            <Route path="/vendors" element={<ProtectedRoute permission="manage_expenses"><Vendors /></ProtectedRoute>} />
             <Route path="/vendor-statements" element={<ProtectedRoute permission="manage_expenses"><VendorStatements /></ProtectedRoute>} />
             <Route path="/vendor-ledger" element={<ProtectedRoute permission={['view_reports', 'manage_expenses']}><AccountLedger defaultType="vendor" /></ProtectedRoute>} />
             <Route path="/budgets" element={<ProtectedRoute permission="manage_budgets"><Budgets /></ProtectedRoute>} />

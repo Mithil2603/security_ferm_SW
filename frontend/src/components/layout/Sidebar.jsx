@@ -26,7 +26,8 @@ import {
   HelpCircle,
   X,
   Target,
-  Truck
+  Truck,
+  Building2
 } from 'lucide-react';
 import classNames from 'classnames';
 
@@ -39,6 +40,7 @@ const navItems = [
   { name: 'Payroll', path: '/payroll', icon: Banknote, roles: ['admin', 'accountant'], permission: 'manage_payroll' },
   { name: 'Employee Ledger', path: '/ledger', icon: Banknote, roles: ['admin', 'accountant', 'manager'], permission: 'manage_payroll' },
   { name: 'Expenses', path: '/expenses', icon: Receipt, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },
+  { name: 'Vendors', path: '/vendors', icon: Building2, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },
   { name: 'Vendor Ledger', path: '/vendor-ledger', icon: Truck, roles: ['admin', 'accountant', 'manager'], permission: ['manage_expenses', 'view_reports'] },
   { name: 'Party Ledger', path: '/party-ledger', icon: BookOpen, roles: ['admin', 'accountant', 'manager'], permission: ['manage_invoices', 'view_reports'] },
   { name: 'Reports', path: '/reports', icon: PieChart, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },

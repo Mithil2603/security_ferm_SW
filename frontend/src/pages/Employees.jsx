@@ -18,6 +18,7 @@ import { toast, confirmDialog } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
 import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
 import { formatAadhar, maskAadhar, maskPan, maskBankAccount } from '../utils/formatters';
+import EmployeeIDCard from '../components/EmployeeIDCard';
 
 const docCategoryMeta = {
   photo: { label: 'Employee Photo', icon: Camera, color: 'text-purple-600', bg: 'bg-purple-50', border: 'border-purple-200', accept: 'image/jpeg,image/png,image/webp', desc: 'Passport-size photo (JPG, PNG)' },
@@ -57,7 +58,7 @@ const formatSafeJoiningDate = (dateVal) => {
 };
 
 const emptyForm = {
-  full_name: '', phone: '', email: '', date_of_birth: '', address: '', city: '',
+  full_name: '', phone: '', email: '', date_of_birth: '', gender: '', address: '', city: '',
   aadhar_number: '', pan_number: '', bank_account_number: '', bank_ifsc_code: '',
   bank_name: '', bank_account_holder_name: '', date_of_joining: format(new Date(), 'yyyy-MM-dd'),
   designation: 'Security Guard', salary_structure_id: '', assigned_client_id: '',
@@ -78,6 +79,7 @@ export default function Employees() {
   const [editingEmp, setEditingEmp] = useState(null);
   const [viewingEmp, setViewingEmp] = useState(null);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
+  const [viewModalTab, setViewModalTab] = useState('overview'); // 'overview' | 'idcard'
   const [formData, setFormData] = useState({ ...emptyForm });
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -186,8 +188,9 @@ export default function Employees() {
     setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
   };
 
-  const openViewModal = (emp) => {
+  const openViewModal = (emp, tab = 'overview') => {
     setViewingEmp(emp);
+    setViewModalTab(tab);
     fetchDocuments(emp.id);
     setIsViewModalOpen(true);
   };
@@ -224,6 +227,7 @@ export default function Employees() {
     setFormData({
       full_name: emp.full_name || '', phone: emp.phone || '', email: emp.email || '',
       date_of_birth: emp.date_of_birth ? emp.date_of_birth.substring(0, 10) : '',
+      gender: emp.gender || '',
       address: emp.address || '', city: emp.city || '',
       aadhar_number: formatAadhar(emp.aadhar_number || ''), pan_number: emp.pan_number || '',
       bank_account_number: emp.bank_account_number || '', bank_ifsc_code: emp.bank_ifsc_code || '',
@@ -671,11 +675,18 @@ export default function Employees() {
                     <td className="px-6 py-4 text-right">
                       <div className="flex justify-end gap-2">
                         <button 
-                          onClick={() => openViewModal(emp)} 
+                          onClick={() => openViewModal(emp, 'overview')} 
                           className="p-1.5 text-slate-400 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition-colors" 
                           title="View Details"
                         >
                           <Eye className="w-4 h-4" />
+                        </button>
+                        <button 
+                          onClick={() => openViewModal(emp, 'idcard')} 
+                          className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors" 
+                          title="Generate ID Card"
+                        >
+                          <CreditCard className="w-4 h-4" />
                         </button>
                         <button onClick={() => openEditModal(emp)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Edit">
                           <Edit2 className="w-4 h-4" />
@@ -757,6 +768,15 @@ export default function Employees() {
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Date of Birth</label>
                   <input type="date" name="date_of_birth" value={formData.date_of_birth} onChange={handleInputChange} className={inputCls} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Gender</label>
+                  <select name="gender" value={formData.gender || ''} onChange={handleInputChange} className={inputCls}>
+                    <option value="">Select Gender</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                    <option value="Other">Other</option>
+                  </select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">City</label>
@@ -1473,9 +1493,39 @@ export default function Employees() {
               </button>
             </div>
 
+            {/* Modal Tabs */}
+            <div className="flex border-b border-slate-200 px-6 bg-slate-50 shrink-0 gap-6">
+              <button
+                type="button"
+                onClick={() => setViewModalTab('overview')}
+                className={`py-3 text-sm font-semibold border-b-2 transition-colors cursor-pointer ${
+                  viewModalTab === 'overview'
+                    ? 'border-teal-600 text-teal-700'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                Overview & Documents
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewModalTab('idcard')}
+                className={`py-3 text-sm font-semibold border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer ${
+                  viewModalTab === 'idcard'
+                    ? 'border-teal-600 text-teal-700'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <CreditCard className="w-4 h-4" /> Identity Card & Print
+              </button>
+            </div>
+
             {/* Modal Body */}
             <div className="p-6 overflow-y-auto flex-1 min-h-0 space-y-6">
-              {/* Profile Card Banner */}
+              {viewModalTab === 'idcard' ? (
+                <EmployeeIDCard employee={viewingEmp} />
+              ) : (
+                <>
+                  {/* Profile Card Banner */}
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl bg-gradient-to-r from-teal-50/80 via-slate-50 to-indigo-50/50 border border-teal-100/80">
                 <div className="flex items-center gap-4">
                   <div className="w-14 h-14 rounded-2xl bg-teal-600 text-white flex items-center justify-center text-2xl font-bold shadow-sm shadow-teal-600/30 shrink-0 overflow-hidden border border-teal-200">
@@ -1590,6 +1640,10 @@ export default function Employees() {
                     <span className="text-sm font-semibold text-slate-800">
                       {viewingEmp.date_of_birth ? format(new Date(viewingEmp.date_of_birth), 'dd MMM yyyy') : '—'}
                     </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                    <span className="text-xs font-medium text-slate-500 block mb-1">Gender</span>
+                    <span className="text-sm font-semibold text-slate-800">{viewingEmp.gender || '—'}</span>
                   </div>
                   <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
                     <span className="text-xs font-medium text-slate-500 block mb-1">City</span>
@@ -1864,6 +1918,8 @@ export default function Employees() {
                   </div>
                 )}
               </div>
+                </>
+              )}
             </div>
 
             {/* Modal Footer */}

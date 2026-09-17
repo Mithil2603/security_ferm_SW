@@ -346,7 +346,7 @@ router.post('/import', upload.single('file'), async (req, res) => {
 // POST /api/employees
 router.post('/', validate(schemas.createEmployee), async (req, res) => {
   try {
-    const { full_name, phone, email, date_of_birth, address, city, aadhar_number, pan_number,
+    const { full_name, phone, email, date_of_birth, gender, address, city, aadhar_number, pan_number,
       bank_account_number, bank_ifsc_code, bank_name, bank_account_holder_name,
       date_of_joining, designation = 'Security Guard', salary_structure_id, assigned_client_id,
       emergency_contact_name, emergency_contact_phone, notes } = req.body;
@@ -364,12 +364,12 @@ router.post('/', validate(schemas.createEmployee), async (req, res) => {
     const employee_id = `EMP-${randomHex}`;
 
     const result = await query(
-      `INSERT INTO employees (employee_id, full_name, phone, email, date_of_birth, address, city, 
+      `INSERT INTO employees (employee_id, full_name, phone, email, date_of_birth, gender, address, city, 
         aadhar_number, pan_number, bank_account_number, bank_ifsc_code, bank_name, bank_account_holder_name,
         date_of_joining, designation, salary_structure_id, assigned_client_id, 
         emergency_contact_name, emergency_contact_phone, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
-      [employee_id, full_name, phone, email, date_of_birth || null, address, city, cleanAadhar, cleanPan,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING *`,
+      [employee_id, full_name, phone, email, date_of_birth || null, gender || null, address, city, cleanAadhar, cleanPan,
         bank_account_number, bank_ifsc_code, bank_name, bank_account_holder_name,
         date_of_joining, designation, salary_structure_id || null, assigned_client_id || null,
         emergency_contact_name, emergency_contact_phone, notes]
@@ -389,7 +389,7 @@ router.post('/', validate(schemas.createEmployee), async (req, res) => {
 // PUT /api/employees/:id
 router.put('/:id', validate(schemas.updateEmployee), async (req, res) => {
   try {
-    const { full_name, phone, email, date_of_birth, address, city, aadhar_number, pan_number,
+    const { full_name, phone, email, date_of_birth, gender, address, city, aadhar_number, pan_number,
       bank_account_number, bank_ifsc_code, bank_name, bank_account_holder_name,
       date_of_joining, designation, salary_structure_id, assigned_client_id,
       emergency_contact_name, emergency_contact_phone, notes, is_active } = req.body;
@@ -427,13 +427,13 @@ router.put('/:id', validate(schemas.updateEmployee), async (req, res) => {
     const isActiveBool = is_active !== undefined ? Boolean(is_active) : true;
 
     const result = await query(
-      `UPDATE employees SET full_name=$1, phone=$2, email=$3, date_of_birth=$4, address=$5, city=$6,
-        aadhar_number=$7, pan_number=$8, bank_account_number=$9, bank_ifsc_code=$10, bank_name=$11,
-        bank_account_holder_name=$12, date_of_joining=$13, designation=$14, salary_structure_id=$15,
-        assigned_client_id=$16, emergency_contact_name=$17, emergency_contact_phone=$18, notes=$19,
-        is_active=$20, updated_at=CURRENT_TIMESTAMP
-       WHERE id=$21`,
-      [full_name, phone, email, date_of_birth || null, address, city, finalAadhar, finalPan,
+      `UPDATE employees SET full_name=$1, phone=$2, email=$3, date_of_birth=$4, gender=$5, address=$6, city=$7,
+        aadhar_number=$8, pan_number=$9, bank_account_number=$10, bank_ifsc_code=$11, bank_name=$12,
+        bank_account_holder_name=$13, date_of_joining=$14, designation=$15, salary_structure_id=$16,
+        assigned_client_id=$17, emergency_contact_name=$18, emergency_contact_phone=$19, notes=$20,
+        is_active=$21, updated_at=CURRENT_TIMESTAMP
+       WHERE id=$22`,
+      [full_name, phone, email, date_of_birth || null, gender || null, address, city, finalAadhar, finalPan,
         bank_account_number, bank_ifsc_code, bank_name, bank_account_holder_name,
         date_of_joining, designation, salary_structure_id || null, assigned_client_id || null,
         emergency_contact_name, emergency_contact_phone, notes, isActiveBool,
