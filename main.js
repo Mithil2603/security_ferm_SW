@@ -308,18 +308,20 @@ ipcMain.handle('get-latest-logs', async () => {
   }
 });
 
-// ── IPC: Select Backup Folder Dialog ─────────────────────────────────
-ipcMain.handle('select-folder', async () => {
+// ── IPC: Select Folder Dialog (Backup / Document Storage / etc.) ───────
+ipcMain.handle('select-folder', async (event, options = {}) => {
   try {
     const result = await dialog.showOpenDialog(mainWindow, {
-      title: 'Select Backup Destination Folder',
-      properties: ['openDirectory', 'createDirectory']
+      title: (options && options.title) || 'Select Folder',
+      properties: ['openDirectory', 'createDirectory'],
+      defaultPath: (options && options.defaultPath) || undefined
     });
     if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
-      return { canceled: true };
+      return { canceled: true, folderPath: null };
     }
     return { canceled: false, folderPath: result.filePaths[0] };
   } catch (err) {
+    console.error('selectFolder error:', err);
     return { canceled: true, error: err.message };
   }
 });
@@ -482,26 +484,6 @@ ipcMain.handle('save-file', async (event, { buffer, defaultName, filters }) => {
   } catch (err) {
     console.error('saveFile error:', err);
     return { success: false, error: err.message };
-  }
-});
-
-// ── IPC: Select Folder Dialog ──────────────────────────────────────
-ipcMain.handle('select-folder', async (event, options = {}) => {
-  try {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: options.title || 'Select Folder',
-      properties: ['openDirectory', 'createDirectory'],
-      defaultPath: options.defaultPath || undefined
-    });
-
-    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
-      return { canceled: true, folderPath: null };
-    }
-
-    return { canceled: false, folderPath: result.filePaths[0] };
-  } catch (err) {
-    console.error('selectFolder error:', err);
-    return { canceled: true, error: err.message };
   }
 });
 

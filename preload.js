@@ -104,6 +104,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Get Latest Logs
   getLatestLogs: () => ipcRenderer.invoke('get-latest-logs'),
 
-  // Select Backup Destination Folder Dialog
-  selectFolder: () => ipcRenderer.invoke('select-folder'),
+  // Select Folder Dialog
+  selectFolder: (options) => ipcRenderer.invoke('select-folder', options),
 });
