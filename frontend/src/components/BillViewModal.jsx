@@ -349,7 +349,7 @@ export default function BillViewModal({ isOpen, onClose, invoice, onEdit, onCanc
               {/* Items Table Header */}
               <div className="flex flex-row border-b border-black text-center text-[11px] sm:text-xs font-bold bg-white">
                 <div className="w-[5%] p-1.5 border-r border-black flex items-center justify-center">No.</div>
-                <div className="w-[27%] p-1.5 pl-2 border-r border-black flex items-center justify-start">Particular</div>
+                <div className="w-[27%] p-1.5 border-r border-black flex items-center justify-center">Particular</div>
                 <div className="w-[12%] p-1.5 border-r border-black flex flex-col justify-center leading-tight">
                   <span>Per Day</span>
                   <span>Rate</span>
@@ -364,7 +364,7 @@ export default function BillViewModal({ isOpen, onClose, invoice, onEdit, onCanc
                   <span>Total</span>
                   <span>Day</span>
                 </div>
-                <div className="w-[16%] p-1.5 flex items-center justify-end pr-2">Amount</div>
+                <div className="w-[16%] p-1.5 flex items-center justify-center">Amount</div>
               </div>
 
               {/* Items Table Data Rows */}
@@ -421,10 +421,10 @@ export default function BillViewModal({ isOpen, onClose, invoice, onEdit, onCanc
                 )}
               </div>
 
-              {/* Bottom Section: Bank Details (Left ~58%) & Totals Table (Right ~42%) */}
+              {/* Bottom Section: Bank Details (Left 62%) & Totals Table (Right 38%) */}
               <div className="flex flex-row border-t border-black print-avoid-break">
                 {/* Left: Bank Details with proper clearance so IFSC Code never touches the line */}
-                <div className="w-[58%] border-r border-black p-2.5 sm:p-3 text-xs sm:text-[13px] leading-tight flex flex-col justify-start space-y-1">
+                <div className="w-[62%] border-r border-black p-2.5 sm:p-3 text-xs sm:text-[13px] leading-tight flex flex-col justify-start space-y-1">
                   <p className="font-bold">Bank Details:-</p>
                   <p className="font-bold">NAME:- {bankAccountName}</p>
                   <p className="font-bold">A/c No. {bankAccountNo}</p>
@@ -433,35 +433,35 @@ export default function BillViewModal({ isOpen, onClose, invoice, onEdit, onCanc
                 </div>
 
                 {/* Right: Totals Mini-Table with vertical & horizontal dividers */}
-                <div className="w-[42%] flex flex-col justify-between text-xs sm:text-sm">
+                <div className="w-[38%] flex flex-col justify-between text-xs sm:text-sm">
                   {/* TOTAL */}
                   <div className="flex flex-row border-b border-black font-bold h-7 sm:h-7.5 items-center">
-                    <div className="w-[44%] pl-2 border-r border-black flex items-center h-full">TOTAL</div>
-                    <div className={`w-[56%] pr-2 text-right tabular-nums truncate flex items-center justify-end h-full ${getAmtScaleClass(subtotal.toFixed(2), true)}`}>
+                    <div className="w-[58%] pl-2 border-r border-black flex items-center h-full">TOTAL</div>
+                    <div className={`w-[42%] pr-2 text-right tabular-nums truncate flex items-center justify-end h-full ${getAmtScaleClass(subtotal.toFixed(2), true)}`}>
                       {subtotal.toFixed(2)}
                     </div>
                   </div>
 
                   {/* SGST */}
                   <div className="flex flex-row border-b border-black font-bold h-7 sm:h-7.5 items-center">
-                    <div className="w-[44%] pl-2 border-r border-black flex items-center h-full">SGST &nbsp; 9%</div>
-                    <div className={`w-[56%] pr-2 text-right tabular-nums truncate flex items-center justify-end h-full ${getAmtScaleClass(invoice.sgst_amount, true)}`}>
+                    <div className="w-[58%] pl-2 border-r border-black flex items-center h-full">SGST &nbsp; 9%</div>
+                    <div className={`w-[42%] pr-2 text-right tabular-nums truncate flex items-center justify-end h-full ${getAmtScaleClass(invoice.sgst_amount, true)}`}>
                       {!isRcm && invoice.tax_type === 'cgst_sgst' && invoice.sgst_amount > 0 ? parseFloat(invoice.sgst_amount).toFixed(2) : ''}
                     </div>
                   </div>
 
                   {/* CGST */}
                   <div className="flex flex-row border-b border-black font-bold h-7 sm:h-7.5 items-center">
-                    <div className="w-[44%] pl-2 border-r border-black flex items-center h-full">CGST &nbsp; 9%</div>
-                    <div className={`w-[56%] pr-2 text-right tabular-nums truncate flex items-center justify-end h-full ${getAmtScaleClass(invoice.cgst_amount, true)}`}>
+                    <div className="w-[58%] pl-2 border-r border-black flex items-center h-full">CGST &nbsp; 9%</div>
+                    <div className={`w-[42%] pr-2 text-right tabular-nums truncate flex items-center justify-end h-full ${getAmtScaleClass(invoice.cgst_amount, true)}`}>
                       {!isRcm && invoice.tax_type === 'cgst_sgst' && invoice.cgst_amount > 0 ? parseFloat(invoice.cgst_amount).toFixed(2) : ''}
                     </div>
                   </div>
 
                   {/* GROUND TOTAL */}
                   <div className="flex flex-row font-bold text-xs sm:text-sm h-8 sm:h-8.5 items-center bg-slate-50/50">
-                    <div className="w-[44%] pl-2 border-r border-black flex items-center h-full uppercase tracking-tight">GROUND TOTAL</div>
-                    <div className={`w-[56%] pr-2 text-right tabular-nums font-extrabold flex items-center justify-end h-full ${getAmtScaleClass(finalAmount.toFixed(2), true)}`}>
+                    <div className="w-[58%] pl-2 border-r border-black flex items-center h-full uppercase tracking-tight">GROUND TOTAL</div>
+                    <div className={`w-[42%] pr-2 text-right tabular-nums font-extrabold flex items-center justify-end h-full ${getAmtScaleClass(finalAmount.toFixed(2), true)}`}>
                       {finalAmount.toFixed(2)}
                     </div>
                   </div>

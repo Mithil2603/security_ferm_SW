@@ -837,11 +837,23 @@ export default function Invoices() {
                     <label className="block text-sm font-medium text-slate-700 mb-1">Particular</label>
                     <input 
                       type="text" 
+                      list="event-particular-suggestions"
                       placeholder="Security Guard"
                       value={invoiceForm.particular} 
                       onChange={(e) => setInvoiceForm(prev => ({ ...prev, particular: e.target.value }))} 
                       className={inputCls} 
                     />
+                    <datalist id="event-particular-suggestions">
+                      <option value="Security Supervisor" />
+                      <option value="Security Guard" />
+                      <option value="Security Lady Guard" />
+                      <option value="Gunman" />
+                      <option value="Bouncer" />
+                      <option value="Head Guard" />
+                      <option value="Extra Security Guard" />
+                      <option value="Armed Guard" />
+                      <option value="Event Security / Bouncer" />
+                    </datalist>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">HSN Code</label>
@@ -915,6 +927,9 @@ export default function Invoices() {
                                 <option value="Gunman" />
                                 <option value="Bouncer" />
                                 <option value="Head Guard" />
+                                <option value="Extra Security Guard" />
+                                <option value="Armed Guard" />
+                                <option value="Event Security / Bouncer" />
                               </datalist>
                             </td>
                             <td className="p-2">

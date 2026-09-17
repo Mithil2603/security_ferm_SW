@@ -23,11 +23,11 @@ if (fs.existsSync(userEnvPath)) {
 }
 
 // Validate and normalize paths to prevent path traversal
-function validateAndSafePath(envKey, defaultPath) {
+function validateAndSafePath(envKey, defaultPath, allowExternal = false) {
   let userPath = process.env[envKey] || defaultPath;
   let resolved = path.resolve(userPath);
   
-  if (!resolved.startsWith(userDataPath)) {
+  if (!allowExternal && !resolved.startsWith(userDataPath)) {
     console.error(`⚠️ Invalid path for ${envKey}. Resetting to default inside userData.`);
     resolved = defaultPath;
   }
@@ -45,7 +45,7 @@ function validateAndSafePath(envKey, defaultPath) {
 
 // MySQL credentials are loaded from .env (set via Setup Screen on first launch)
 // No file-path setup needed — MySQL is a network connection
-process.env.UPLOAD_DIR = validateAndSafePath('UPLOAD_DIR', path.join(userDataPath, 'uploads'));
+process.env.UPLOAD_DIR = validateAndSafePath('UPLOAD_DIR', path.join(userDataPath, 'uploads'), true);
 process.env.LOG_DIR = validateAndSafePath('LOG_DIR', path.join(userDataPath, 'logs'));
 process.env.NODE_ENV = 'production';
 process.env.PORT = process.env.PORT || '3000';
@@ -482,6 +482,26 @@ ipcMain.handle('save-file', async (event, { buffer, defaultName, filters }) => {
   } catch (err) {
     console.error('saveFile error:', err);
     return { success: false, error: err.message };
+  }
+});
+
+// ── IPC: Select Folder Dialog ──────────────────────────────────────
+ipcMain.handle('select-folder', async (event, options = {}) => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: options.title || 'Select Folder',
+      properties: ['openDirectory', 'createDirectory'],
+      defaultPath: options.defaultPath || undefined
+    });
+
+    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      return { canceled: true, folderPath: null };
+    }
+
+    return { canceled: false, folderPath: result.filePaths[0] };
+  } catch (err) {
+    console.error('selectFolder error:', err);
+    return { canceled: true, error: err.message };
   }
 });
 

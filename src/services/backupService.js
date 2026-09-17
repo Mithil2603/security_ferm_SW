@@ -4,6 +4,7 @@ const { execFile } = require('child_process');
 const archiver = require('archiver');
 const logger = require('../utils/logger');
 const { query, pool } = require('../database/connection');
+const storageConfig = require('../utils/storageConfig');
 
 const DEFAULT_BACKUPS_DIR = path.join(process.cwd(), 'backups');
 
@@ -174,7 +175,7 @@ async function createBackup(customDir = null) {
     archive.file(dumpPath, { name: dumpFilename });
 
     // Bundle all attachments (uploads directory) into the full backup
-    const uploadsDir = path.resolve(process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads'));
+    const uploadsDir = storageConfig.getActiveUploadDir();
     if (fs.existsSync(uploadsDir)) {
       archive.directory(uploadsDir, 'uploads');
     }
@@ -304,7 +305,7 @@ async function deleteBackup(filename) {
  * Returns info about the uploads directory (path, file count, size)
  */
 function getUploadsInfo() {
-  const uploadsDir = path.resolve(process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads'));
+  const uploadsDir = storageConfig.getActiveUploadDir();
   let filesCount = 0;
   let totalBytes = 0;
 
@@ -352,7 +353,7 @@ async function createAttachmentsBackup(targetDir = null) {
   const filename = `attachments-backup-${timestamp}.zip`;
   const zipPath = path.join(backupDir, filename);
 
-  const uploadsDir = path.resolve(process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads'));
+  const uploadsDir = storageConfig.getActiveUploadDir();
   if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
   }

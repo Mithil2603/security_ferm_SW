@@ -324,11 +324,23 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
                       <td className="p-2">
                         <input
                           type="text"
+                          list={`edit-particular-suggestions-${idx}`}
                           value={item.particular || ''}
                           onChange={(e) => handleBillItemChange(idx, 'particular', e.target.value)}
                           placeholder="e.g. Security Supervisor"
                           className="w-full px-2 py-1 text-xs border border-slate-200 rounded focus:ring-1 focus:ring-teal-500 font-medium"
                         />
+                        <datalist id={`edit-particular-suggestions-${idx}`}>
+                          <option value="Security Supervisor" />
+                          <option value="Security Guard" />
+                          <option value="Security Lady Guard" />
+                          <option value="Gunman" />
+                          <option value="Bouncer" />
+                          <option value="Head Guard" />
+                          <option value="Extra Security Guard" />
+                          <option value="Armed Guard" />
+                          <option value="Event Security / Bouncer" />
+                        </datalist>
                       </td>
                       <td className="p-2">
                         <input

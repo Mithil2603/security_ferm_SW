@@ -48,9 +48,11 @@ function generatePayslipPDF(payroll, employee, client, agencySettings, dataCallb
 
   let hasLogo = false;
   if (agencySettings?.agency_logo_url) {
-    const logoName = path.basename(agencySettings.agency_logo_url);
-    const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
-    const logoPath = path.join(uploadDir, logoName);
+    const storageConfig = require('./storageConfig');
+    let logoPath = path.join(storageConfig.getActiveUploadDir(), logoName);
+    if (!fs.existsSync(logoPath)) {
+      logoPath = path.join(storageConfig.getDefaultUploadDir(), logoName);
+    }
     if (fs.existsSync(logoPath)) {
       try {
         doc.image(logoPath, 50, 50, { fit: [80, 50], align: 'left', valign: 'top' });

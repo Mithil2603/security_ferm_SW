@@ -5,7 +5,7 @@ import {
   Database, HardDrive, FolderOpen, Download, Trash2,
   Play, Clock, CheckCircle2, AlertCircle, ShieldCheck,
   RefreshCw, FileArchive, Settings2, Save,
-  Paperclip, Copy, Check, Info
+  Paperclip, Copy, Check, Info, RotateCcw
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -45,13 +45,40 @@ export default function DatabaseBackupTab() {
   const [copiedPath, setCopiedPath] = useState(false);
   const [downloadingAttachments, setDownloadingAttachments] = useState(false);
 
+  // Document Storage Location States
+  const [storageData, setStorageData] = useState({
+    current_path: '',
+    default_path: '',
+    is_default: true,
+    available_drives: [],
+    stats: null
+  });
+  const [customDocPath, setCustomDocPath] = useState('');
+  const [migrateDocFiles, setMigrateDocFiles] = useState(true);
+  const [savingDocStorage, setSavingDocStorage] = useState(false);
+  const [folderModalTarget, setFolderModalTarget] = useState('backup'); // 'backup' | 'storage'
+
   const showToast = (message, type = 'error') => {
     setToast({ show: true, message, type });
   };
 
   useEffect(() => {
     fetchBackupData();
+    fetchStorageData();
   }, []);
+
+  const fetchStorageData = async () => {
+    try {
+      const res = await api.get('/settings/storage');
+      const sData = res.data || res;
+      setStorageData(sData);
+      if (sData.current_path) {
+        setCustomDocPath(sData.current_path);
+      }
+    } catch (err) {
+      console.warn('Failed to load storage config:', err);
+    }
+  };
 
   const fetchBackupData = async () => {
     try {
@@ -113,6 +140,7 @@ export default function DatabaseBackupTab() {
   };
 
   const handleBrowseFolder = async () => {
+    setFolderModalTarget('backup');
     // 1. Electron Desktop Native Picker
     if (window.electronAPI && window.electronAPI.selectFolder) {
       try {
@@ -143,6 +171,89 @@ export default function DatabaseBackupTab() {
       console.warn('System picker fallback:', err);
       await loadBrowserDir(settings.backup_destination_path || '');
       setFolderModalOpen(true);
+    }
+  };
+
+  const handleBrowseStorageFolder = async () => {
+    setFolderModalTarget('storage');
+    // 1. Electron Desktop Native Picker
+    if (window.electronAPI && window.electronAPI.selectFolder) {
+      try {
+        const res = await window.electronAPI.selectFolder();
+        if (!res.canceled && res.folderPath) {
+          setCustomDocPath(res.folderPath);
+          showToast('Folder selected: ' + res.folderPath, 'success');
+          return;
+        }
+        if (res.canceled) return;
+      } catch (_) {}
+    }
+
+    // 2. Web Browser: Launch Native Windows System Folder Dialog
+    try {
+      showToast('Opening Windows Folder Dialog...', 'info');
+      const res = await api.post('/settings/storage/system-folder-picker');
+      if (res && !res.canceled && res.folderPath) {
+        setCustomDocPath(res.folderPath);
+        showToast('Selected: ' + res.folderPath, 'success');
+        return;
+      }
+      if (res && res.canceled) {
+        return;
+      }
+    } catch (err) {
+      // Fallback to in-app directory picker if needed
+      console.warn('System picker fallback:', err);
+      await loadBrowserDir(customDocPath || '');
+      setFolderModalOpen(true);
+    }
+  };
+
+  const handleSaveStorageLocation = async (e) => {
+    if (e) e.preventDefault();
+    if (!customDocPath || !customDocPath.trim()) {
+      showToast('Please specify a valid folder path.', 'error');
+      return;
+    }
+    try {
+      setSavingDocStorage(true);
+      const res = await api.post('/settings/storage', {
+        path: customDocPath.trim(),
+        migrate_files: migrateDocFiles
+      });
+      showToast(res.message || 'Document storage location updated successfully!', 'success');
+      await fetchStorageData();
+      await fetchBackupData();
+    } catch (err) {
+      const msg = err.response?.data?.message || err.message || 'Failed to update storage location';
+      showToast(msg, 'error');
+    } finally {
+      setSavingDocStorage(false);
+    }
+  };
+
+  const handleResetStorageLocation = async () => {
+    const confirmed = await confirmDialog({
+      title: 'Reset Document Storage Location',
+      message: 'Are you sure you want to reset the document storage path back to the default project uploads directory?',
+      confirmText: 'Reset to Default',
+      variant: 'default'
+    });
+    if (!confirmed) return;
+
+    try {
+      setSavingDocStorage(true);
+      const res = await api.post('/settings/storage/reset-default', {
+        migrate_files: true
+      });
+      showToast(res.message || 'Reset to default project uploads directory.', 'success');
+      await fetchStorageData();
+      await fetchBackupData();
+    } catch (err) {
+      const msg = err.response?.data?.message || err.message || 'Failed to reset storage location';
+      showToast(msg, 'error');
+    } finally {
+      setSavingDocStorage(false);
     }
   };
 
@@ -482,22 +593,34 @@ export default function DatabaseBackupTab() {
               <Paperclip className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-slate-800">
-                Attachments & Documents Storage Location
-              </h3>
-              <p className="text-xs text-slate-500">
-                All employee KYC documents, photos, receipts, vouchers, and uploaded files are saved here.
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-bold text-slate-800">
+                  Attachments & Documents Storage Location
+                </h3>
+                {storageData.is_default ? (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                    Project Default
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-teal-50 text-teal-700 border border-teal-200">
+                    <CheckCircle2 className="w-3 h-3 text-teal-600" />
+                    Custom Drive ({storageData.stats?.drive || 'External'})
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                All employee KYC documents, photos, vendor compliance certificates, receipts, and vouchers are stored here.
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
               <span className="w-2 h-2 rounded-full bg-teal-500"></span>
-              {uploadsInfo?.file_count ?? 0} Files
+              {storageData.stats?.filesCount ?? uploadsInfo?.file_count ?? 0} Files
             </span>
             <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-mono font-bold bg-teal-50 text-teal-800 border border-teal-200">
-              {uploadsInfo?.total_size || '0 B'}
+              {storageData.stats?.totalFormatted || uploadsInfo?.total_size || '0 B'}
             </span>
             <button
               type="button"
@@ -512,33 +635,123 @@ export default function DatabaseBackupTab() {
           </div>
         </div>
 
-        {/* Path Display Box */}
-        <div className="p-4 bg-slate-50 rounded-xl border border-slate-200/80 mb-4">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-              <FolderOpen className="w-3.5 h-3.5 text-teal-600" />
-              Local Disk Storage Folder:
+        {/* Storage Configuration Box */}
+        <div className="p-4 bg-slate-50/90 rounded-xl border border-slate-200/80 mb-4 space-y-3">
+          {/* Quick Drive Presets */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+              Quick Drive Presets:
             </span>
+            {storageData.available_drives?.map((drive) => (
+              <button
+                key={drive.letter}
+                type="button"
+                onClick={() => setCustomDocPath(drive.suggestedPath)}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg border transition-all cursor-pointer ${
+                  customDocPath.toLowerCase().startsWith(drive.path.toLowerCase())
+                    ? 'bg-teal-600 text-white border-teal-600 shadow-2xs font-semibold'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-teal-50 hover:text-teal-700 hover:border-teal-200'
+                }`}
+                title={`Use ${drive.suggestedPath}`}
+              >
+                <HardDrive className="w-3 h-3" />
+                <span>Drive {drive.letter}: ({drive.suggestedPath})</span>
+              </button>
+            ))}
+
+            {!storageData.is_default && (
+              <button
+                type="button"
+                onClick={handleResetStorageLocation}
+                disabled={savingDocStorage || !isAdmin}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg border border-slate-300 bg-white text-slate-600 hover:bg-slate-100 hover:text-slate-800 transition-colors cursor-pointer disabled:opacity-50"
+                title="Restore default project uploads directory"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Reset to Default Folder</span>
+              </button>
+            )}
+          </div>
+
+          {/* Directory Path Input & Browse Button */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
+                <FolderOpen className="w-3.5 h-3.5 text-teal-600" />
+                Documents Directory Path:
+              </label>
+              <button
+                type="button"
+                onClick={handleCopyUploadsPath}
+                className="inline-flex items-center gap-1 text-[11px] font-semibold text-teal-700 hover:text-teal-800 bg-white hover:bg-teal-50 px-2 py-0.5 rounded border border-teal-200 transition-colors shadow-2xs cursor-pointer"
+              >
+                {copiedPath ? (
+                  <>
+                    <Check className="w-3 h-3 text-emerald-600" />
+                    <span className="text-emerald-700">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3 h-3 text-teal-600" />
+                    <span>Copy Path</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                value={customDocPath}
+                onChange={(e) => setCustomDocPath(e.target.value)}
+                placeholder="e.g. D:\SecurityFirm_Documents"
+                disabled={!isAdmin}
+                className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono text-slate-800 bg-white focus:ring-2 focus:ring-teal-500 focus:outline-none disabled:bg-slate-100"
+              />
+              <button
+                type="button"
+                onClick={handleBrowseStorageFolder}
+                disabled={!isAdmin}
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg border border-slate-300 transition-colors shrink-0 disabled:opacity-50"
+              >
+                <FolderOpen className="w-4 h-4 text-teal-600" />
+                <span>Browse Folder...</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Action Row: Migration checkbox + Save Button */}
+          <div className="pt-2 border-t border-slate-200/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <label className="inline-flex items-center gap-2 cursor-pointer text-xs text-slate-700 select-none">
+              <input
+                type="checkbox"
+                checked={migrateDocFiles}
+                onChange={(e) => setMigrateDocFiles(e.target.checked)}
+                className="rounded text-teal-600 focus:ring-teal-500 w-4 h-4"
+              />
+              <span>
+                <strong>Copy existing documents</strong> to the new location (recommended to prevent losing file access)
+              </span>
+            </label>
+
             <button
               type="button"
-              onClick={handleCopyUploadsPath}
-              className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800 bg-white hover:bg-teal-50 px-2.5 py-1 rounded-md border border-teal-200 transition-colors shadow-2xs cursor-pointer"
+              onClick={handleSaveStorageLocation}
+              disabled={savingDocStorage || !isAdmin}
+              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold shadow-sm transition-colors cursor-pointer shrink-0 disabled:opacity-50"
             >
-              {copiedPath ? (
+              {savingDocStorage ? (
                 <>
-                  <Check className="w-3.5 h-3.5 text-emerald-600" />
-                  <span className="text-emerald-700">Copied!</span>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Saving Location...</span>
                 </>
               ) : (
                 <>
-                  <Copy className="w-3.5 h-3.5 text-teal-600" />
-                  <span>Copy Path</span>
+                  <Save className="w-3.5 h-3.5" />
+                  <span>Save Document Location</span>
                 </>
               )}
             </button>
-          </div>
-          <div className="font-mono text-xs text-teal-950 font-semibold bg-white p-3 rounded-lg border border-teal-100 break-all select-all shadow-2xs">
-            {uploadsInfo?.path || 'c:\\Users\\mithi\\OneDrive\\Documents\\Freelance Project\\security_ferm_SW\\uploads'}
           </div>
         </div>
 
@@ -546,13 +759,16 @@ export default function DatabaseBackupTab() {
         <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200/80 text-amber-900 text-xs space-y-2">
           <div className="font-bold flex items-center gap-1.5 text-amber-950">
             <Info className="w-4 h-4 text-amber-600 shrink-0" />
-            <span>Important: Software Update & Reinstallation Guide</span>
+            <span>Important: Storage & Software Update Guide</span>
           </div>
           <p className="text-amber-900/90 leading-relaxed">
-            • <strong>Software Update / Reinstallation:</strong> Whenever updating the software or setting up a fresh install, simply copy or backup the entire <strong>uploads</strong> folder shown above. After reinstalling, paste / replace this <strong>uploads</strong> folder in the software directory to restore all employee documents and receipts instantly!
+            • <strong>D: Drive or External Location:</strong> Moving documents to the <strong>D: drive</strong> or dedicated folder ensures files are preserved even if Windows or the software directory is reinstalled.
           </p>
           <p className="text-amber-900/90 leading-relaxed">
-            • <strong>Automated Protection:</strong> Scheduled daily backups and the "Take Backup Now" button also automatically bundle this entire <strong>uploads</strong> directory into the backup archive.
+            • <strong>Backward Compatibility:</strong> All previously uploaded files continue to be displayed without 404 errors through dual-directory resolution.
+          </p>
+          <p className="text-amber-900/90 leading-relaxed">
+            • <strong>Automated Protection:</strong> Scheduled backups and the "Take Backup Now" feature automatically bundle all files from your active storage folder.
           </p>
         </div>
       </div>
@@ -733,8 +949,13 @@ export default function DatabaseBackupTab() {
                 type="button"
                 onClick={() => {
                   if (browserData.currentPath) {
-                    setSettings(prev => ({ ...prev, backup_destination_path: browserData.currentPath }));
-                    showToast('Selected backup directory: ' + browserData.currentPath, 'success');
+                    if (folderModalTarget === 'storage') {
+                      setCustomDocPath(browserData.currentPath);
+                      showToast('Selected document directory: ' + browserData.currentPath, 'success');
+                    } else {
+                      setSettings(prev => ({ ...prev, backup_destination_path: browserData.currentPath }));
+                      showToast('Selected backup directory: ' + browserData.currentPath, 'success');
+                    }
                     setFolderModalOpen(false);
                   }
                 }}

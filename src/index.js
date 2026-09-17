@@ -87,17 +87,27 @@ app.use('/api/auth/login', strictLimiter);
 app.use('/api/bank-reconciliation', strictLimiter);
 app.use('/api/', limiter);
 
-// Serve static files (documents/uploads) with cross-origin access
+// Serve static files (documents/uploads) with cross-origin access and dynamic custom storage support
 const path = require('path');
-const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
+const storageConfig = require('./utils/storageConfig');
+
 app.use('/uploads', (req, res, next) => {
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  next();
-}, express.static(uploadDir));
+
+  const activeDir = storageConfig.getActiveUploadDir();
+  const defaultDir = storageConfig.getDefaultUploadDir();
+
+  // Try serving from active configured directory first
+  express.static(activeDir)(req, res, (err) => {
+    if (err) return next(err);
+    // If not found in activeDir and activeDir is different from defaultDir, fallback to defaultDir
+    if (path.resolve(activeDir).toLowerCase() !== path.resolve(defaultDir).toLowerCase()) {
+      return express.static(defaultDir)(req, res, next);
+    }
+    next();
+  });
+});
 
 // Body parsing
 app.use(express.json({ limit: '10mb' }));
@@ -234,7 +244,12 @@ if (process.env.NODE_ENV !== 'test') {
   }
 
   initDB()
-    .then(() => {
+    .then(async () => {
+      try {
+        await storageConfig.initStorageConfig();
+      } catch (storageErr) {
+        logger.warn('Failed to initialize custom storage configuration:', storageErr.message);
+      }
       startHttpServer();
     })
     .catch(err => {

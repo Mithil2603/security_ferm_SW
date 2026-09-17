@@ -11,12 +11,10 @@ const path = require('path');
 const fs = require('fs');
 const exceljs = require('exceljs');
 
-const uploadDir = path.join(process.cwd(), 'uploads', 'docs');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
+const storageConfig = require('../utils/storageConfig');
+
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
+  destination: (req, file, cb) => cb(null, storageConfig.getUploadDir('docs')),
   filename: (req, file, cb) => cb(null, 'DOC-' + Date.now() + path.extname(file.originalname))
 });
 const upload = multer({ storage: storage });

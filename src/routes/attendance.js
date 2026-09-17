@@ -9,13 +9,13 @@ const csv = require('csv-parser');
 const fs = require('fs');
 
 const path = require('path');
-const { logError } = require('../utils/errorLogger');
-const baseUploadPath = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
-const tempDir = path.join(baseUploadPath, 'temp');
-if (!fs.existsSync(tempDir)) {
-  fs.mkdirSync(tempDir, { recursive: true });
-}
-const upload = multer({ dest: tempDir });
+const storageConfig = require('../utils/storageConfig');
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, storageConfig.getUploadDir('temp')),
+    filename: (req, file, cb) => cb(null, `att_${Date.now()}_${file.originalname}`)
+  })
+});
 
 router.use(authMiddleware);
 router.use(requirePermission('manage_employees', 'manage_payroll'));

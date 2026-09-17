@@ -10,9 +10,10 @@ const path = require('path');
 const crypto = require('crypto');
 const { logError } = require('../utils/errorLogger');
 
-const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
+const storageConfig = require('../utils/storageConfig');
+
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
+  destination: (req, file, cb) => cb(null, storageConfig.getUploadDir()),
   filename: (req, file, cb) => cb(null, `expense_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${path.extname(file.originalname)}`)
 });
 const upload = multer({

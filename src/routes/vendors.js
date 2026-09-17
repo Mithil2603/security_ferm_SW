@@ -8,16 +8,12 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// Ensure upload directory exists
-const baseUploadPath = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
-const vendorDocsDir = path.join(baseUploadPath, 'vendor_docs');
-if (!fs.existsSync(vendorDocsDir)) {
-  fs.mkdirSync(vendorDocsDir, { recursive: true });
-}
+// Dynamic uploads directory configuration
+const storageConfig = require('../utils/storageConfig');
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, vendorDocsDir);
+    cb(null, storageConfig.getUploadDir('vendor_docs'));
   },
   filename: function (req, file, cb) {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -492,9 +488,14 @@ router.delete('/:id/documents/:docId', async (req, res) => {
     // Remove file if exists locally
     if (doc.file_url) {
       const fileName = path.basename(doc.file_url);
-      const filePath = path.join(vendorDocsDir, fileName);
+      const filePath = path.join(storageConfig.getUploadDir('vendor_docs'), fileName);
       if (fs.existsSync(filePath)) {
         try { fs.unlinkSync(filePath); } catch (_) {}
+      } else {
+        const defaultFilePath = path.join(storageConfig.getDefaultUploadDir(), 'vendor_docs', fileName);
+        if (fs.existsSync(defaultFilePath)) {
+          try { fs.unlinkSync(defaultFilePath); } catch (_) {}
+        }
       }
     }
 

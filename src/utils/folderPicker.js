@@ -4,8 +4,9 @@ const { exec } = require('child_process');
  * Opens modern Windows 10/11 File Explorer folder dialog with FOS_PICKFOLDERS
  * @returns {Promise<string|null>} Selected folder path or null
  */
-function openNativeSystemFolderPicker() {
+function openNativeSystemFolderPicker(title = 'Select Folder') {
   return new Promise((resolve) => {
+    const safeTitle = (title || 'Select Folder').replace(/"/g, '\\"');
     const csharpCode = `
 using System;
 using System.IO;
@@ -17,7 +18,7 @@ public class ModernFolderPicker {
     public static void Main() {
         try {
             OpenFileDialog dialog = new OpenFileDialog();
-            dialog.Title = "Select Backup Destination Folder";
+            dialog.Title = "${safeTitle}";
             dialog.CheckFileExists = false;
             dialog.CheckPathExists = true;
             dialog.ValidateNames = false;

@@ -9,9 +9,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { logError } = require('../utils/errorLogger');
 
-const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
+const storageConfig = require('../utils/storageConfig');
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
+  destination: (req, file, cb) => cb(null, storageConfig.getUploadDir()),
   filename: (req, file, cb) => cb(null, `agency_logo_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${path.extname(file.originalname)}`)
 });
 const upload = multer({ storage });
@@ -451,6 +451,96 @@ router.put('/expense-categories/:id', requirePermission('manage_settings', 'mana
     }
     logger.error('Update expense category error:', error);
     res.status(500).json({ success: false, message: 'Failed to update category' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+//  DOCUMENT & ATTACHMENTS STORAGE LOCATION MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════
+
+// GET /api/settings/storage - Get current document storage configuration
+router.get('/storage', async (req, res) => {
+  try {
+    const currentPath = storageConfig.getActiveUploadDir();
+    const defaultPath = storageConfig.getDefaultUploadDir();
+    const isDefault = storageConfig.isUsingDefaultDir();
+    const availableDrives = storageConfig.getAvailableDrives();
+    const stats = storageConfig.getStorageStats();
+
+    res.json({
+      success: true,
+      data: {
+        current_path: currentPath,
+        default_path: defaultPath,
+        is_default: isDefault,
+        available_drives: availableDrives,
+        stats
+      }
+    });
+  } catch (error) {
+    logError(error, req, { feature: 'settings-storage' });
+    res.status(500).json({ success: false, message: 'Failed to fetch storage settings' });
+  }
+});
+
+// POST /api/settings/storage - Update document storage location
+router.post('/storage', requirePermission('manage_settings'), async (req, res) => {
+  try {
+    const { path: newPath, migrate_files = false } = req.body;
+    if (!newPath || typeof newPath !== 'string' || !newPath.trim()) {
+      return res.status(400).json({ success: false, message: 'A valid folder path is required.' });
+    }
+
+    const result = await storageConfig.setUploadDir(newPath.trim(), Boolean(migrate_files));
+    const stats = storageConfig.getStorageStats();
+
+    res.json({
+      success: true,
+      message: `Document storage path updated successfully.${result.migratedCount > 0 ? ` (${result.migratedCount} files copied)` : ''}`,
+      data: {
+        ...result,
+        stats
+      }
+    });
+  } catch (error) {
+    logError(error, req, { feature: 'settings-storage' });
+    res.status(400).json({ success: false, message: error.message || 'Failed to update storage path' });
+  }
+});
+
+// POST /api/settings/storage/reset-default - Reset document storage back to default ./uploads
+router.post('/storage/reset-default', requirePermission('manage_settings'), async (req, res) => {
+  try {
+    const { migrate_files = false } = req.body;
+    const result = await storageConfig.resetToDefault(Boolean(migrate_files));
+    const stats = storageConfig.getStorageStats();
+
+    res.json({
+      success: true,
+      message: 'Document storage reset to default project folder.',
+      data: {
+        ...result,
+        stats
+      }
+    });
+  } catch (error) {
+    logError(error, req, { feature: 'settings-storage' });
+    res.status(500).json({ success: false, message: error.message || 'Failed to reset storage path' });
+  }
+});
+
+// POST /api/settings/storage/system-folder-picker - Open native OS folder picker dialog
+router.post('/storage/system-folder-picker', async (req, res) => {
+  try {
+    const { openNativeSystemFolderPicker } = require('../utils/folderPicker');
+    const selectedFolder = await openNativeSystemFolderPicker('Select Document Storage Folder');
+    if (selectedFolder) {
+      res.json({ success: true, folderPath: selectedFolder, canceled: false });
+    } else {
+      res.json({ success: true, folderPath: null, canceled: true });
+    }
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 

@@ -12,16 +12,12 @@ const fs = require('fs');
 const exceljs = require('exceljs');
 const crypto = require('crypto');
 
-// Ensure uploads directory exists
-const baseUploadPath = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
-const uploadDir = path.join(baseUploadPath, 'docs');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
+// Dynamic uploads directory configuration
+const storageConfig = require('../utils/storageConfig');
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, uploadDir);
+    cb(null, storageConfig.getUploadDir('docs'));
   },
   filename: function (req, file, cb) {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -524,9 +520,14 @@ router.post('/:id/upload-doc', upload.single('document'), async (req, res) => {
       );
       for (const oldDoc of oldDocs.rows) {
         if (oldDoc.file_path) {
-          const oldFile = path.join(uploadDir, oldDoc.file_path);
+          const oldFile = path.join(storageConfig.getUploadDir('docs'), oldDoc.file_path);
           if (fs.existsSync(oldFile)) {
             try { fs.unlinkSync(oldFile); } catch (_) {}
+          } else {
+            const defaultOld = path.join(storageConfig.getDefaultUploadDir(), 'docs', oldDoc.file_path);
+            if (fs.existsSync(defaultOld)) {
+              try { fs.unlinkSync(defaultOld); } catch (_) {}
+            }
           }
         }
       }
@@ -612,9 +613,14 @@ router.delete('/:id/docs/:docId', async (req, res) => {
 
     // Delete file from disk if exists
     if (filePath) {
-      const fullPath = path.join(uploadDir, filePath);
+      const fullPath = path.join(storageConfig.getUploadDir('docs'), filePath);
       if (fs.existsSync(fullPath)) {
         try { fs.unlinkSync(fullPath); } catch (_) {}
+      } else {
+        const defaultPath = path.join(storageConfig.getDefaultUploadDir(), 'docs', filePath);
+        if (fs.existsSync(defaultPath)) {
+          try { fs.unlinkSync(defaultPath); } catch (_) {}
+        }
       }
     }
 

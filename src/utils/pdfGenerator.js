@@ -89,13 +89,13 @@ function generateInvoicePDF(invoice, client, agencySettings, dataCallback, endCa
   // 28 + 140 + 62 + 36 + 49 = 315pt (matches top split & bottom bank split!)
   const cols = [
     { name: 'No.', w: 28, align: 'center' },
-    { name: 'Particular', w: 140, align: 'left' },
+    { name: 'Particular', w: 140, align: 'center' },
     { name: 'Per Day\nRate', w: 62, align: 'center' },
     { name: 'No.of', w: 36, align: 'center' },
     { name: 'Rate', w: 49, align: 'center' },
     { name: 'HSN\nCODE', w: 50, align: 'center' },
     { name: 'Total\nDay', w: 50, align: 'center' },
-    { name: 'Amount', w: 100, align: 'right' }
+    { name: 'Amount', w: 100, align: 'center' }
   ];
 
   // Parse items
@@ -146,8 +146,11 @@ function generateInvoicePDF(invoice, client, agencySettings, dataCallback, endCa
   function drawLogo() {
     if (agencySettings?.agency_logo_url) {
       const logoName = path.basename(agencySettings.agency_logo_url);
-      const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
-      const logoPath = path.join(uploadDir, logoName);
+      const storageConfig = require('./storageConfig');
+      let logoPath = path.join(storageConfig.getActiveUploadDir(), logoName);
+      if (!fs.existsSync(logoPath)) {
+        logoPath = path.join(storageConfig.getDefaultUploadDir(), logoName);
+      }
       if (fs.existsSync(logoPath)) {
         try {
           doc.image(logoPath, startX, 32, { fit: [75, 45], align: 'left', valign: 'top' });
@@ -272,8 +275,8 @@ function generateInvoicePDF(invoice, client, agencySettings, dataCallback, endCa
       }
       doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#000000');
       const isMultiLine = col.name.includes('\n');
-      const textY = isMultiLine ? y + 3.5 : y + 8;
-      doc.text(col.name, curX, textY, { width: col.w, align: col.align || 'center' });
+      const textY = isMultiLine ? y + 4 : y + 9;
+      doc.text(col.name, curX, textY, { width: col.w, align: 'center' });
       curX += col.w;
     });
 
@@ -305,7 +308,7 @@ function generateInvoicePDF(invoice, client, agencySettings, dataCallback, endCa
     doc.text(`IFSC Code:s- ${bankIfsc}`, startX + 6, bottomTop + 54.5);
 
     // --- Right: Totals Mini-Table with vertical & horizontal dividers ---
-    const totalsDividerX = splitX + 85; // separates label and amount
+    const totalsDividerX = startX + 415; // separates label and amount (matches Table Amount column!)
     // Vertical line between label and amount
     doc.moveTo(totalsDividerX, bottomTop).lineTo(totalsDividerX, wordsLineY).stroke();
 
@@ -315,7 +318,7 @@ function generateInvoicePDF(invoice, client, agencySettings, dataCallback, endCa
     doc.moveTo(splitX, bottomTop + 57).lineTo(endX, bottomTop + 57).stroke();
 
     const labelW = totalsDividerX - splitX - 6;
-    const amtW = endX - totalsDividerX - 6;
+    const amtW = cols[7].w - 4; // 96pt (matches table row amount padding and right alignment!)
 
     // Row 1: TOTAL
     doc.font('Helvetica-Bold').fontSize(8.5).text('TOTAL', splitX + 6, bottomTop + 5, { width: labelW });

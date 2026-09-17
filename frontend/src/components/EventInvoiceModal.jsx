@@ -29,6 +29,8 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
     rate_per_guard: 500,
     days_worked: 1,
     fixed_amount: '',
+    particular: 'Security Guard',
+    hsn_code: '998525',
     tax_type: 'none',
     is_rcm_applicable: false,
     notes: ''
@@ -223,6 +225,8 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
         tax_type: form.tax_type,
         is_rcm_applicable: form.is_rcm_applicable,
         notes: form.notes,
+        particular: form.particular || 'Security Guard',
+        hsn_code: form.hsn_code || '998525',
         ...(clientMode === 'existing'
           ? { client_id: form.client_id }
           : {
@@ -546,6 +550,41 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                   <p className="text-xs text-slate-500 mt-1">Direct flat charge for this entire event.</p>
                 </div>
               )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-3 border-t border-slate-100">
+                <div className="sm:col-span-2">
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Particular</label>
+                  <input
+                    type="text"
+                    list="event-modal-particular-suggestions"
+                    value={form.particular}
+                    onChange={e => setForm({ ...form, particular: e.target.value })}
+                    className={inputCls}
+                    placeholder="e.g. Security Guard"
+                  />
+                  <datalist id="event-modal-particular-suggestions">
+                    <option value="Security Supervisor" />
+                    <option value="Security Guard" />
+                    <option value="Security Lady Guard" />
+                    <option value="Gunman" />
+                    <option value="Bouncer" />
+                    <option value="Head Guard" />
+                    <option value="Extra Security Guard" />
+                    <option value="Armed Guard" />
+                    <option value="Event Security / Bouncer" />
+                  </datalist>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">HSN Code</label>
+                  <input
+                    type="text"
+                    value={form.hsn_code}
+                    onChange={e => setForm({ ...form, hsn_code: e.target.value })}
+                    className={inputCls}
+                    placeholder="998525"
+                  />
+                </div>
+              </div>
             </div>
 
             {/* 4. GST & Tax Configuration */}
