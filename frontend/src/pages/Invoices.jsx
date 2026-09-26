@@ -21,14 +21,22 @@ const daysBetweenInclusive = (start, end) => {
   return diff > 0 ? diff : 31;
 };
 
-// Last calendar day of the month containing `dateStr` (yyyy-MM-dd), e.g.
-// 2026-08-15 -> 2026-08-31. Regular (monthly) bills always run start-of-pick
-// to end of that same month — only Event bills allow a free-form end date.
-const endOfSameMonth = (dateStr) => {
+// Rolling one-month-later date, same day-of-month as `dateStr` (yyyy-MM-dd),
+// e.g. 2026-09-26 -> 2026-10-26. Clamps to the last day of the target month
+// when it doesn't have that many days (e.g. 2026-01-31 -> 2026-02-28), rather
+// than overflowing into the following month. Regular (monthly) bills default
+// their end date to this — a rolling monthly cycle from whatever day the
+// guard actually started, not the calendar month — though it stays editable.
+const oneMonthLater = (dateStr) => {
   if (!dateStr) return dateStr;
   const d = new Date(`${dateStr}T00:00:00`);
-  const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-  return format(end, 'yyyy-MM-dd');
+  let targetMonth = d.getMonth() + 1;
+  let targetYear = d.getFullYear();
+  if (targetMonth > 11) { targetMonth = 0; targetYear += 1; }
+  const daysInTargetMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
+  const day = Math.min(d.getDate(), daysInTargetMonth);
+  const result = new Date(targetYear, targetMonth, day);
+  return format(result, 'yyyy-MM-dd');
 };
 
 // Re-derive Total Day / Amount for every bill item from the current billing
@@ -260,9 +268,8 @@ export default function Invoices() {
     const indusind = accounts.find(b => b.bank_name?.toLowerCase().includes('indusind'));
     const defaultBankId = indusind ? indusind.id : (accounts[0]?.id || '');
     const now = new Date();
-    const startOfMonth = format(new Date(now.getFullYear(), now.getMonth(), 1), 'yyyy-MM-dd');
-    const endOfMonth = format(new Date(now.getFullYear(), now.getMonth() + 1, 0), 'yyyy-MM-dd');
     const todayStr = format(now, 'yyyy-MM-dd');
+    const oneMonthOut = oneMonthLater(todayStr);
 
     setAttendanceSummary(null);
     setInvoiceForm({
@@ -274,8 +281,8 @@ export default function Invoices() {
       hsn_code: '998525',
       invoice_type: 'regular',
       invoice_date: todayStr,
-      billing_period_start: startOfMonth,
-      billing_period_end: endOfMonth,
+      billing_period_start: todayStr,
+      billing_period_end: oneMonthOut,
       amount_subtotal: '',
       monthly_rate: '',
       rate_per_day: '',
@@ -1205,7 +1212,7 @@ export default function Invoices() {
                           value={invoiceForm.billing_period_start || ''}
                           onChange={(e) => {
                             const start = e.target.value;
-                            const end = endOfSameMonth(start);
+                            const end = oneMonthLater(start);
                             setInvoiceForm(prev => {
                               const rescaled = rescaleBillItemsToPeriod(prev.bill_items, start, end);
                               const totalAmt = rescaled.reduce((s, it) => s + (parseFloat(it.amount) || 0), 0);
@@ -1227,12 +1234,30 @@ export default function Invoices() {
                         />
                       </div>
                       <div>
-                        <span className="text-[11px] text-slate-500 mb-0.5 block">End Date (auto, last day of month)</span>
+                        <span className="text-[11px] text-slate-500 mb-0.5 block">End Date (defaults to one month later — editable)</span>
                         <input
-                          disabled
+                          required
                           type="date"
                           value={invoiceForm.billing_period_end || ''}
-                          className={`${inputCls} bg-slate-100 text-slate-500 cursor-not-allowed`}
+                          onChange={(e) => {
+                            const end = e.target.value;
+                            setInvoiceForm(prev => {
+                              const rescaled = rescaleBillItemsToPeriod(prev.bill_items, prev.billing_period_start, end);
+                              const totalAmt = rescaled.reduce((s, it) => s + (parseFloat(it.amount) || 0), 0);
+                              const totalDays = rescaled.reduce((s, it) => s + (parseFloat(it.total_duty_days) || 0), 0);
+                              return {
+                                ...prev,
+                                billing_period_end: end,
+                                bill_items: rescaled,
+                                amount_subtotal: totalAmt > 0 ? totalAmt.toFixed(2) : prev.amount_subtotal,
+                                total_duty_days: totalDays || prev.total_duty_days
+                              };
+                            });
+                            if (invoiceForm.client_id && invoiceForm.billing_period_start) {
+                              fetchAttendanceSummary(invoiceForm.client_id, invoiceForm.billing_period_start, end);
+                            }
+                          }}
+                          className={inputCls}
                         />
                       </div>
                     </div>
