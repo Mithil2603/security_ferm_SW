@@ -9,6 +9,8 @@ const multer = require('multer');
 const path = require('path');
 const crypto = require('crypto');
 const { logError } = require('../utils/errorLogger');
+const { recordVendorPayment } = require('../services/payments/paymentTransactionService');
+const gstService = require('../services/gst/gstComplianceService');
 
 const storageConfig = require('../utils/storageConfig');
 
@@ -153,12 +155,13 @@ router.get('/:id', async (req, res) => {
 // POST /api/expenses
 router.post('/', upload.single('receipt_file'), validate(schemas.createExpense), async (req, res) => {
   try {
-    const { expense_date, description, amount, payment_method, vendor_id, receipt_number, notes } = req.body;
+    const { expense_date, description, amount, payment_method, vendor_id, receipt_number, notes, tax_type, tax_rate, tds_rate } = req.body;
+    const is_rcm_applicable = req.body.is_rcm_applicable === 'true' || req.body.is_rcm_applicable === true;
     let { category } = req.body;
-    
+
     // Normalize category
     if (category) category = category.trim().toLowerCase().replace(/\s+/g, '_');
-    
+
     let receipt_url = req.file ? `/uploads/${req.file.filename}` : null;
 
     if (!expense_date || !category || !description || !amount || !payment_method) {
@@ -173,10 +176,23 @@ router.post('/', upload.single('receipt_file'), validate(schemas.createExpense),
     const parsedReceiptNo = receipt_number ? String(receipt_number).trim() : null;
     const parsedNotes = notes ? String(notes).trim() : null;
 
+    // GST is optional: bill amount is treated as GST-inclusive (mirrors invoices),
+    // so the payment module can later prorate this bill's fixed tax split.
+    const finalTaxType = tax_type && tax_type !== 'none' ? tax_type : 'none';
+    let cgst_amount = 0, sgst_amount = 0, igst_amount = 0;
+    if (finalTaxType !== 'none' && tax_rate) {
+      const rate = parseFloat(tax_rate) || 0;
+      const taxableValue = parsedAmount / (1 + rate / 100);
+      const gst = gstService.calculateGST(taxableValue, rate, finalTaxType);
+      cgst_amount = gst.cgst; sgst_amount = gst.sgst; igst_amount = gst.igst;
+    }
+
     const result = await query(
-      `INSERT INTO expenses (expense_date, category, description, amount, payment_method, vendor_id, receipt_number, notes, receipt_url, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [expense_date, category, description, parsedAmount, payment_method, parsedVendorId, parsedReceiptNo, parsedNotes, receipt_url, req.user.userId]
+      `INSERT INTO expenses (expense_date, category, description, amount, payment_method, vendor_id, receipt_number, notes, receipt_url, created_by,
+        tax_type, tax_rate, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable, tds_rate)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+      [expense_date, category, description, parsedAmount, payment_method, parsedVendorId, parsedReceiptNo, parsedNotes, receipt_url, req.user.userId,
+       finalTaxType, tax_rate || 0, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable ? 1 : 0, tds_rate || 0]
     );
 
     res.status(201).json({ success: true, data: result.rows[0], message: 'Expense recorded successfully' });
@@ -305,78 +321,27 @@ router.delete('/:id', async (req, res) => {
 // POST /api/expenses/:id/pay
 router.post('/:id/pay', async (req, res) => {
   try {
-    const { amount, payment_method, payment_date, reference_number, notes } = req.body;
-    const paymentAmount = parseFloat(amount);
+    const {
+      amount, payment_method, payment_date, reference_number, notes,
+      bank_account_id, attachment_url, tds_amount, tax_type, tax_rate, is_rcm_applicable
+    } = req.body;
 
-    if (isNaN(paymentAmount) || paymentAmount <= 0) {
-      return res.status(400).json({ success: false, message: 'Invalid payment amount' });
+    try {
+      const result = await recordVendorPayment(
+        {
+          expense_id: req.params.id, amount, payment_method, payment_date,
+          reference_number, notes, bank_account_id, attachment_url, tds_amount,
+          tax_type, tax_rate, is_rcm_applicable
+        },
+        req.user.userId
+      );
+      res.json({ success: true, data: result.expense, message: 'Payment recorded successfully' });
+    } catch (serviceErr) {
+      if (serviceErr.message === 'Expense not found') {
+        return res.status(404).json({ success: false, message: serviceErr.message });
+      }
+      return res.status(400).json({ success: false, message: serviceErr.message });
     }
-
-    // 1. Get the expense to check current balance
-    const expRes = await query('SELECT * FROM expenses WHERE id = $1', [req.params.id]);
-    if (expRes.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Expense not found' });
-    }
-    const expense = expRes.rows[0];
-
-    // Allowed to pay if status is pending, approved, or partially_paid?
-    // Wait, the status is restricted to pending, approved, rejected, paid. 
-    // We can just check if it's already fully paid.
-    if (expense.status === 'paid') {
-      return res.status(400).json({ success: false, message: 'Expense is already fully paid' });
-    }
-
-    const currentPaid = parseFloat(expense.amount_paid) || 0;
-    const newPaid = currentPaid + paymentAmount;
-    
-    // Check if fully paid (or overpaid, but we just cap status)
-    let newStatus = expense.status; // Keep it whatever it is (e.g. pending or approved)
-    if (newPaid >= parseFloat(expense.amount)) {
-      newStatus = 'paid';
-    }
-
-    // Begin Transaction manually since we don't have a transaction helper, but await queries sequentially is okay for now
-    
-    // 2. Insert into vendor_payments
-    await query(
-      `INSERT INTO vendor_payments (vendor_id, expense_id, payment_date, amount, payment_method, reference_number, notes, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [expense.vendor_id, expense.id, payment_date || new Date().toISOString().split('T')[0], paymentAmount, payment_method || 'bank_transfer', reference_number, notes, req.user.userId]
-    );
-
-    // 3. Update expense
-    const result = await query(
-      `UPDATE expenses SET amount_paid = $1, status = $2 WHERE id = $3`,
-      [newPaid, newStatus, expense.id]
-    );
-    const updated = await query('SELECT * FROM expenses WHERE id = $1', [expense.id]);
-    const finalExpense = updated.rows[0];
-
-    // Get vendor name for statement
-    const vendorRes = await query('SELECT name FROM vendors WHERE id = $1', [expense.vendor_id]);
-    const vendorName = vendorRes.rows.length > 0 ? vendorRes.rows[0].name : (expense.vendor_name || 'Unknown');
-    const payDate = payment_date || new Date().toISOString().split('T')[0];
-
-    // Auto-save Vendor Payment statement
-    saveStatement({
-      domain: 'vendor',
-      statement_number: `VP-${vendorName.replace(/\s+/g, '_')}-${payDate}`,
-      title: `Vendor Payment: ${vendorName} - ₹${paymentAmount.toLocaleString()}`,
-      reference_id: expense.id,
-      reference_type: 'vendor_payment',
-      statement_data: {
-        expense_id: expense.id, vendor_name: vendorName, description: expense.description,
-        category: expense.category, expense_amount: parseFloat(expense.amount),
-        payment_amount: paymentAmount, total_paid: newPaid, payment_method: payment_method || 'bank_transfer',
-        reference_number, payment_date: payDate, status: newStatus
-      },
-      total_amount: paymentAmount,
-      party_name: vendorName,
-      party_id: expense.vendor_id,
-      generated_by: req.user.userId
-    });
-
-    res.json({ success: true, data: finalExpense, message: 'Payment recorded successfully' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'expenses' });
     logger.error('Pay expense error:', error);

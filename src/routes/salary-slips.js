@@ -23,6 +23,7 @@ const router = express.Router();
 const Joi = require('joi');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const salarySlipService = require('../services/payroll/salarySlipService');
+const { recordSalaryPayment } = require('../services/payments/paymentTransactionService');
 
 router.use(authMiddleware);
 router.use(requirePermission('manage_payroll'));
@@ -209,11 +210,17 @@ router.post('/:id/pay', async (req, res) => {
       payment_method: Joi.string().valid('bank_transfer', 'cash', 'cheque', 'upi').default('bank_transfer'),
       transaction_reference: Joi.string().max(100).allow(null, ''),
       payment_date: Joi.string().allow(null, ''),
+      bank_account_id: Joi.number().integer().positive().allow(null),
+      attachment_url: Joi.string().max(500).allow(null, ''),
     });
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await salarySlipService.markPaid(parseInt(req.params.id), value);
+    await recordSalaryPayment(
+      { reference_type: 'salary_slip', reference_id: parseInt(req.params.id), ...value },
+      req.user.userId
+    );
+    const result = await salarySlipService.findById(parseInt(req.params.id));
     logger.info(`💰 Salary slip #${req.params.id} marked as paid`);
     res.json({ success: true, data: result });
   } catch (err) {

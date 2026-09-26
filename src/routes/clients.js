@@ -183,13 +183,18 @@ router.get('/:id/attendance-summary', async (req, res) => {
     const daysInPeriod = Math.max(1, Math.ceil((new Date(end + 'T00:00:00') - new Date(start + 'T00:00:00')) / (1000 * 60 * 60 * 24)) + 1);
 
     let guards = parseInt(client.employee_count, 10) || 1;
-    let totalContractedAmount = parseFloat(client.monthly_rate) || 0;
+    // A flat monthly_rate only ever covers one ~31-day month, so it must be
+    // scaled to however many days the selected period actually spans — a rate
+    // per day scales naturally and is always preferred when available.
+    let totalContractedAmount = client.rate_per_day > 0
+      ? parseFloat((client.rate_per_day * guards * daysInPeriod).toFixed(2))
+      : parseFloat((parseFloat(client.monthly_rate || 0) * (daysInPeriod / 31)).toFixed(2));
 
     // Check if client has guard_categories (multi-category breakdown)
     if (client.guard_categories) {
       try {
-        const cats = typeof client.guard_categories === 'string' 
-          ? JSON.parse(client.guard_categories) 
+        const cats = typeof client.guard_categories === 'string'
+          ? JSON.parse(client.guard_categories)
           : client.guard_categories;
         if (Array.isArray(cats) && cats.length > 0) {
           const catGuards = cats.reduce((s, c) => s + (parseInt(c.guards_count, 10) || 1), 0);
@@ -199,15 +204,11 @@ router.get('/:id/attendance-summary', async (req, res) => {
             const m = parseFloat(c.monthly_rate) || 0;
             const r = parseFloat(c.rate_per_day) || 0;
             const cnt = parseInt(c.guards_count, 10) || 1;
-            return s + (m > 0 ? m : (r > 0 ? r * cnt * daysInPeriod : 0));
+            return s + (r > 0 ? r * cnt * daysInPeriod : m * (daysInPeriod / 31));
           }, 0);
           if (catTotal > 0) totalContractedAmount = catTotal;
         }
       } catch (_) {}
-    }
-
-    if (totalContractedAmount <= 0 && client.rate_per_day > 0) {
-      totalContractedAmount = parseFloat((client.rate_per_day * guards * daysInPeriod).toFixed(2));
     }
 
     const contractedDutyDays = guards * daysInPeriod;

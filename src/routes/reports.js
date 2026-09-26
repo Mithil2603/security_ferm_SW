@@ -1118,98 +1118,250 @@ router.get('/export-excel', async (req, res) => {
   }
 });
 // GET /api/reports/tds
-router.get('/tds', async (req, res) => {
-  try {
-    const { from_date, to_date } = req.query;
-    let dateFilter = '';
+async function fetchTdsReport(type, from_date, to_date) {
+  if (type === 'vendor') {
+    let dateFilter = 'WHERE ptd.party_type = \'vendor\' AND ptd.tds_amount > 0';
     let params = [];
     if (from_date && to_date) {
-      dateFilter = 'WHERE p.payment_date >= $1 AND p.payment_date <= $2 AND p.tds_deducted > 0';
+      dateFilter += ' AND ptd.tax_period >= $1 AND ptd.tax_period <= $2';
       params = [from_date, to_date];
-    } else {
-      dateFilter = 'WHERE p.tds_deducted > 0';
     }
-
     const result = await query(
-      `SELECT 
-         c.id as client_id, c.name as client_name, c.gst_number,
-         SUM(p.tds_deducted) as total_tds_deducted,
-         SUM(p.amount_paid) as total_amount_paid,
-         COUNT(p.id) as payment_count
-       FROM payments p
-       JOIN invoices i ON p.invoice_id = i.id
-       JOIN clients c ON i.client_id = c.id
+      `SELECT
+         v.id as vendor_id, v.name as vendor_name, v.tax_id as gst_number,
+         SUM(ptd.tds_amount) as total_tds_deducted,
+         SUM(pt.amount) as total_amount_paid,
+         COUNT(ptd.id) as payment_count
+       FROM payment_tax_details ptd
+       JOIN payment_transactions pt ON pt.id = ptd.payment_transaction_id
+       JOIN vendors v ON ptd.party_id = v.id
        ${dateFilter}
-       GROUP BY c.id, c.name, c.gst_number
+       GROUP BY v.id, v.name, v.tax_id
        ORDER BY total_tds_deducted DESC`,
       params
     );
+    return result.rows;
+  }
 
-    res.json({ success: true, data: result.rows });
+  let dateFilter = '';
+  let params = [];
+  if (from_date && to_date) {
+    dateFilter = 'WHERE p.payment_date >= $1 AND p.payment_date <= $2 AND p.tds_deducted > 0';
+    params = [from_date, to_date];
+  } else {
+    dateFilter = 'WHERE p.tds_deducted > 0';
+  }
+
+  const result = await query(
+    `SELECT
+       c.id as client_id, c.name as client_name, c.gst_number,
+       SUM(p.tds_deducted) as total_tds_deducted,
+       SUM(p.amount_paid) as total_amount_paid,
+       COUNT(p.id) as payment_count
+     FROM payments p
+     JOIN invoices i ON p.invoice_id = i.id
+     JOIN clients c ON i.client_id = c.id
+     ${dateFilter}
+     GROUP BY c.id, c.name, c.gst_number
+     ORDER BY total_tds_deducted DESC`,
+    params
+  );
+  return result.rows;
+}
+
+async function fetchGstBifurcation(type, from_date, to_date) {
+  let dateFilter = '';
+  let params = [];
+
+  if (type === 'client') {
+    if (from_date && to_date) {
+      dateFilter = `AND i.invoice_date >= $1 AND i.invoice_date <= $2`;
+      params = [from_date, to_date];
+    }
+    const result = await query(
+      `SELECT
+         c.id as party_id, c.name as party_name, c.gst_number,
+         SUM(i.amount_subtotal) as total_taxable_value,
+         SUM(i.cgst_amount) as total_cgst,
+         SUM(i.sgst_amount) as total_sgst,
+         SUM(i.igst_amount) as total_igst,
+         SUM(i.final_amount) as total_invoice_amount,
+         COUNT(i.id) as invoice_count
+       FROM invoices i
+       JOIN clients c ON i.client_id = c.id
+       WHERE i.status != 'cancelled' ${dateFilter}
+       GROUP BY c.id, c.name, c.gst_number
+       ORDER BY total_taxable_value DESC`,
+      params
+    );
+    return result.rows;
+  }
+
+  if (type === 'vendor') {
+    if (from_date && to_date) {
+      dateFilter = 'AND ptd.tax_period >= $1 AND ptd.tax_period <= $2';
+      params = [from_date, to_date];
+    }
+    const result = await query(
+      `SELECT
+         v.id as party_id, v.name as party_name, v.tax_id as gst_number,
+         SUM(ptd.taxable_value) as total_taxable_value,
+         SUM(ptd.cgst_amount) as total_cgst,
+         SUM(ptd.sgst_amount) as total_sgst,
+         SUM(ptd.igst_amount) as total_igst,
+         SUM(pt.amount) as total_invoice_amount,
+         COUNT(ptd.id) as invoice_count
+       FROM payment_tax_details ptd
+       JOIN payment_transactions pt ON pt.id = ptd.payment_transaction_id
+       JOIN vendors v ON ptd.party_id = v.id
+       WHERE ptd.party_type = 'vendor' AND ptd.total_gst_amount > 0 ${dateFilter}
+       GROUP BY v.id, v.name, v.tax_id
+       ORDER BY total_taxable_value DESC`,
+      params
+    );
+    return result.rows;
+  }
+
+  throw new Error('Invalid type');
+}
+
+router.get('/tds', async (req, res) => {
+  try {
+    const { from_date, to_date, type = 'client' } = req.query;
+    const rows = await fetchTdsReport(type, from_date, to_date);
+    res.json({ success: true, data: rows });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'reports' });
     logger.error('TDS report error:', error);
     res.status(500).json({ success: false, message: 'Failed to generate TDS report' });
   }
 });
+
 // GET /api/reports/gst-bifurcation
 router.get('/gst-bifurcation', async (req, res) => {
   try {
     const { from_date, to_date, type = 'client' } = req.query;
-    let dateFilter = '';
-    let params = [];
-    
-    if (type === 'client') {
-      if (from_date && to_date) {
-        dateFilter = `AND i.invoice_date >= $1 AND i.invoice_date <= $2`;
-        params = [from_date, to_date];
-      }
-      const result = await query(
-        `SELECT 
-           c.id as party_id, c.name as party_name, c.gst_number,
-           SUM(i.amount_subtotal) as total_taxable_value,
-           SUM(i.cgst_amount) as total_cgst,
-           SUM(i.sgst_amount) as total_sgst,
-           SUM(i.igst_amount) as total_igst,
-           SUM(i.final_amount) as total_invoice_amount,
-           COUNT(i.id) as invoice_count
-         FROM invoices i
-         JOIN clients c ON i.client_id = c.id
-         WHERE i.status != 'cancelled' ${dateFilter}
-         GROUP BY c.id, c.name, c.gst_number
-         ORDER BY total_taxable_value DESC`,
-        params
-      );
-      res.json({ success: true, data: result.rows });
-    } else if (type === 'vendor') {
-      if (from_date && to_date) {
-        dateFilter = `AND expense_date >= $1 AND expense_date <= $2`;
-        params = [from_date, to_date];
-      }
-      const result = await query(
-        `SELECT 
-           vendor_name as party_name, 
-           'N/A' as gst_number,
-           SUM(amount) as total_taxable_value,
-           0 as total_cgst,
-           0 as total_sgst,
-           0 as total_igst,
-           SUM(amount) as total_invoice_amount,
-           COUNT(id) as invoice_count
-         FROM expenses
-         WHERE status IN ('approved', 'paid') AND vendor_name IS NOT NULL AND vendor_name != '' ${dateFilter}
-         GROUP BY vendor_name
-         ORDER BY total_taxable_value DESC`,
-        params
-      );
-      res.json({ success: true, data: result.rows });
-    } else {
-      res.status(400).json({ success: false, message: 'Invalid type' });
-    }
+    const rows = await fetchGstBifurcation(type, from_date, to_date);
+    res.json({ success: true, data: rows });
   } catch (error) {
+    if (error.message === 'Invalid type') {
+      return res.status(400).json({ success: false, message: 'Invalid type' });
+    }
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'reports' });
     logger.error('GST bifurcation report error:', error);
     res.status(500).json({ success: false, message: 'Failed to generate GST bifurcation report' });
+  }
+});
+
+// GET /api/reports/gst-bifurcation/pdf and /api/reports/tds/pdf
+router.get('/gst-bifurcation/pdf', async (req, res) => {
+  try {
+    const { from_date, to_date, type = 'client' } = req.query;
+    const rows = await fetchGstBifurcation(type, from_date, to_date);
+    const agencySetting = await query("SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'");
+    const agencySettings = agencySetting.rows.length > 0 ? JSON.parse(agencySetting.rows[0].setting_value) : null;
+
+    let sumTaxable = 0, sumCgst = 0, sumSgst = 0, sumIgst = 0, sumTotal = 0;
+    const tableRows = rows.map((r) => {
+      sumTaxable += parseFloat(r.total_taxable_value) || 0;
+      sumCgst += parseFloat(r.total_cgst) || 0;
+      sumSgst += parseFloat(r.total_sgst) || 0;
+      sumIgst += parseFloat(r.total_igst) || 0;
+      sumTotal += parseFloat(r.total_invoice_amount) || 0;
+      return {
+        party: r.party_name, gst: r.gst_number || 'N/A',
+        taxable: (parseFloat(r.total_taxable_value) || 0).toFixed(2),
+        cgst: (parseFloat(r.total_cgst) || 0).toFixed(2),
+        sgst: (parseFloat(r.total_sgst) || 0).toFixed(2),
+        igst: (parseFloat(r.total_igst) || 0).toFixed(2),
+        total: (parseFloat(r.total_invoice_amount) || 0).toFixed(2),
+      };
+    });
+
+    const { generateTabularReportPDF } = require('../utils/paymentsPdfGenerator');
+    const chunks = [];
+    generateTabularReportPDF(
+      {
+        title: `GST Bifurcation (${type === 'client' ? 'Clients' : 'Vendors'})`,
+        subtitleLines: from_date || to_date ? [`Period: ${from_date || 'Start'} to ${to_date || 'Today'}`] : [],
+        columns: [
+          { key: 'party', label: 'Party', width: 1.8 },
+          { key: 'gst', label: 'GSTIN', width: 1.3 },
+          { key: 'taxable', label: 'Taxable', width: 1, align: 'right' },
+          { key: 'cgst', label: 'CGST', width: 1, align: 'right' },
+          { key: 'sgst', label: 'SGST', width: 1, align: 'right' },
+          { key: 'igst', label: 'IGST', width: 1, align: 'right' },
+          { key: 'total', label: 'Total', width: 1.1, align: 'right' },
+        ],
+        rows: tableRows,
+        totalsRow: { party: 'TOTAL', gst: '', taxable: sumTaxable.toFixed(2), cgst: sumCgst.toFixed(2), sgst: sumSgst.toFixed(2), igst: sumIgst.toFixed(2), total: sumTotal.toFixed(2) },
+        agencySettings,
+      },
+      (chunk) => chunks.push(chunk),
+      () => {
+        const pdfBuffer = Buffer.concat(chunks);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Length', pdfBuffer.length);
+        res.setHeader('Content-Disposition', `attachment; filename="GST-Bifurcation-${type}.pdf"`);
+        res.end(pdfBuffer);
+      }
+    );
+  } catch (error) {
+    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'reports' });
+    logger.error('GST bifurcation PDF error:', error);
+    if (!res.headersSent) res.status(500).json({ success: false, message: 'Failed to generate PDF' });
+  }
+});
+
+router.get('/tds/pdf', async (req, res) => {
+  try {
+    const { from_date, to_date, type = 'client' } = req.query;
+    const rows = await fetchTdsReport(type, from_date, to_date);
+    const agencySetting = await query("SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'");
+    const agencySettings = agencySetting.rows.length > 0 ? JSON.parse(agencySetting.rows[0].setting_value) : null;
+
+    let sumPaid = 0, sumTds = 0;
+    const tableRows = rows.map((r) => {
+      sumPaid += parseFloat(r.total_amount_paid) || 0;
+      sumTds += parseFloat(r.total_tds_deducted) || 0;
+      return {
+        party: r.client_name || r.vendor_name, gst: r.gst_number || 'N/A',
+        paid: (parseFloat(r.total_amount_paid) || 0).toFixed(2),
+        tds: (parseFloat(r.total_tds_deducted) || 0).toFixed(2),
+        count: r.payment_count,
+      };
+    });
+
+    const { generateTabularReportPDF } = require('../utils/paymentsPdfGenerator');
+    const chunks = [];
+    generateTabularReportPDF(
+      {
+        title: `TDS ${type === 'client' ? 'Receivable' : 'Deducted'} Report (${type === 'client' ? 'Clients' : 'Vendors'})`,
+        subtitleLines: from_date || to_date ? [`Period: ${from_date || 'Start'} to ${to_date || 'Today'}`] : [],
+        columns: [
+          { key: 'party', label: 'Party', width: 2 },
+          { key: 'gst', label: 'GSTIN', width: 1.5 },
+          { key: 'paid', label: 'Amount Paid', width: 1.2, align: 'right' },
+          { key: 'tds', label: 'TDS', width: 1, align: 'right' },
+          { key: 'count', label: 'Payments', width: 0.8, align: 'right' },
+        ],
+        rows: tableRows,
+        totalsRow: { party: 'TOTAL', gst: '', paid: sumPaid.toFixed(2), tds: sumTds.toFixed(2), count: '' },
+        agencySettings,
+      },
+      (chunk) => chunks.push(chunk),
+      () => {
+        const pdfBuffer = Buffer.concat(chunks);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Length', pdfBuffer.length);
+        res.setHeader('Content-Disposition', `attachment; filename="TDS-Report-${type}.pdf"`);
+        res.end(pdfBuffer);
+      }
+    );
+  } catch (error) {
+    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'reports' });
+    logger.error('TDS PDF error:', error);
+    if (!res.headersSent) res.status(500).json({ success: false, message: 'Failed to generate PDF' });
   }
 });
 // --- DRILL-DOWN ENDPOINTS ---

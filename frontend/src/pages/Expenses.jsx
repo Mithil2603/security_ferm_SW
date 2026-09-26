@@ -24,7 +24,11 @@ const emptyForm = {
   payment_method: 'cash',
   vendor_id: '',
   receipt_number: '',
-  notes: ''
+  notes: '',
+  tax_type: 'none',
+  tax_rate: '',
+  is_rcm_applicable: false,
+  tds_rate: '',
 };
 
 export default function Expenses() {
@@ -663,6 +667,41 @@ export default function Expenses() {
                   </select>
                   <input type="text" name="receipt_number" value={formData.receipt_number} onChange={handleInputChange} className={inputCls} placeholder="Receipt / Bill No." />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">GST on this Bill (Optional)</label>
+                <div className="grid grid-cols-3 gap-3">
+                  <select name="tax_type" value={formData.tax_type} onChange={handleInputChange} className={inputCls}>
+                    <option value="none">No GST</option>
+                    <option value="cgst_sgst">CGST + SGST</option>
+                    <option value="igst">IGST</option>
+                  </select>
+                  <input
+                    type="number" min="0" max="28" step="0.1" name="tax_rate"
+                    value={formData.tax_rate} onChange={handleInputChange}
+                    disabled={formData.tax_type === 'none'}
+                    className={`${inputCls} disabled:opacity-50`} placeholder="GST rate %"
+                  />
+                  <label className="flex items-center gap-2 px-1">
+                    <input
+                      type="checkbox" checked={formData.is_rcm_applicable}
+                      onChange={e => setFormData(prev => ({ ...prev, is_rcm_applicable: e.target.checked }))}
+                    />
+                    <span className="text-xs font-medium text-slate-700">RCM Applicable</span>
+                  </label>
+                </div>
+                <p className="text-xs text-slate-400 mt-1">Bill amount above is treated as GST-inclusive. Used by the Payments module to split tax automatically when this bill is paid.</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">TDS Rate on this Bill (Optional)</label>
+                <input
+                  type="number" min="0" max="30" step="0.1" name="tds_rate"
+                  value={formData.tds_rate} onChange={handleInputChange}
+                  className={inputCls} placeholder="e.g. 2 (for 2%)"
+                />
+                <p className="text-xs text-slate-400 mt-1">If this vendor's TDS rate is already known, set it here — the Payments module will auto-calculate and lock TDS when this bill is paid, instead of asking for it manually.</p>
               </div>
 
               <div>

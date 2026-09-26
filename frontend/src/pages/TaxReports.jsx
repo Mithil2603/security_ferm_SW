@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { IndianRupee, Download, Building, Users, Wallet, Printer } from 'lucide-react';
+import { IndianRupee, Download, Building, Users, Wallet, Printer, FileDown } from 'lucide-react';
 import api from '../services/api';
 import * as XLSX from 'xlsx';
+import { getApiBaseUrl } from '../utils/apiUrl';
 
 export default function TaxReports() {
   const [activeTab, setActiveTab] = useState('gst-clients'); // 'gst-clients', 'gst-vendors', 'tds'
@@ -27,6 +28,10 @@ export default function TaxReports() {
         params.append('type', 'vendor');
         res = await api.get(`/reports/gst-bifurcation?${params.toString()}`);
       } else if (activeTab === 'tds') {
+        params.append('type', 'client');
+        res = await api.get(`/reports/tds?${params.toString()}`);
+      } else if (activeTab === 'tds-vendors') {
+        params.append('type', 'vendor');
         res = await api.get(`/reports/tds?${params.toString()}`);
       }
 
@@ -42,6 +47,22 @@ export default function TaxReports() {
   useEffect(() => {
     fetchData();
   }, [activeTab, dateRange.from_date, dateRange.to_date]);
+
+  const handleDownloadPdf = () => {
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token');
+    const params = new URLSearchParams();
+    if (dateRange.from_date) params.set('from_date', dateRange.from_date);
+    if (dateRange.to_date) params.set('to_date', dateRange.to_date);
+    if (token) params.set('token', token);
+
+    let endpoint = '';
+    if (activeTab === 'gst-clients') { params.set('type', 'client'); endpoint = 'gst-bifurcation'; }
+    else if (activeTab === 'gst-vendors') { params.set('type', 'vendor'); endpoint = 'gst-bifurcation'; }
+    else if (activeTab === 'tds') { params.set('type', 'client'); endpoint = 'tds'; }
+    else if (activeTab === 'tds-vendors') { params.set('type', 'vendor'); endpoint = 'tds'; }
+
+    window.open(`${getApiBaseUrl()}/reports/${endpoint}/pdf?${params.toString()}`, '_blank');
+  };
 
   const handleExport = () => {
     const wb = XLSX.utils.book_new();
@@ -80,10 +101,10 @@ export default function TaxReports() {
       const sumTotal = data.reduce((s, r) => s + (r.total_invoice_amount || 0), 0);
       wsData.push(['Grand Total', '', sumTaxable, sumCgst, sumSgst, sumIgst, sumTotal, '']);
     } else {
-      wsData.push(['Client Name', 'GSTIN', 'Total Amount Paid', 'Total TDS Deducted', 'Payment Count']);
+      wsData.push(['Party Name', 'GSTIN', 'Total Amount Paid', 'Total TDS Deducted', 'Payment Count']);
       data.forEach(row => {
         wsData.push([
-          row.client_name,
+          row.client_name || row.vendor_name,
           row.gst_number || 'N/A',
           row.total_amount_paid || 0,
           row.total_tds_deducted || 0,
@@ -127,7 +148,8 @@ export default function TaxReports() {
           <p className="text-slate-500 mt-1">
             {activeTab === 'gst-clients' && 'GST Bifurcation (Clients)'}
             {activeTab === 'gst-vendors' && 'GST Bifurcation (Vendors)'}
-            {activeTab === 'tds' && 'TDS Receivable Report'}
+            {activeTab === 'tds' && 'TDS Receivable Report (Clients)'}
+            {activeTab === 'tds-vendors' && 'TDS Deducted Report (Vendors)'}
             {' '}({dateRange.from_date} to {dateRange.to_date})
           </p>
         </div>
@@ -154,6 +176,13 @@ export default function TaxReports() {
             className="px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition-colors flex items-center gap-2 disabled:opacity-50 font-medium"
           >
             <Download className="w-4 h-4" /> Export
+          </button>
+          <button
+            onClick={handleDownloadPdf}
+            disabled={loading || data.length === 0}
+            className="px-4 py-2 bg-rose-700 text-white rounded-lg hover:bg-rose-800 transition-colors flex items-center gap-2 disabled:opacity-50 font-medium"
+          >
+            <FileDown className="w-4 h-4" /> PDF
           </button>
           <button
             onClick={() => window.print()}
@@ -197,7 +226,18 @@ export default function TaxReports() {
             }`}
           >
             <Wallet className="w-4 h-4" />
-            TDS Receivable
+            TDS Receivable (Clients)
+          </button>
+          <button
+            onClick={() => setActiveTab('tds-vendors')}
+            className={`px-4 py-2.5 rounded-xl font-medium transition-all flex items-center gap-2 whitespace-nowrap ${
+              activeTab === 'tds-vendors'
+                ? 'bg-white text-teal-700 shadow-sm border border-slate-200/60'
+                : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100/80'
+            }`}
+          >
+            <Wallet className="w-4 h-4" />
+            TDS Deducted (Vendors)
           </button>
         </div>
 
@@ -230,7 +270,7 @@ export default function TaxReports() {
                     </tr>
                   ) : (
                     <tr>
-                      <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider print:text-black print:px-2">Client Name</th>
+                      <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider print:text-black print:px-2">{activeTab === 'tds-vendors' ? 'Vendor Name' : 'Client Name'}</th>
                       <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider print:text-black print:px-2">GSTIN</th>
                       <th className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider print:text-black print:px-2">Total Paid</th>
                       <th className="px-6 py-4 text-right text-xs font-bold text-teal-600 uppercase tracking-wider print:text-black print:px-2">TDS Deducted</th>
@@ -253,7 +293,7 @@ export default function TaxReports() {
                         </>
                       ) : (
                         <>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-800 print:px-2 print:py-2">{row.client_name}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-800 print:px-2 print:py-2">{row.client_name || row.vendor_name}</td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 font-mono print:px-2 print:py-2">{row.gst_number || 'N/A'}</td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600 text-right print:px-2 print:py-2">₹{(row.total_amount_paid || 0).toLocaleString()}</td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-teal-600 text-right print:px-2 print:py-2">₹{(row.total_tds_deducted || 0).toLocaleString()}</td>

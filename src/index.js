@@ -168,6 +168,7 @@ app.use('/api/errors', require('./routes/errors'));
 app.use('/api/statements', require('./routes/statements'));
 app.use('/api/pl-account', require('./routes/pl-account'));
 app.use('/api/vouchers', require('./routes/vouchers'));
+app.use('/api/payments', require('./routes/payments'));
 app.use('/api/bank-accounts', require('./routes/bank-accounts'));
 app.use('/api/balance-sheet', require('./routes/balance-sheet'));
 app.use('/api/bank-reconciliation', require('./routes/bank-reconciliation'));

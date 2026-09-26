@@ -10,6 +10,43 @@ import BillViewModal from '../components/BillViewModal';
 import { getApiBaseUrl } from '../utils/apiUrl';
 import { toast, confirmDialog } from '../context/ToastContext';
 
+// Real inclusive day count between two dates (e.g. 01-08 to 30-09 = 61 days),
+// used to scale bill items to the actual selected billing period instead of
+// always assuming a fixed 31-day month.
+const daysBetweenInclusive = (start, end) => {
+  if (!start || !end) return 31;
+  const s = new Date(`${start}T00:00:00`);
+  const e = new Date(`${end}T00:00:00`);
+  const diff = Math.ceil((e - s) / (1000 * 60 * 60 * 24)) + 1;
+  return diff > 0 ? diff : 31;
+};
+
+// Last calendar day of the month containing `dateStr` (yyyy-MM-dd), e.g.
+// 2026-08-15 -> 2026-08-31. Regular (monthly) bills always run start-of-pick
+// to end of that same month — only Event bills allow a free-form end date.
+const endOfSameMonth = (dateStr) => {
+  if (!dateStr) return dateStr;
+  const d = new Date(`${dateStr}T00:00:00`);
+  const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  return format(end, 'yyyy-MM-dd');
+};
+
+// Re-derive Total Day / Amount for every bill item from the current billing
+// period length, keeping each row's guards_count and rate_per_day as-is.
+const rescaleBillItemsToPeriod = (items, start, end) => {
+  const days = daysBetweenInclusive(start, end);
+  return (items || []).map(it => {
+    const cnt = parseInt(it.guards_count) || 1;
+    const rate = parseFloat(it.rate_per_day) || 0;
+    const totalDays = cnt * days;
+    return {
+      ...it,
+      total_duty_days: totalDays,
+      amount: rate > 0 ? parseFloat((rate * totalDays).toFixed(2)) : it.amount
+    };
+  });
+};
+
 export default function Invoices() {
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -63,7 +100,8 @@ export default function Invoices() {
         }
       } else if (field === 'guards_count') {
         const cnt = parseInt(value) || 1;
-        row.total_duty_days = cnt * 31;
+        const periodDays = daysBetweenInclusive(prev.billing_period_start, prev.billing_period_end);
+        row.total_duty_days = cnt * periodDays;
         const r = parseFloat(row.rate_per_day) || 0;
         if (r > 0) {
           row.amount = parseFloat((r * row.total_duty_days).toFixed(2));
@@ -88,6 +126,7 @@ export default function Invoices() {
   const handleAddBillItem = () => {
     setInvoiceForm(prev => {
       const current = prev.bill_items || [];
+      const periodDays = daysBetweenInclusive(prev.billing_period_start, prev.billing_period_end);
       const updated = [
         ...current,
         {
@@ -96,7 +135,7 @@ export default function Invoices() {
           guards_count: 1,
           rate_per_day: '',
           hsn_code: '998525',
-          total_duty_days: 31,
+          total_duty_days: periodDays,
           amount: ''
         }
       ];
@@ -262,10 +301,16 @@ export default function Invoices() {
     const start = format(new Date(d.getFullYear(), d.getMonth(), 1), 'yyyy-MM-dd');
     const end = format(new Date(d.getFullYear(), d.getMonth() + 1, 0), 'yyyy-MM-dd');
     setInvoiceForm(prev => {
+      const rescaled = rescaleBillItemsToPeriod(prev.bill_items, start, end);
+      const totalAmt = rescaled.reduce((s, it) => s + (parseFloat(it.amount) || 0), 0);
+      const totalDays = rescaled.reduce((s, it) => s + (parseFloat(it.total_duty_days) || 0), 0);
       const next = {
         ...prev,
         billing_period_start: start,
-        billing_period_end: end
+        billing_period_end: end,
+        bill_items: rescaled,
+        amount_subtotal: totalAmt > 0 ? totalAmt.toFixed(2) : prev.amount_subtotal,
+        total_duty_days: totalDays || prev.total_duty_days
       };
       if (next.invoice_type === 'regular' && next.client_id) {
         fetchAttendanceSummary(next.client_id, start, end);
@@ -706,7 +751,8 @@ export default function Invoices() {
                     const cid = e.target.value;
                     const selected = clients.find(c => String(c.id) === String(cid));
                     const isEvent = selected?.client_type === 'event';
-                    
+                    const periodDays = daysBetweenInclusive(invoiceForm.billing_period_start, invoiceForm.billing_period_end);
+
                     let items = [];
                     if (selected?.guard_categories) {
                       try {
@@ -715,8 +761,9 @@ export default function Invoices() {
                           items = cats.map(c => {
                             const cnt = parseInt(c.guards_count) || 1;
                             const mRate = parseFloat(c.monthly_rate) || 0;
-                            const dRate = parseFloat(c.rate_per_day) || (mRate > 0 ? parseFloat((mRate / 31).toFixed(2)) : 0);
-                            const dutyDays = cnt * 31;
+                            const ownRate = parseFloat(c.rate_per_day) || 0;
+                            const dRate = ownRate > 0 ? ownRate : (mRate > 0 ? parseFloat((mRate / 31).toFixed(2)) : 0);
+                            const dutyDays = cnt * periodDays;
                             const amt = dRate > 0 ? parseFloat((dRate * dutyDays).toFixed(2)) : mRate;
                             return {
                               particular: c.role || 'Security Guard',
@@ -735,7 +782,7 @@ export default function Invoices() {
                     const guardsCount = selected?.employee_count || 1;
                     const mRate = selected?.monthly_rate || '';
                     const dRate = selected?.rate_per_day || (mRate ? (parseFloat(mRate) / 31).toFixed(2) : '');
-                    const dutyDays = guardsCount * 31;
+                    const dutyDays = guardsCount * periodDays;
 
                     if (items.length === 0) {
                       items = [{
@@ -951,9 +998,9 @@ export default function Invoices() {
                         <tr>
                           <th className="p-2 text-center w-10">No.</th>
                           <th className="p-2 min-w-[150px]">Particular</th>
-                          <th className="p-2 text-center min-w-[100px]">Per Day Rate (₹)</th>
+                          <th className="p-2 text-center min-w-[100px]">Monthly Rate (₹)</th>
                           <th className="p-2 text-center w-16">No. of</th>
-                          <th className="p-2 text-center min-w-[90px]">Rate (Daily ₹)</th>
+                          <th className="p-2 text-center min-w-[90px]">Per Day Rate (₹)</th>
                           <th className="p-2 text-center w-20">HSN</th>
                           <th className="p-2 text-center min-w-[85px]">Total Day</th>
                           <th className="p-2 text-right min-w-[100px]">Amount (₹)</th>
@@ -998,7 +1045,7 @@ export default function Invoices() {
                                 value={item.monthly_rate || ''}
                                 onChange={(e) => handleBillItemChange(idx, 'monthly_rate', e.target.value)}
                                 placeholder="23000"
-                                title="Monthly rate (Per Day Rate column)"
+                                title="Contracted rate per guard, per month"
                                 className="w-full px-2 py-1 text-xs text-center border border-slate-200 rounded focus:ring-1 focus:ring-teal-500"
                               />
                             </td>
@@ -1019,7 +1066,8 @@ export default function Invoices() {
                                 step="0.01"
                                 value={item.rate_per_day || ''}
                                 onChange={(e) => handleBillItemChange(idx, 'rate_per_day', e.target.value)}
-                                placeholder="742.00"
+                                placeholder="0.00"
+                                title="Rate per guard, per day — used with Total Day to calculate Amount"
                                 className="w-full px-2 py-1 text-xs text-center border border-slate-200 rounded focus:ring-1 focus:ring-teal-500"
                               />
                             </td>
@@ -1086,7 +1134,7 @@ export default function Invoices() {
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="block text-sm font-medium text-slate-700">
-                    {invoiceForm.invoice_type === 'event' ? 'Event Duration *' : 'Billing Period *'}
+                    {invoiceForm.invoice_type === 'event' ? 'Event Duration *' : 'Billing Month *'}
                   </label>
                   {invoiceForm.invoice_type !== 'event' && (
                     <div className="flex gap-1">
@@ -1095,40 +1143,106 @@ export default function Invoices() {
                     </div>
                   )}
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <span className="text-[11px] text-slate-500 mb-0.5 block">Start Date</span>
-                    <input 
-                      required 
-                      type="date" 
-                      value={invoiceForm.billing_period_start || ''} 
-                      onChange={(e) => {
-                        const start = e.target.value;
-                        setInvoiceForm(prev => ({ ...prev, billing_period_start: start }));
-                        if (invoiceForm.invoice_type === 'regular' && invoiceForm.client_id && invoiceForm.billing_period_end) {
-                          fetchAttendanceSummary(invoiceForm.client_id, start, invoiceForm.billing_period_end);
-                        }
-                      }} 
-                      className={inputCls} 
-                    />
+                {invoiceForm.invoice_type === 'event' ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <span className="text-[11px] text-slate-500 mb-0.5 block">Start Date</span>
+                      <input
+                        required
+                        type="date"
+                        value={invoiceForm.billing_period_start || ''}
+                        onChange={(e) => {
+                          const start = e.target.value;
+                          setInvoiceForm(prev => {
+                            const rescaled = rescaleBillItemsToPeriod(prev.bill_items, start, prev.billing_period_end);
+                            const totalAmt = rescaled.reduce((s, it) => s + (parseFloat(it.amount) || 0), 0);
+                            const totalDays = rescaled.reduce((s, it) => s + (parseFloat(it.total_duty_days) || 0), 0);
+                            return {
+                              ...prev,
+                              billing_period_start: start,
+                              bill_items: rescaled,
+                              amount_subtotal: totalAmt > 0 ? totalAmt.toFixed(2) : prev.amount_subtotal,
+                              total_duty_days: totalDays || prev.total_duty_days
+                            };
+                          });
+                        }}
+                        className={inputCls}
+                      />
+                    </div>
+                    <div>
+                      <span className="text-[11px] text-slate-500 mb-0.5 block">End Date</span>
+                      <input
+                        required
+                        type="date"
+                        value={invoiceForm.billing_period_end || ''}
+                        onChange={(e) => {
+                          const end = e.target.value;
+                          setInvoiceForm(prev => {
+                            const rescaled = rescaleBillItemsToPeriod(prev.bill_items, prev.billing_period_start, end);
+                            const totalAmt = rescaled.reduce((s, it) => s + (parseFloat(it.amount) || 0), 0);
+                            const totalDays = rescaled.reduce((s, it) => s + (parseFloat(it.total_duty_days) || 0), 0);
+                            return {
+                              ...prev,
+                              billing_period_end: end,
+                              bill_items: rescaled,
+                              amount_subtotal: totalAmt > 0 ? totalAmt.toFixed(2) : prev.amount_subtotal,
+                              total_duty_days: totalDays || prev.total_duty_days
+                            };
+                          });
+                        }}
+                        className={inputCls}
+                      />
+                    </div>
                   </div>
+                ) : (
                   <div>
-                    <span className="text-[11px] text-slate-500 mb-0.5 block">End Date</span>
-                    <input 
-                      required 
-                      type="date" 
-                      value={invoiceForm.billing_period_end || ''} 
-                      onChange={(e) => {
-                        const end = e.target.value;
-                        setInvoiceForm(prev => ({ ...prev, billing_period_end: end }));
-                        if (invoiceForm.invoice_type === 'regular' && invoiceForm.client_id && invoiceForm.billing_period_start) {
-                          fetchAttendanceSummary(invoiceForm.client_id, invoiceForm.billing_period_start, end);
-                        }
-                      }} 
-                      className={inputCls} 
-                    />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <span className="text-[11px] text-slate-500 mb-0.5 block">Start Date</span>
+                        <input
+                          required
+                          type="date"
+                          value={invoiceForm.billing_period_start || ''}
+                          onChange={(e) => {
+                            const start = e.target.value;
+                            const end = endOfSameMonth(start);
+                            setInvoiceForm(prev => {
+                              const rescaled = rescaleBillItemsToPeriod(prev.bill_items, start, end);
+                              const totalAmt = rescaled.reduce((s, it) => s + (parseFloat(it.amount) || 0), 0);
+                              const totalDays = rescaled.reduce((s, it) => s + (parseFloat(it.total_duty_days) || 0), 0);
+                              return {
+                                ...prev,
+                                billing_period_start: start,
+                                billing_period_end: end,
+                                bill_items: rescaled,
+                                amount_subtotal: totalAmt > 0 ? totalAmt.toFixed(2) : prev.amount_subtotal,
+                                total_duty_days: totalDays || prev.total_duty_days
+                              };
+                            });
+                            if (invoiceForm.client_id) {
+                              fetchAttendanceSummary(invoiceForm.client_id, start, end);
+                            }
+                          }}
+                          className={inputCls}
+                        />
+                      </div>
+                      <div>
+                        <span className="text-[11px] text-slate-500 mb-0.5 block">End Date (auto, last day of month)</span>
+                        <input
+                          disabled
+                          type="date"
+                          value={invoiceForm.billing_period_end || ''}
+                          className={`${inputCls} bg-slate-100 text-slate-500 cursor-not-allowed`}
+                        />
+                      </div>
+                    </div>
+                    {invoiceForm.billing_period_start && invoiceForm.billing_period_end && (
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Bill covers {format(new Date(`${invoiceForm.billing_period_start}T00:00:00`), 'dd MMM yyyy')} – {format(new Date(`${invoiceForm.billing_period_end}T00:00:00`), 'dd MMM yyyy')}
+                      </p>
+                    )}
                   </div>
-                </div>
+                )}
               </div>
 
               {/* Guard Attendance & Absence Deductions Card */}
@@ -1350,14 +1464,29 @@ export default function Invoices() {
 
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Discount (₹)</label>
-                <input 
-                  type="number" 
-                  min="0" 
-                  step="0.01" 
-                  value={invoiceForm.discount_amount} 
-                  onChange={(e) => setInvoiceForm(prev => ({ ...prev, discount_amount: e.target.value }))} 
-                  className={inputCls} 
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={invoiceForm.discount_amount}
+                  onChange={(e) => setInvoiceForm(prev => ({ ...prev, discount_amount: e.target.value }))}
+                  className={inputCls}
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">TDS Rate on this Bill (%) — Optional</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="30"
+                  step="0.1"
+                  value={invoiceForm.tds_rate || ''}
+                  onChange={(e) => setInvoiceForm(prev => ({ ...prev, tds_rate: e.target.value }))}
+                  className={inputCls}
+                  placeholder="e.g. 2 (for 2%)"
+                />
+                <p className="text-xs text-slate-400 mt-1">If this client's TDS rate is already known, the Payments module will auto-calculate and lock TDS when this invoice is paid.</p>
               </div>
 
               <div className="flex items-center p-3 bg-slate-50 rounded-lg border border-slate-200">

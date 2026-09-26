@@ -5,35 +5,10 @@ const { query } = require('../database/connection');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const Joi = require('joi');
 const { logError } = require('../utils/errorLogger');
+const { VOUCHER_PREFIXES, VOUCHER_TYPE_LABELS, getFinancialYear, getNextVoucherNumber } = require('../utils/voucherNumbering');
 
 router.use(authMiddleware);
 router.use(requirePermission('manage_vouchers', 'view_vouchers', 'create_vouchers', 'edit_vouchers', 'delete_vouchers', 'approve_vouchers', 'manage_payroll', 'manage_expenses'));
-
-// ─── Voucher Type Prefixes ──────────────────────────────────────────────────
-const VOUCHER_PREFIXES = {
-  cash_payment: 'CP',
-  cash_receipt: 'CR',
-  bank_payment: 'BP',
-  bank_receipt: 'BR',
-  journal: 'JV',
-  contra: 'CT',
-  debit_note: 'DN',
-  credit_note: 'CN',
-  // Common aliases
-  payment: 'BP',      // alias for bank_payment
-  receipt: 'BR',      // alias for bank_receipt
-};
-
-const VOUCHER_TYPE_LABELS = {
-  cash_payment: 'Cash Payment',
-  cash_receipt: 'Cash Receipt',
-  bank_payment: 'Bank Payment',
-  bank_receipt: 'Bank Receipt',
-  journal: 'Journal Entry',
-  contra: 'Contra',
-  debit_note: 'Debit Note',
-  credit_note: 'Credit Note'
-};
 
 // ─── Validation ─────────────────────────────────────────────────────────────
 const voucherSchema = Joi.object({
@@ -58,47 +33,6 @@ const voucherSchema = Joi.object({
   transaction_ref: Joi.string().max(100).allow('', null).optional(),
   category: Joi.string().max(100).allow('', null).optional()
 });
-
-// ─── Helper: Get Indian Financial Year string ───────────────────────────────
-function getFinancialYear(dateStr) {
-  const d = new Date(dateStr);
-  const month = d.getMonth(); // 0-indexed
-  const year = d.getFullYear();
-  if (month >= 3) {
-    return `${year}-${String(year + 1).slice(2)}`;
-  }
-  return `${year - 1}-${String(year).slice(2)}`;
-}
-
-// ─── Helper: Generate next voucher number ───────────────────────────────────
-async function getNextVoucherNumber(voucherType, voucherDate) {
-  const fy = getFinancialYear(voucherDate);
-  const prefix = VOUCHER_PREFIXES[voucherType];
-
-  // Upsert the counter
-  await query(`
-    INSERT INTO voucher_counters (voucher_type, financial_year, last_number)
-    VALUES ($1, $2, 0)
-    ON CONFLICT DO NOTHING
-  `, [voucherType, fy]);
-
-  // Increment
-  await query(`
-    UPDATE voucher_counters
-    SET last_number = last_number + 1
-    WHERE voucher_type = $1 AND financial_year = $2
-  `, [voucherType, fy]);
-
-  // Return
-  const result = await query(`
-    SELECT last_number
-    FROM voucher_counters
-    WHERE voucher_type = $1 AND financial_year = $2
-  `, [voucherType, fy]);
-
-  const num = result.rows[0].last_number;
-  return `${prefix}/${fy}/${String(num).padStart(4, '0')}`;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/vouchers — List vouchers with filters

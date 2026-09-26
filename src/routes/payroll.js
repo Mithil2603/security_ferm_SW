@@ -9,6 +9,7 @@ const { generatePayslipPDF } = require('../utils/payslipGenerator');
 const { saveStatement } = require('../utils/statementSaver');
 const { logError } = require('../utils/errorLogger');
 const { resolvePfPercentage } = require('../services/payroll/statutory');
+const { recordSalaryPayment } = require('../services/payments/paymentTransactionService');
 
 router.use(authMiddleware);
 router.use(requirePermission('manage_payroll'));
@@ -293,16 +294,23 @@ router.post('/calculate', validate(schemas.generatePayroll), async (req, res) =>
 // PUT /api/payroll/:id/mark-paid
 router.put('/:id/mark-paid', async (req, res) => {
   try {
-    const { payment_date, payment_method, transaction_reference } = req.body;
-    const result = await query(
-      `UPDATE payroll SET payment_status='paid', payment_date=$1, payment_method=$2, 
-        transaction_reference=$3, updated_at=CURRENT_TIMESTAMP
-       WHERE id=$4`,
-      [payment_date || new Date().toISOString().split('T')[0], payment_method, transaction_reference, req.params.id]
-    );
-    if (result.rowCount === 0) {
-      return res.status(404).json({ success: false, message: 'Payroll record not found' });
+    const { payment_date, payment_method, transaction_reference, bank_account_id, attachment_url } = req.body;
+
+    try {
+      await recordSalaryPayment(
+        {
+          reference_type: 'payroll', reference_id: req.params.id,
+          payment_date, payment_method, transaction_reference, bank_account_id, attachment_url
+        },
+        req.user.userId
+      );
+    } catch (serviceErr) {
+      if (serviceErr.message === 'Payroll record not found') {
+        return res.status(404).json({ success: false, message: serviceErr.message });
+      }
+      return res.status(400).json({ success: false, message: serviceErr.message });
     }
+
     const updated = await query(
       `SELECT p.*, e.full_name as employee_name, e.employee_id as emp_id
        FROM payroll p JOIN employees e ON p.employee_id = e.id

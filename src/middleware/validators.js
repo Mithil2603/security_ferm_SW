@@ -206,6 +206,7 @@ const createInvoiceSchema = Joi.object({
   total_duty_days: Joi.number().min(0).optional().allow('', null).label('Total duty days'),
   hsn_code: Joi.string().max(20).optional().allow('', null).label('HSN code'),
   bill_items: Joi.any().optional().allow('', null).label('Bill items'),
+  tds_rate: Joi.number().min(0).max(100).optional().allow(null, '').label('TDS rate (%)'),
   notes: Joi.string().max(2000).optional().allow('', null).label('Notes'),
 });
 
@@ -240,6 +241,8 @@ const recordPaymentSchema = Joi.object({
   transaction_reference: Joi.string().max(200).optional().allow('', null).label('Transaction reference'),
   reference_number: Joi.string().max(200).optional().allow('', null).label('Reference number (alias)'),
   notes: Joi.string().max(1000).optional().allow('', null).label('Notes'),
+  bank_account_id: Joi.number().integer().positive().optional().allow(null, '').label('Bank account'),
+  attachment_url: Joi.string().max(500).optional().allow('', null).label('Attachment'),
 });
 
 // POST /api/expenses
@@ -263,6 +266,10 @@ const createExpenseSchema = Joi.object({
   receipt_number: Joi.string().max(100).optional().allow('', null).label('Receipt number'),
   invoice_reference: Joi.string().max(200).optional().allow('', null).label('Invoice reference'),
   notes: Joi.string().max(2000).optional().allow('', null).label('Notes'),
+  tax_type: Joi.string().valid('none', 'cgst_sgst', 'igst').optional().allow('', null).label('Tax type'),
+  tax_rate: Joi.number().min(0).max(100).optional().allow(null, '').label('Tax rate (%)'),
+  is_rcm_applicable: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false')).optional().label('RCM applicable'),
+  tds_rate: Joi.number().min(0).max(100).optional().allow(null, '').label('TDS rate (%)'),
 });
 
 // POST /api/attendance

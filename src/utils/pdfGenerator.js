@@ -90,9 +90,9 @@ function generateInvoicePDF(invoice, client, agencySettings, dataCallback, endCa
   const cols = [
     { name: 'No.', w: 28, align: 'center' },
     { name: 'Particular', w: 140, align: 'center' },
-    { name: 'Per Day\nRate', w: 62, align: 'center' },
+    { name: 'Monthly\nRate', w: 62, align: 'center' },
     { name: 'No.of', w: 36, align: 'center' },
-    { name: 'Rate', w: 49, align: 'center' },
+    { name: 'Per Day\nRate', w: 49, align: 'center' },
     { name: 'HSN\nCODE', w: 50, align: 'center' },
     { name: 'Total\nDay', w: 50, align: 'center' },
     { name: 'Amount', w: 100, align: 'center' }
@@ -413,7 +413,7 @@ function generateInvoicePDF(invoice, client, agencySettings, dataCallback, endCa
       doc.text(it.particular || 'Security Guard', cellX + 4, rowY + 5, { width: cols[1].w - 8, align: 'left' });
       cellX += cols[1].w;
 
-      // Col 3: Per Day Rate (Monthly rate)
+      // Col 3: Monthly Rate
       const mRate = parseFloat(it.monthly_rate);
       const mStr = mRate > 0 ? `${Math.round(mRate)}/-` : '';
       doc.text(mStr, cellX, rowY + 5, { width: cols[2].w, align: 'center' });
@@ -424,7 +424,7 @@ function generateInvoicePDF(invoice, client, agencySettings, dataCallback, endCa
       doc.text(String(gCount).padStart(2, '0'), cellX, rowY + 5, { width: cols[3].w, align: 'center' });
       cellX += cols[3].w;
 
-      // Col 5: Rate
+      // Col 5: Per Day Rate
       const dRate = parseFloat(it.rate_per_day);
       const rStr = dRate > 0 ? dRate.toFixed(2) : '';
       drawFittedText(doc, rStr, cellX, rowY + 5, cols[4].w, 8.5, 6.5, { align: 'center' });

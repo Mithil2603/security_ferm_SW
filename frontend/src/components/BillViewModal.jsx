@@ -278,11 +278,14 @@ export default function BillViewModal({ isOpen, onClose, invoice, onEdit, onCanc
           <div className="w-[5%] p-1.5 border-r border-black flex items-center justify-center">No.</div>
           <div className="w-[27%] p-1.5 border-r border-black flex items-center justify-center">Particular</div>
           <div className="w-[12%] p-1.5 border-r border-black flex flex-col justify-center leading-tight">
-            <span>Per Day</span>
+            <span>Monthly</span>
             <span>Rate</span>
           </div>
           <div className="w-[8%] p-1.5 border-r border-black flex items-center justify-center">No.of</div>
-          <div className="w-[10%] p-1.5 border-r border-black flex items-center justify-center">Rate</div>
+          <div className="w-[10%] p-1.5 border-r border-black flex flex-col justify-center leading-tight">
+            <span>Per Day</span>
+            <span>Rate</span>
+          </div>
           <div className="w-[11%] p-1.5 border-r border-black flex flex-col justify-center leading-tight">
             <span>HSN</span>
             <span>CODE</span>

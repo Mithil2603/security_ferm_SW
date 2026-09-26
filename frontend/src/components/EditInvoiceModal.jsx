@@ -328,9 +328,9 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
                   <tr>
                     <th className="p-2 text-center w-10">No.</th>
                     <th className="p-2 min-w-[140px]">Particular</th>
-                    <th className="p-2 text-center min-w-[100px]">Per Day Rate (₹)</th>
+                    <th className="p-2 text-center min-w-[100px]">Monthly Rate (₹)</th>
                     <th className="p-2 text-center w-16">No. of</th>
-                    <th className="p-2 text-center min-w-[90px]">Rate (Daily ₹)</th>
+                    <th className="p-2 text-center min-w-[90px]">Per Day Rate (₹)</th>
                     <th className="p-2 text-center w-20">HSN</th>
                     <th className="p-2 text-center min-w-[85px]">Total Day</th>
                     <th className="p-2 text-right min-w-[100px]">Amount (₹)</th>
@@ -375,6 +375,7 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
                           value={item.monthly_rate || ''}
                           onChange={(e) => handleBillItemChange(idx, 'monthly_rate', e.target.value)}
                           placeholder="23000"
+                          title="Contracted rate per guard, per month"
                           className="w-full px-2 py-1 text-xs text-center border border-slate-200 rounded focus:ring-1 focus:ring-teal-500"
                         />
                       </td>
@@ -396,6 +397,7 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
                           value={item.rate_per_day || ''}
                           onChange={(e) => handleBillItemChange(idx, 'rate_per_day', e.target.value)}
                           placeholder="742.00"
+                          title="Rate per guard, per day — used with Total Day to calculate Amount"
                           className="w-full px-2 py-1 text-xs text-center border border-slate-200 rounded focus:ring-1 focus:ring-teal-500"
                         />
                       </td>

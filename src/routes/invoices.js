@@ -9,6 +9,9 @@ const { sendEmail } = require("../utils/email");
 const { generateInvoicePDF } = require("../utils/pdfGenerator");
 const { saveStatement } = require("../utils/statementSaver");
 const { logError } = require("../utils/errorLogger");
+const {
+  recordClientReceipt,
+} = require("../services/payments/paymentTransactionService");
 
 router.use(authMiddleware);
 router.use(requirePermission("manage_invoices"));
@@ -651,9 +654,9 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
       `INSERT INTO invoices (
         invoice_number, client_id, invoice_date, due_date, billing_period_start, billing_period_end,
         amount_subtotal, tax_type, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable, total_amount, discount_amount, round_off, final_amount, payment_due, notes, is_ad_hoc, duty_days_worked, created_by,
-        site_name, bank_account_id, particular, rate_per_day, monthly_rate, guards_count, hsn_code, total_duty_days, bill_items
+        site_name, bank_account_id, particular, rate_per_day, monthly_rate, guards_count, hsn_code, total_duty_days, bill_items, tds_rate
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30) RETURNING *`,
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31) RETURNING *`,
       [
         invoice_number,
         client_id,
@@ -685,6 +688,7 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
         finalHsnCode,
         finalTotalDutyDays,
         parsedBillItems ? JSON.stringify(parsedBillItems) : null,
+        req.body.tds_rate || 0,
       ],
     );
 
@@ -779,6 +783,8 @@ router.post(
         payment_date,
         payment_method,
         notes,
+        bank_account_id,
+        attachment_url,
       } = req.body;
       if (!amount_paid || !payment_method) {
         return res.status(400).json({
@@ -787,70 +793,33 @@ router.post(
         });
       }
 
-      const invoiceResult = await query(
-        "SELECT * FROM invoices WHERE id = $1",
-        [req.params.id],
-      );
-      if (invoiceResult.rows.length === 0) {
-        return res
-          .status(404)
-          .json({ success: false, message: "Invoice not found" });
-      }
-      const invoice = invoiceResult.rows[0];
-      const total_credit = parseFloat(amount_paid) + parseFloat(tds_deducted);
-      const remaining =
-        parseFloat(invoice.final_amount) -
-        parseFloat(invoice.payment_received || 0) -
-        parseFloat(invoice.tds_deducted || 0);
-
-      if (total_credit > remaining + 0.5) {
-        return res.status(400).json({
-          success: false,
-          message: `Amount + TDS exceeds remaining balance of ₹${remaining.toFixed(2)}`,
-        });
-      }
-
-      // Record payment
-      await query(
-        "INSERT INTO payments (invoice_id, payment_date, amount_paid, tds_deducted, payment_method, transaction_reference, notes, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-        [
-          req.params.id,
-          payment_date || new Date().toISOString().split("T")[0],
-          amount_paid,
-          tds_deducted,
-          payment_method,
-          transaction_reference,
-          notes,
+      let updatedInv;
+      try {
+        const result = await recordClientReceipt(
+          {
+            invoice_id: req.params.id,
+            amount_paid,
+            tds_deducted,
+            payment_date,
+            payment_method,
+            bank_account_id,
+            transaction_reference,
+            attachment_url,
+            notes,
+          },
           req.user.userId,
-        ],
-      );
-
-      // Update invoice
-      const newReceived =
-        parseFloat(invoice.payment_received || 0) + parseFloat(amount_paid);
-      const newTds =
-        parseFloat(invoice.tds_deducted || 0) + parseFloat(tds_deducted);
-      const newDue = parseFloat(invoice.final_amount) - newReceived - newTds;
-      const isPaid = newDue <= 0.5;
-      const finalPaymentDue = isPaid ? 0 : Math.max(0, newDue);
-      const newStatus = isPaid ? "paid" : "partially_paid";
-
-      await query(
-        "UPDATE invoices SET payment_received=$1, tds_deducted=$2, payment_due=$3, status=$4, updated_at=CURRENT_TIMESTAMP WHERE id=$5",
-        [
-          newReceived.toFixed(2),
-          newTds.toFixed(2),
-          finalPaymentDue.toFixed(2),
-          newStatus,
-          req.params.id,
-        ],
-      );
-
-      const updatedInvoice = await query(
-        "SELECT i.*, c.name as client_name, c.gst_number as client_gst FROM invoices i JOIN clients c ON i.client_id = c.id WHERE i.id = $1",
-        [req.params.id],
-      );
-      const updatedInv = updatedInvoice.rows[0];
+        );
+        updatedInv = result.invoice;
+      } catch (serviceErr) {
+        if (serviceErr.message === "Invoice not found") {
+          return res
+            .status(404)
+            .json({ success: false, message: "Invoice not found" });
+        }
+        return res
+          .status(400)
+          .json({ success: false, message: serviceErr.message });
+      }
 
       // Auto-save Payment Receipt statement
       const payDate = payment_date || new Date().toISOString().split("T")[0];
@@ -1687,8 +1656,8 @@ router.put("/:id", async (req, res) => {
         is_rcm_applicable = $15, due_date = $16, notes = $17, duty_days_worked = $18,
         status = $19, site_name = $20, bank_account_id = $21, particular = $22,
         rate_per_day = $23, monthly_rate = $24, guards_count = $25, total_duty_days = $26,
-        hsn_code = $27, bill_items = $28, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $29 RETURNING *`,
+        hsn_code = $27, bill_items = $28, tds_rate = $29, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $30 RETURNING *`,
       [
         finalInvoiceNumber,
         invoice_date || invoice.invoice_date,
@@ -1718,6 +1687,9 @@ router.put("/:id", async (req, res) => {
         finalTotalDutyDays,
         finalHsnCode,
         billItemsToSave,
+        req.body.tds_rate !== undefined
+          ? req.body.tds_rate
+          : invoice.tds_rate || 0,
         req.params.id,
       ],
     );

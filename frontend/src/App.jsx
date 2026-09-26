@@ -15,6 +15,7 @@ import Clients from './pages/Clients';
 import Employees from './pages/Employees';
 import Attendance from './pages/Attendance';
 import Invoices from './pages/Invoices';
+import Payments from './pages/Payments';
 import Payroll from './pages/Payroll';
 import Ledger from './pages/Ledger';
 import AccountLedger from './pages/AccountLedger';
@@ -319,6 +320,7 @@ function App() {
             <Route path="/employees" element={<ProtectedRoute permission="manage_employees"><Employees /></ProtectedRoute>} />
             <Route path="/attendance" element={<ProtectedRoute permission={['manage_employees', 'manage_payroll']}><Attendance /></ProtectedRoute>} />
             <Route path="/invoices" element={<ProtectedRoute permission="manage_invoices"><Invoices /></ProtectedRoute>} />
+            <Route path="/payments" element={<ProtectedRoute permission={['manage_invoices', 'manage_expenses', 'manage_payroll']}><Payments /></ProtectedRoute>} />
             <Route path="/payroll" element={<ProtectedRoute permission="manage_payroll"><Payroll /></ProtectedRoute>} />
             <Route path="/ledger" element={<ProtectedRoute permission="manage_payroll"><Ledger /></ProtectedRoute>} />
             <Route path="/account-ledger" element={<ProtectedRoute permission={['view_reports', 'manage_invoices', 'manage_expenses']}><AccountLedger /></ProtectedRoute>} />
