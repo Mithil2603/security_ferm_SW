@@ -21,13 +21,17 @@ const daysBetweenInclusive = (start, end) => {
   return diff > 0 ? diff : 31;
 };
 
-// Rolling one-month-later date, same day-of-month as `dateStr` (yyyy-MM-dd),
-// e.g. 2026-09-26 -> 2026-10-26. Clamps to the last day of the target month
-// when it doesn't have that many days (e.g. 2026-01-31 -> 2026-02-28), rather
-// than overflowing into the following month. Regular (monthly) bills default
-// their end date to this — a rolling monthly cycle from whatever day the
-// guard actually started, not the calendar month — though it stays editable.
-const oneMonthLater = (dateStr) => {
+// End date for a one-month billing cycle starting on `dateStr` (yyyy-MM-dd) —
+// the day before the same day-of-month next month, e.g. 2026-09-11 ->
+// 2026-10-10, or 2026-09-01 -> 2026-09-30. Using "day before", not the same
+// day itself, means consecutive monthly bills tile the calendar exactly: this
+// cycle ends 10-10, the next one starts 11-10, with no day double-billed and
+// none skipped. Clamps at short months (2026-01-31 -> 2026-02-27, i.e. one
+// day before the Jan-31-equivalent-clamped-to-Feb-28) rather than overflowing
+// into March. Regular (monthly) bills default their end date to this — a
+// rolling monthly cycle from whatever day the guard actually started, not
+// the calendar month — though it stays editable.
+const oneMonthCycleEnd = (dateStr) => {
   if (!dateStr) return dateStr;
   const d = new Date(`${dateStr}T00:00:00`);
   let targetMonth = d.getMonth() + 1;
@@ -35,8 +39,9 @@ const oneMonthLater = (dateStr) => {
   if (targetMonth > 11) { targetMonth = 0; targetYear += 1; }
   const daysInTargetMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
   const day = Math.min(d.getDate(), daysInTargetMonth);
-  const result = new Date(targetYear, targetMonth, day);
-  return format(result, 'yyyy-MM-dd');
+  const sameDayNextMonth = new Date(targetYear, targetMonth, day);
+  sameDayNextMonth.setDate(sameDayNextMonth.getDate() - 1);
+  return format(sameDayNextMonth, 'yyyy-MM-dd');
 };
 
 // Re-derive Total Day / Amount for every bill item from the current billing
@@ -269,7 +274,7 @@ export default function Invoices() {
     const defaultBankId = indusind ? indusind.id : (accounts[0]?.id || '');
     const now = new Date();
     const todayStr = format(now, 'yyyy-MM-dd');
-    const oneMonthOut = oneMonthLater(todayStr);
+    const oneMonthOut = oneMonthCycleEnd(todayStr);
 
     setAttendanceSummary(null);
     setInvoiceForm({
@@ -1212,7 +1217,7 @@ export default function Invoices() {
                           value={invoiceForm.billing_period_start || ''}
                           onChange={(e) => {
                             const start = e.target.value;
-                            const end = oneMonthLater(start);
+                            const end = oneMonthCycleEnd(start);
                             setInvoiceForm(prev => {
                               const rescaled = rescaleBillItemsToPeriod(prev.bill_items, start, end);
                               const totalAmt = rescaled.reduce((s, it) => s + (parseFloat(it.amount) || 0), 0);
@@ -1234,7 +1239,7 @@ export default function Invoices() {
                         />
                       </div>
                       <div>
-                        <span className="text-[11px] text-slate-500 mb-0.5 block">End Date (defaults to one month later — editable)</span>
+                        <span className="text-[11px] text-slate-500 mb-0.5 block">End Date (defaults to one month, no overlap with next cycle — editable)</span>
                         <input
                           required
                           type="date"
