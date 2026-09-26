@@ -284,7 +284,7 @@ export default function SalaryStructures() {
                   </div>
                   <div className="flex items-center gap-1">
                     <button onClick={(e) => { e.stopPropagation(); openEdit(s); }} className="p-1.5 rounded-lg hover:bg-blue-500/20 text-blue-400"><Edit className="w-4 h-4" /></button>
-                    {s.is_active && <button onClick={(e) => { e.stopPropagation(); handleDelete(s.id); }} className="p-1.5 rounded-lg hover:bg-red-500/20 text-red-400"><Trash2 className="w-4 h-4" /></button>}
+                    {!!s.is_active && <button onClick={(e) => { e.stopPropagation(); handleDelete(s.id); }} className="p-1.5 rounded-lg hover:bg-red-500/20 text-red-400"><Trash2 className="w-4 h-4" /></button>}
                     {expandedId === s.id ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
                   </div>
                 </div>

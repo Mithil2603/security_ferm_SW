@@ -220,7 +220,9 @@ export default function VendorStatements() {
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-12">
             <div className="w-48 h-24 flex items-center justify-start overflow-hidden">
               {agencySettings?.agency_logo_url ? (
-                <img src={`${getServerBaseUrl()}${agencySettings.agency_logo_url}`} alt="Agency Logo" className="w-full h-full object-contain object-left" />
+                agencySettings?.logo_locations?.vendor_statement !== false && (
+                  <img src={`${getServerBaseUrl()}${agencySettings.agency_logo_url}`} alt="Agency Logo" className="w-full h-full object-contain object-left" />
+                )
               ) : (
                 <div className="w-full h-full border border-dashed border-slate-300 flex items-center justify-center text-slate-400 font-bold tracking-widest text-sm bg-slate-50">
                   YOUR LOGO HERE

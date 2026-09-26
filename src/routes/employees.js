@@ -118,6 +118,7 @@ router.get('/', async (req, res) => {
           }
         }
       }
+      emp.is_active = Boolean(emp.is_active);
       return emp;
     });
 
@@ -135,7 +136,7 @@ router.get('/', async (req, res) => {
 
 // GET /api/employees/docs/storage-path
 router.get('/docs/storage-path', (req, res) => {
-  res.json({ success: true, storage_path: uploadDir });
+  res.json({ success: true, storage_path: storageConfig.getUploadDir('docs') });
 });
 
 // GET /api/employees/:id
@@ -155,6 +156,7 @@ router.get('/:id', async (req, res) => {
     }
 
     let emp = result.rows[0];
+    emp.is_active = Boolean(emp.is_active);
     const isAdmin = req.user && req.user.role === 'admin';
     const canReveal = isAdmin || (req.query.reveal === 'true' && req.user.role === 'accountant');
     
@@ -473,6 +475,26 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// PATCH /api/employees/:id/reactivate (re-enable a deactivated employee)
+router.patch('/:id/reactivate', async (req, res) => {
+  try {
+    const result = await query(
+      'UPDATE employees SET is_active = 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+      [req.params.id]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'Employee not found' });
+    }
+
+    await logAudit(req, 'employees', req.params.id, 'update', 'Reactivated employee');
+
+    res.json({ success: true, message: 'Employee reactivated successfully' });
+  } catch (error) {
+    logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
+    res.status(500).json({ success: false, message: 'Failed to reactivate employee' });
+  }
+});
+
 // DELETE /api/employees/:id/hard (hard delete)
 router.delete('/:id/hard', async (req, res) => {
   try {
@@ -580,7 +602,7 @@ router.get('/:id/docs', async (req, res) => {
          END, uploaded_at DESC`,
       [req.params.id]
     );
-    res.json({ success: true, data: result.rows, storage_path: uploadDir });
+     res.json({ success: true, data: result.rows, storage_path: storageConfig.getUploadDir('docs') });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
     res.status(500).json({ success: false, message: 'Failed to fetch documents' });
@@ -648,7 +670,10 @@ router.get('/:id/docs/:docId/download', async (req, res) => {
     }
 
     const { file_name, file_path } = docRes.rows[0];
-    const fullPath = path.join(uploadDir, file_path);
+    let fullPath = path.join(storageConfig.getUploadDir('docs'), file_path);
+    if (!fs.existsSync(fullPath)) {
+      fullPath = path.join(storageConfig.getDefaultUploadDir(), 'docs', file_path);
+    }
     if (!fs.existsSync(fullPath)) {
       return res.status(404).json({ success: false, message: 'File not found on disk' });
     }

@@ -28,6 +28,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
     guards_count: 1,
     rate_per_guard: 500,
     days_worked: 1,
+    site_name: '',
     fixed_amount: '',
     particular: 'Security Guard',
     hsn_code: '998525',
@@ -36,6 +37,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
     notes: ''
   });
 
+  const [isCustomSite, setIsCustomSite] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [totals, setTotals] = useState({ subtotal: 0, cgst: 0, sgst: 0, igst: 0, total: 0 });
@@ -82,6 +84,9 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
   const handleExistingClientChange = (clientId) => {
     const selected = existingClients.find(c => String(c.id) === String(clientId));
     if (selected) {
+      const clientSites = Array.isArray(selected.sites) ? selected.sites : [];
+      const defaultSite = clientSites.length === 1 ? (typeof clientSites[0] === 'string' ? clientSites[0] : clientSites[0].name) : '';
+      setIsCustomSite(false);
       setForm(prev => ({
         ...prev,
         client_id: selected.id,
@@ -91,9 +96,11 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
         address: selected.address || '',
         city: selected.city || '',
         state: selected.state || 'Gujarat',
-        gst_number: selected.gst_number || ''
+        gst_number: selected.gst_number || '',
+        site_name: defaultSite || ''
       }));
     } else {
+      setIsCustomSite(false);
       setForm(prev => ({
         ...prev,
         client_id: '',
@@ -103,7 +110,8 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
         address: '',
         city: '',
         state: 'Gujarat',
-        gst_number: ''
+        gst_number: '',
+        site_name: ''
       }));
     }
   };
@@ -227,6 +235,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
         notes: form.notes,
         particular: form.particular || 'Security Guard',
         hsn_code: form.hsn_code || '998525',
+        site_name: form.site_name || '',
         ...(clientMode === 'existing'
           ? { client_id: form.client_id }
           : {
@@ -243,7 +252,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
           : {
               guards_count: parseInt(form.guards_count, 10),
               rate_per_guard: parseFloat(form.rate_per_guard),
-              days_worked: parseInt(form.days_worked, 10)
+              days_worked: parseFloat(form.days_worked)
             })
       };
 
@@ -258,21 +267,21 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
     }
   };
 
-  const inputCls = "w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm bg-white transition-colors";
+  const inputCls = "w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm bg-white transition-colors";
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl my-8 animate-slide-up flex flex-col max-h-[90vh]">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-amber-100 flex justify-between items-center bg-gradient-to-r from-amber-50 to-orange-50 rounded-t-2xl shrink-0">
+        <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-2xl shrink-0">
           <div>
             <div className="flex items-center gap-2">
-              <div className="p-2 bg-amber-500 text-white rounded-lg shadow-sm">
+              <div className="p-2 bg-teal-600 text-white rounded-lg shadow-sm">
                 <FileText className="w-5 h-5" />
               </div>
               <div>
                 <h3 className="text-lg font-bold text-slate-900">Direct Event Invoice</h3>
-                <p className="text-xs text-amber-800 font-medium">Full event payment — no monthly bifurcation or recurring generation</p>
+                <p className="text-xs text-slate-500 font-medium">Full event payment — no monthly bifurcation or recurring generation</p>
               </div>
             </div>
           </div>
@@ -295,7 +304,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
             <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
                 <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                  <UserCheck className="w-4 h-4 text-amber-600" />
+                  <UserCheck className="w-4 h-4 text-teal-600" />
                   1. Client Selection
                 </h4>
                 <div className="inline-flex rounded-lg border border-slate-200 p-1 bg-slate-50 self-start">
@@ -304,7 +313,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                     onClick={() => setClientMode('existing')}
                     className={`px-3 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${
                       clientMode === 'existing'
-                        ? 'bg-white text-amber-700 shadow-xs border border-amber-200'
+                        ? 'bg-white text-teal-700 shadow-xs border border-slate-200'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
@@ -316,7 +325,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                     onClick={() => setClientMode('new')}
                     className={`px-3 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${
                       clientMode === 'new'
-                        ? 'bg-white text-amber-700 shadow-xs border border-amber-200'
+                        ? 'bg-white text-teal-700 shadow-xs border border-slate-200'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
@@ -419,11 +428,11 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
               )}
             </div>
 
-            {/* 2. Event Dates */}
+            {/* 2. Event Dates & Site */}
             <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
               <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b border-slate-100 pb-3">
-                <Calendar className="w-4 h-4 text-amber-600" />
-                2. Event Duration & Invoice Date
+                <Calendar className="w-4 h-4 text-teal-600" />
+                2. Event Duration & Site Details
               </h4>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
@@ -457,13 +466,73 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                   />
                 </div>
               </div>
+
+              {(() => {
+                const selectedClient = existingClients.find(c => String(c.id) === String(form.client_id));
+                const clientSites = Array.isArray(selectedClient?.sites) ? selectedClient.sites : [];
+                return (
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-sm font-medium text-slate-700">Site Name (Optional)</label>
+                      {clientSites.length > 0 && clientMode === 'existing' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsCustomSite(!isCustomSite);
+                            if (!isCustomSite) {
+                              setForm(prev => ({ ...prev, site_name: '' }));
+                            }
+                          }}
+                          className="text-[11px] text-teal-600 hover:text-teal-700 font-medium underline cursor-pointer"
+                        >
+                          {isCustomSite ? 'Pick from client sites' : '+ Custom site name'}
+                        </button>
+                      )}
+                    </div>
+                    {clientSites.length > 0 && clientMode === 'existing' && !isCustomSite ? (
+                      <select
+                        value={form.site_name}
+                        onChange={(e) => {
+                          if (e.target.value === '__custom__') {
+                            setIsCustomSite(true);
+                            setForm(prev => ({ ...prev, site_name: '' }));
+                          } else {
+                            setForm(prev => ({ ...prev, site_name: e.target.value }));
+                          }
+                        }}
+                        className={inputCls}
+                      >
+                        <option value="">-- Select Client Site --</option>
+                        {clientSites.map((s, idx) => {
+                          const sName = typeof s === 'string' ? s : s.name;
+                          const sAddr = typeof s === 'object' && s.address ? ` (${s.address})` : '';
+                          return (
+                            <option key={idx} value={sName}>
+                              {sName}{sAddr}
+                            </option>
+                          );
+                        })}
+                        <option value="__custom__">➕ Enter Other / Custom Site...</option>
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        placeholder="e.g. Masterpiece Banquet Hall, Exhibition Ground, Gate 2"
+                        value={form.site_name}
+                        onChange={e => setForm(prev => ({ ...prev, site_name: e.target.value }))}
+                        className={inputCls}
+                      />
+                    )}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* 3. Pricing Calculation Method */}
             <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
                 <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                  <Calculator className="w-4 h-4 text-amber-600" />
+                  <Calculator className="w-4 h-4 text-teal-600" />
                   3. Pricing & Amount (Full Payment)
                 </h4>
                 <div className="inline-flex rounded-lg border border-slate-200 p-1 bg-slate-50 self-start">
@@ -472,7 +541,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                     onClick={() => setCalcMode('per_guard')}
                     className={`px-3 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${
                       calcMode === 'per_guard'
-                        ? 'bg-white text-amber-700 shadow-xs border border-amber-200'
+                        ? 'bg-white text-teal-700 shadow-xs border border-slate-200'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
@@ -484,7 +553,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                     onClick={() => setCalcMode('lump_sum')}
                     className={`px-3 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${
                       calcMode === 'lump_sum'
-                        ? 'bg-white text-amber-700 shadow-xs border border-amber-200'
+                        ? 'bg-white text-teal-700 shadow-xs border border-slate-200'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
@@ -524,7 +593,8 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                     <input
                       required
                       type="number"
-                      min="1"
+                      min="0.5"
+                      step="0.01"
                       value={form.days_worked}
                       onChange={e => setForm({ ...form, days_worked: e.target.value })}
                       className={inputCls}
@@ -598,7 +668,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                 <label className="block text-sm font-medium text-slate-700 mb-2">Apply GST to this invoice?</label>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <label className={`flex items-center gap-2.5 p-3 rounded-lg border cursor-pointer transition-all ${
-                    form.tax_type === 'none' ? 'bg-amber-50 border-amber-500 ring-1 ring-amber-500' : 'bg-white border-slate-200 hover:bg-slate-50'
+                    form.tax_type === 'none' ? 'bg-teal-50/60 border-teal-500 ring-1 ring-teal-500' : 'bg-white border-slate-200 hover:bg-slate-50'
                   }`}>
                     <input
                       type="radio"
@@ -606,7 +676,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                       value="none"
                       checked={form.tax_type === 'none'}
                       onChange={e => setForm({ ...form, tax_type: e.target.value })}
-                      className="text-amber-600 focus:ring-amber-500 h-4 w-4"
+                      className="text-teal-600 focus:ring-teal-500 h-4 w-4"
                     />
                     <div>
                       <span className="block text-sm font-semibold text-slate-800">No GST (0%)</span>
@@ -615,7 +685,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                   </label>
 
                   <label className={`flex items-center gap-2.5 p-3 rounded-lg border cursor-pointer transition-all ${
-                    form.tax_type === 'cgst_sgst' ? 'bg-amber-50 border-amber-500 ring-1 ring-amber-500' : 'bg-white border-slate-200 hover:bg-slate-50'
+                    form.tax_type === 'cgst_sgst' ? 'bg-teal-50/60 border-teal-500 ring-1 ring-teal-500' : 'bg-white border-slate-200 hover:bg-slate-50'
                   }`}>
                     <input
                       type="radio"
@@ -623,7 +693,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                       value="cgst_sgst"
                       checked={form.tax_type === 'cgst_sgst'}
                       onChange={e => setForm({ ...form, tax_type: e.target.value })}
-                      className="text-amber-600 focus:ring-amber-500 h-4 w-4"
+                      className="text-teal-600 focus:ring-teal-500 h-4 w-4"
                     />
                     <div>
                       <span className="block text-sm font-semibold text-slate-800">Intra-State (18%)</span>
@@ -632,7 +702,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                   </label>
 
                   <label className={`flex items-center gap-2.5 p-3 rounded-lg border cursor-pointer transition-all ${
-                    form.tax_type === 'igst' ? 'bg-amber-50 border-amber-500 ring-1 ring-amber-500' : 'bg-white border-slate-200 hover:bg-slate-50'
+                    form.tax_type === 'igst' ? 'bg-teal-50/60 border-teal-500 ring-1 ring-teal-500' : 'bg-white border-slate-200 hover:bg-slate-50'
                   }`}>
                     <input
                       type="radio"
@@ -640,7 +710,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                       value="igst"
                       checked={form.tax_type === 'igst'}
                       onChange={e => setForm({ ...form, tax_type: e.target.value })}
-                      className="text-amber-600 focus:ring-amber-500 h-4 w-4"
+                      className="text-teal-600 focus:ring-teal-500 h-4 w-4"
                     />
                     <div>
                       <span className="block text-sm font-semibold text-slate-800">Inter-State (18%)</span>
@@ -650,15 +720,15 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                 </div>
               </div>
 
-              <div className="flex items-center p-3 bg-amber-50/60 rounded-lg border border-amber-200">
+              <div className="flex items-center p-3 bg-slate-50 rounded-lg border border-slate-200">
                 <input
                   type="checkbox"
                   id="rcm_check_event"
                   checked={form.is_rcm_applicable}
                   onChange={e => setForm({ ...form, is_rcm_applicable: e.target.checked })}
-                  className="h-4 w-4 text-amber-600 focus:ring-amber-500 rounded border-amber-300 cursor-pointer"
+                  className="h-4 w-4 text-teal-600 focus:ring-teal-500 rounded border-slate-300 cursor-pointer"
                 />
-                <label htmlFor="rcm_check_event" className="ml-2 block text-xs font-semibold text-amber-900 cursor-pointer">
+                <label htmlFor="rcm_check_event" className="ml-2 block text-xs font-semibold text-slate-800 cursor-pointer">
                   Apply RCM (Reverse Charge Mechanism - GST payable directly by client to government)
                 </label>
               </div>
@@ -675,14 +745,14 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
               </div>
             </div>
 
-            {/* Live Math Preview & Full Payment Notice */}
-            <div className="bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl p-5 border border-amber-200 shadow-xs space-y-2">
-              <div className="flex items-center justify-between pb-2 border-b border-amber-200">
-                <div className="flex items-center gap-1.5 text-xs font-bold text-amber-900 uppercase tracking-wide">
-                  <ShieldCheck className="w-4 h-4 text-amber-600" />
+            {/* Live Math Preview & Full Payment Summary */}
+            <div className="bg-slate-50 rounded-xl p-5 border border-slate-200 shadow-xs space-y-2">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800 uppercase tracking-wide">
+                  <ShieldCheck className="w-4 h-4 text-teal-600" />
                   Full Event Payment Summary
                 </div>
-                <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-amber-200 text-amber-900">
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-teal-100 text-teal-800">
                   No Monthly Bifurcation
                 </span>
               </div>
@@ -717,14 +787,14 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
               )}
 
               {form.is_rcm_applicable && (
-                <div className="text-[11px] text-amber-700 italic pt-1">
+                <div className="text-[11px] text-slate-500 italic pt-1">
                   * Note: Under RCM, GST is paid directly by the client. Total payable to you is ₹{totals.subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}.
                 </div>
               )}
 
-              <div className="flex justify-between font-extrabold text-base sm:text-lg text-slate-900 pt-2 border-t border-amber-200">
+              <div className="flex justify-between font-extrabold text-base sm:text-lg text-slate-900 pt-2 border-t border-slate-200">
                 <span>Total Invoice Amount:</span>
-                <span className="text-amber-900">₹{totals.total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                <span className="text-teal-800">₹{totals.total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
               </div>
             </div>
           </form>
@@ -743,7 +813,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
             type="submit"
             form="event-invoice-form"
             disabled={submitting}
-            className="px-6 py-2.5 text-sm font-bold text-white bg-amber-600 rounded-lg hover:bg-amber-700 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-2"
+            className="px-6 py-2.5 text-sm font-bold text-white bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-2 cursor-pointer"
           >
             {submitting ? 'Generating...' : 'Create & Save Event Invoice'}
           </button>

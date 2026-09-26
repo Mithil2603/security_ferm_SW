@@ -6,6 +6,8 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [bankAccounts, setBankAccounts] = useState([]);
+  const [clientSites, setClientSites] = useState([]);
+  const [roundOffEnabled, setRoundOffEnabled] = useState(true);
 
   const [form, setForm] = useState({
     invoice_number: '',
@@ -38,12 +40,12 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
           const daily = parseFloat((m / 31).toFixed(2));
           row.rate_per_day = daily;
           if (row.total_duty_days) {
-            row.amount = parseFloat((daily * (parseInt(row.total_duty_days) || 0)).toFixed(2));
+            row.amount = parseFloat((daily * (parseFloat(row.total_duty_days) || 0)).toFixed(2));
           }
         }
       } else if (field === 'rate_per_day' || field === 'total_duty_days') {
         const r = parseFloat(field === 'rate_per_day' ? value : row.rate_per_day) || 0;
-        const d = parseInt(field === 'total_duty_days' ? value : row.total_duty_days) || 0;
+        const d = parseFloat(field === 'total_duty_days' ? value : row.total_duty_days) || 0;
         if (r > 0 && d > 0) {
           row.amount = parseFloat((r * d).toFixed(2));
         }
@@ -59,7 +61,7 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
       updated[index] = row;
       const totalAmt = updated.reduce((s, it) => s + (parseFloat(it.amount) || 0), 0);
       const totalGuards = updated.reduce((s, it) => s + (parseInt(it.guards_count) || 0), 0);
-      const totalDays = updated.reduce((s, it) => s + (parseInt(it.total_duty_days) || 0), 0);
+      const totalDays = updated.reduce((s, it) => s + (parseFloat(it.total_duty_days) || 0), 0);
 
       return {
         ...prev,
@@ -112,6 +114,10 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
           setBankAccounts(accounts.filter(b => b.is_active));
         })
         .catch(err => console.error('Failed to load bank accounts', err));
+
+      api.get('/settings/system/invoice_round_off_enabled')
+        .then(res => setRoundOffEnabled(res.data !== 'false'))
+        .catch(() => setRoundOffEnabled(true));
     }
   }, [isOpen]);
 
@@ -158,6 +164,17 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
     }
   }, [invoice]);
 
+  useEffect(() => {
+    if (invoice?.client_id) {
+      api.get(`/clients/${invoice.client_id}`)
+        .then(res => {
+          const sites = res.data?.data?.sites || res.data?.sites || [];
+          setClientSites(Array.isArray(sites) ? sites : []);
+        })
+        .catch(() => setClientSites([]));
+    }
+  }, [invoice?.client_id]);
+
   if (!isOpen || !invoice) return null;
 
   const handleSubmit = async (e) => {
@@ -173,7 +190,7 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
         monthly_rate: parseFloat(form.monthly_rate) || 0,
         rate_per_day: parseFloat(form.rate_per_day) || 0,
         guards_count: parseInt(form.guards_count) || 1,
-        total_duty_days: parseInt(form.total_duty_days) || 0,
+        total_duty_days: parseFloat(form.total_duty_days) || 0,
         bank_account_id: form.bank_account_id ? parseInt(form.bank_account_id) : null,
         bill_items: form.bill_items
       };
@@ -251,11 +268,19 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
               </label>
               <input
                 type="text"
+                list="edit-invoice-sites"
                 value={form.site_name}
                 onChange={e => setForm({ ...form, site_name: e.target.value })}
                 className={inputCls}
                 placeholder="e.g. Masterpiece & Vadavi"
               />
+              <datalist id="edit-invoice-sites">
+                {clientSites.map((s, idx) => (
+                  <option key={idx} value={typeof s === 'string' ? s : s.name}>
+                    {typeof s === 'object' && s.address ? `${s.name} (${s.address})` : (typeof s === 'string' ? s : s.name)}
+                  </option>
+                ))}
+              </datalist>
             </div>
             <div>
               <label className={labelCls}>
@@ -386,6 +411,7 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
                         <input
                           type="number"
                           min="0"
+                          step="0.01"
                           value={item.total_duty_days ?? ''}
                           onChange={(e) => handleBillItemChange(idx, 'total_duty_days', e.target.value)}
                           placeholder="31"
@@ -480,8 +506,8 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
               tax = taxable * 0.18;
             }
             const total = form.is_rcm_applicable ? taxable : (taxable + tax);
-            const roundedTotal = Math.round(total);
-            const roundOff = parseFloat((roundedTotal - total).toFixed(2));
+            const roundedTotal = roundOffEnabled ? Math.round(total) : parseFloat(total.toFixed(2));
+            const roundOff = roundOffEnabled ? parseFloat((roundedTotal - total).toFixed(2)) : 0;
 
             return (
               <div className="flex flex-wrap items-center justify-between text-xs bg-slate-50 p-2.5 rounded-lg border border-slate-200">

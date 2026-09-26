@@ -70,6 +70,35 @@ const getValidUntil = (employee) => {
   return fallback;
 };
 
+// "AKASH PANCHAL" / "akash panchal" -> "Akash Panchal"
+const toProperCase = (name) => {
+  return String(name || '')
+    .toLowerCase()
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+};
+
+// Available width (px) for the Name value in IDCardFront's details column:
+// 400 card - 28 content padding - 16 photo/details gap - 76 photo col - 80 label - 12 colon - 4 padding
+const NAME_VALUE_MAX_WIDTH_PX = 184;
+
+let measureCanvas = null;
+const measureTextWidth = (text, font) => {
+  if (!measureCanvas) measureCanvas = document.createElement('canvas');
+  const ctx = measureCanvas.getContext('2d');
+  ctx.font = font;
+  return ctx.measureText(text).width;
+};
+
+// Shrinks the name font size just enough to fit maxWidthPx instead of letting it get clipped.
+const fitNameFontSizePx = (name, maxWidthPx, baseSize = 11, minSize = 7) => {
+  const width = measureTextWidth(name, `700 ${baseSize}px Arial, Helvetica, sans-serif`);
+  if (width <= maxWidthPx || width === 0) return baseSize;
+  return Math.max(minSize, Math.floor(baseSize * (maxWidthPx / width) * 10) / 10);
+};
+
 const formatGuardId = (emp) => {
   if (!emp) return "N/A";
   if (emp.employee_id && String(emp.employee_id).startsWith("EESS")) return emp.employee_id;
@@ -77,20 +106,175 @@ const formatGuardId = (emp) => {
   return emp.employee_id || "N/A";
 };
 
-const imgToDataURL = (url) =>
-  new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => {
-      const c = document.createElement("canvas");
-      c.width = img.width;
-      c.height = img.height;
-      c.getContext("2d").drawImage(img, 0, 0);
-      resolve(c.toDataURL("image/png", 0.95));
+const resolvePhotoUrl = (raw) => {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) return trimmed;
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
+  const base = getServerBaseUrl().replace(/\/+$/, '');
+  const cleanPath = trimmed.replace(/^\/+/, '');
+  if (cleanPath.startsWith('uploads/')) {
+    return `${base}/${cleanPath}`;
+  }
+  return `${base}/uploads/docs/${cleanPath}`;
+};
+
+const resolveLogoUrl = (raw) => {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) return trimmed;
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
+  const base = getServerBaseUrl().replace(/\/+$/, '');
+  const cleanPath = trimmed.replace(/^\/+/, '');
+  return `${base}/${cleanPath}`;
+};
+
+// Robust image loader with fetch blob fallback (eliminates CORS canvas taints)
+const prepareClippedPhoto = (url, widthPx = 360, heightPx = 420, radiusPx = 18) => {
+  if (!url) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const processImage = (img) => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = widthPx;
+        canvas.height = heightPx;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return resolve(null);
+
+        ctx.clearRect(0, 0, widthPx, heightPx);
+
+        // Rounded rectangle clipping path
+        ctx.beginPath();
+        const r = radiusPx, w = widthPx, h = heightPx;
+        ctx.moveTo(r, 0);
+        ctx.lineTo(w - r, 0);
+        ctx.quadraticCurveTo(w, 0, w, r);
+        ctx.lineTo(w, h - r);
+        ctx.quadraticCurveTo(w, h, w - r, h);
+        ctx.lineTo(r, h);
+        ctx.quadraticCurveTo(0, h, 0, h - r);
+        ctx.lineTo(0, r);
+        ctx.quadraticCurveTo(0, 0, r, 0);
+        ctx.closePath();
+        ctx.clip();
+
+        // Exact object-fit: cover (fills box 100%, zero gap/white-space)
+        const imgW = img.naturalWidth || img.width;
+        const imgH = img.naturalHeight || img.height;
+        const imgAspect = imgW / imgH;
+        const targetAspect = widthPx / heightPx;
+        let sx = 0, sy = 0, sw = imgW, sh = imgH;
+
+        if (imgAspect > targetAspect) {
+          sw = imgH * targetAspect;
+          sx = (imgW - sw) / 2;
+        } else {
+          sh = imgW / targetAspect;
+          sy = (imgH - sh) / 2;
+        }
+
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, widthPx, heightPx);
+        resolve(canvas.toDataURL('image/png'));
+      } catch (err) {
+        console.warn('Clipped photo processing error:', err);
+        resolve(null);
+      }
     };
-    img.onerror = reject;
-    img.src = url;
+
+    fetch(url, { mode: 'cors' })
+      .then((res) => {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.blob();
+      })
+      .then((blob) => {
+        const blobUrl = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+          processImage(img);
+          URL.revokeObjectURL(blobUrl);
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(blobUrl);
+          fallbackDirect();
+        };
+        img.src = blobUrl;
+      })
+      .catch(() => fallbackDirect());
+
+    function fallbackDirect() {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => processImage(img);
+      img.onerror = () => {
+        console.warn('Failed to load photo via direct img fallback:', url);
+        resolve(null);
+      };
+      img.src = url;
+    }
   });
+};
+
+const prepareSquareLogo = (url, sizePx = 240) => {
+  if (!url) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const processImage = (img) => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = sizePx;
+        canvas.height = sizePx;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return resolve(null);
+
+        ctx.clearRect(0, 0, sizePx, sizePx);
+
+        // Object-fit: contain (scale without distortion, centered)
+        const imgW = img.naturalWidth || img.width;
+        const imgH = img.naturalHeight || img.height;
+        const scale = Math.min(sizePx / imgW, sizePx / imgH);
+        const drawW = imgW * scale;
+        const drawH = imgH * scale;
+        const dx = (sizePx - drawW) / 2;
+        const dy = (sizePx - drawH) / 2;
+
+        ctx.drawImage(img, 0, 0, imgW, imgH, dx, dy, drawW, drawH);
+        resolve(canvas.toDataURL('image/png'));
+      } catch (err) {
+        console.warn('Logo processing error:', err);
+        resolve(null);
+      }
+    };
+
+    fetch(url, { mode: 'cors' })
+      .then((res) => {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.blob();
+      })
+      .then((blob) => {
+        const blobUrl = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+          processImage(img);
+          URL.revokeObjectURL(blobUrl);
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(blobUrl);
+          fallbackDirect();
+        };
+        img.src = blobUrl;
+      })
+      .catch(() => fallbackDirect());
+
+    function fallbackDirect() {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => processImage(img);
+      img.onerror = () => resolve(null);
+      img.src = url;
+    }
+  });
+};
 
 // ─── PDF Vector Drawing Helpers ───────────────────────────────────────────────
 const pdfHelpers = (pdf) => ({
@@ -112,7 +296,7 @@ const pdfHelpers = (pdf) => ({
 });
 
 // ─── Draw Front Card (PDF Vector) ─────────────────────────────────────────────
-const drawFront = async (pdf, employee, ox, oy, photoDataUrl) => {
+const drawFront = async (pdf, employee, ox, oy, photoDataUrl, logoDataUrl) => {
   const p = pdfHelpers(pdf);
   const c = cardCoords(ox, oy);
 
@@ -141,11 +325,12 @@ const drawFront = async (pdf, employee, ox, oy, photoDataUrl) => {
   pdf.text(COMPANY_TAGLINE, c.x(3), c.y(12.5));
 
   // Logo in upper right
-  try {
-    const logoData = await imgToDataURL("/logo.png");
-    pdf.addImage(logoData, "PNG", c.x(BASE_CW - 12), c.y(3), c.uw(9), c.uh(9));
-  } catch {
-    /* skip if logo unavailable */
+  if (logoDataUrl) {
+    try {
+      pdf.addImage(logoDataUrl, "PNG", c.x(BASE_CW - 12), c.y(3), c.uw(9), c.uh(9));
+    } catch {
+      /* skip if logo unavailable */
+    }
   }
 
   // Divider line
@@ -154,36 +339,42 @@ const drawFront = async (pdf, employee, ox, oy, photoDataUrl) => {
 
   // ── Employee ID above photo ─────────────────────────────────────────────────
   const photoX = c.x(3);
+  const photoY = c.y(18);
   const photoW = c.uw(PHOTO_BASE_W);
+  const photoH = c.uh(21);
+  const photoR = c.ur(1);
+
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(c.fs(5));
   p.text(BLUE_RGB);
   pdf.text(formatGuardId(employee), photoX, c.y(16.8));
 
-  // ── Photo box ───────────────────────────────────────────────────────────────
+  // ── Photo box background ────────────────────────────────────────────────────
   p.fill(LIGHT);
-  p.draw(RED_RGB);
-  pdf.setLineWidth(c.lw(0.5));
-  pdf.roundedRect(photoX, c.y(18), photoW, c.uh(21), c.ur(1), c.ur(1), "FD");
+  pdf.roundedRect(photoX, photoY, photoW, photoH, photoR, photoR, "F");
 
+  // ── Draw Photo inside box (100% edge-to-edge, zero margin/gap) ──────────────
   if (photoDataUrl) {
     try {
-      pdf.addImage(
-        photoDataUrl,
-        "JPEG",
-        photoX + c.uw(0.4),
-        c.y(18.5),
-        c.uw(PHOTO_BASE_INNER_W),
-        c.uh(20.2)
-      );
+      pdf.addImage(photoDataUrl, "PNG", photoX, photoY, photoW, photoH);
     } catch {
       /* no photo */
     }
+  } else {
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(c.fs(4.5));
+    p.text(GRAY_RGB);
+    pdf.text("NO PHOTO", photoX + photoW / 2, photoY + photoH / 2, { align: "center" });
   }
+
+  // ── Crisp Red Border ON TOP of Photo (zero gap, cleanly frames photo, no corner protrusion) ─
+  pdf.setDrawColor(...RED_RGB);
+  pdf.setLineWidth(c.lw(0.5));
+  pdf.roundedRect(photoX, photoY, photoW, photoH, photoR, photoR, "S");
 
   // ── Detail rows ─────────────────────────────────────────────────────────────
   const rows = [
-    ["Name", (employee.full_name || "N/A").toUpperCase()],
+    ["Name", toProperCase(employee.full_name) || "N/A"],
     ["Designation", employee.designation || "Security Guard"],
     ["D.O.B", employee.date_of_birth ? fmtDate(new Date(employee.date_of_birth)) : "N/A"],
     ["Gender", employee.gender || "N/A"],
@@ -192,6 +383,8 @@ const drawFront = async (pdf, employee, ox, oy, photoDataUrl) => {
   ];
 
   let rowY = c.y(19.5);
+  const valueX = c.x(54);
+  const valueMaxWidth = c.x(BASE_CW - 3) - valueX;
   rows.forEach(([label, value]) => {
     pdf.setFont("helvetica", "normal");
     pdf.setFontSize(c.fs(6));
@@ -200,7 +393,16 @@ const drawFront = async (pdf, employee, ox, oy, photoDataUrl) => {
     pdf.text(":", c.x(50), rowY);
     pdf.setFont("helvetica", "bold");
     p.text(DARK);
-    pdf.text(value, c.x(54), rowY);
+    let valueFontSize = c.fs(6);
+    pdf.setFontSize(valueFontSize);
+    if (label === "Name") {
+      const textWidth = pdf.getTextWidth(value);
+      if (textWidth > valueMaxWidth) {
+        valueFontSize = Math.max(c.fs(3.6), valueFontSize * (valueMaxWidth / textWidth));
+        pdf.setFontSize(valueFontSize);
+      }
+    }
+    pdf.text(value, valueX, rowY);
     rowY += c.uh(4.2);
   });
 
@@ -213,7 +415,7 @@ const drawFront = async (pdf, employee, ox, oy, photoDataUrl) => {
 };
 
 // ─── Draw Back Card (PDF Vector) ──────────────────────────────────────────────
-const drawBack = async (pdf, ox, oy) => {
+const drawBack = async (pdf, ox, oy, logoDataUrl) => {
   const p = pdfHelpers(pdf);
   const c = cardCoords(ox, oy);
 
@@ -235,11 +437,12 @@ const drawBack = async (pdf, ox, oy) => {
   p.rect(c.x(0), c.y(0), c.uw(BASE_CW), c.uh(1.5), BLUE_RGB);
 
   // ── Left Column Header ──────────────────────────────────────────────────────
-  try {
-    const logoData = await imgToDataURL("/logo.png");
-    pdf.addImage(logoData, "PNG", c.x(3), c.y(3), c.uw(9), c.uh(9));
-  } catch {
-    /* skip */
+  if (logoDataUrl) {
+    try {
+      pdf.addImage(logoDataUrl, "PNG", c.x(3), c.y(3), c.uw(9), c.uh(9));
+    } catch {
+      /* skip */
+    }
   }
 
   pdf.setFont("helvetica", "bold");
@@ -390,12 +593,12 @@ const drawBack = async (pdf, ox, oy) => {
 };
 
 // ─── Front Card (On-Screen Preview Component) ─────────────────────────────────
-export const IDCardFront = ({ employee, photoUrl }) => {
+export const IDCardFront = ({ employee, photoUrl, logoUrl }) => {
   const empCode = formatGuardId(employee);
   const validUntil = getValidUntil(employee);
 
   const rows = [
-    ["Name", (employee?.full_name || "N/A").toUpperCase()],
+    ["Name", toProperCase(employee?.full_name) || "N/A"],
     ["Designation", employee?.designation || "Security Guard"],
     ["D.O.B", employee?.date_of_birth ? fmtDate(new Date(employee.date_of_birth)) : "N/A"],
     ["Gender", employee?.gender || "N/A"],
@@ -441,12 +644,20 @@ export const IDCardFront = ({ employee, photoUrl }) => {
             {COMPANY_TAGLINE}
           </div>
         </div>
-        <img
-          src="/logo.png"
-          alt="Eagle Eye Logo"
-          style={{ width: "40px", height: "40px", objectFit: "contain" }}
-          onError={(e) => { e.currentTarget.style.display = 'none'; }}
-        />
+        {logoUrl && (
+          <img
+            src={logoUrl}
+            alt="Agency Logo"
+            style={{ width: "40px", height: "40px", objectFit: "contain" }}
+            onError={(e) => {
+              if (e.currentTarget.src !== window.location.origin + '/logo.png') {
+                e.currentTarget.src = '/logo.png';
+              } else {
+                e.currentTarget.style.display = 'none';
+              }
+            }}
+          />
+        )}
       </div>
 
       {/* Divider */}
@@ -473,7 +684,12 @@ export const IDCardFront = ({ employee, photoUrl }) => {
             }}
           >
             {photoUrl ? (
-              <img src={photoUrl} alt="guard" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              <img
+                src={photoUrl}
+                alt="guard"
+                style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                onError={(e) => { e.currentTarget.style.display = 'none'; }}
+              />
             ) : (
               <User style={{ width: "36px", height: "36px", color: "#9ca3af" }} />
             )}
@@ -481,12 +697,24 @@ export const IDCardFront = ({ employee, photoUrl }) => {
         </div>
 
         {/* Right: Details Table with Colons Aligned */}
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "4px", justifyContent: "center" }}>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "4px", justifyContent: "center", minWidth: 0 }}>
           {rows.map(([label, value]) => (
-            <div key={label} style={{ display: "flex", alignItems: "baseline", fontSize: "11px" }}>
+            <div key={label} style={{ display: "flex", alignItems: "baseline", fontSize: "11px", minWidth: 0 }}>
               <span style={{ color: "#374151", fontWeight: 600, width: "80px", flexShrink: 0 }}>{label}</span>
               <span style={{ color: "#374151", width: "12px", textAlign: "center", flexShrink: 0 }}>:</span>
-              <span style={{ color: "#111827", fontWeight: 700, paddingLeft: "4px" }}>{value}</span>
+              <span
+                style={{
+                  color: "#111827",
+                  fontWeight: 700,
+                  paddingLeft: "4px",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  ...(label === "Name" ? { fontSize: `${fitNameFontSizePx(value, NAME_VALUE_MAX_WIDTH_PX)}px` } : {}),
+                }}
+              >
+                {value}
+              </span>
             </div>
           ))}
         </div>
@@ -511,7 +739,7 @@ export const IDCardFront = ({ employee, photoUrl }) => {
 };
 
 // ─── Back Card (On-Screen Preview Component) ──────────────────────────────────
-export const IDCardBack = () => {
+export const IDCardBack = ({ logoUrl }) => {
   return (
     <div
       style={{
@@ -540,12 +768,20 @@ export const IDCardBack = () => {
         {/* Left column: Company info + Contacts */}
         <div style={{ flex: 1 }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
-            <img
-              src="/logo.png"
-              alt="logo"
-              style={{ width: "36px", height: "36px", objectFit: "contain", flexShrink: 0 }}
-              onError={(e) => { e.currentTarget.style.display = 'none'; }}
-            />
+            {logoUrl && (
+              <img
+                src={logoUrl}
+                alt="Agency Logo"
+                style={{ width: "36px", height: "36px", objectFit: "contain", flexShrink: 0 }}
+                onError={(e) => {
+                  if (e.currentTarget.src !== window.location.origin + '/logo.png') {
+                    e.currentTarget.src = '/logo.png';
+                  } else {
+                    e.currentTarget.style.display = 'none';
+                  }
+                }}
+              />
+            )}
             <div>
               <div style={{ fontSize: "14px", fontWeight: 900, color: RED, letterSpacing: "0.5px", lineHeight: 1 }}>
                 {COMPANY_NAME_1}
@@ -700,7 +936,7 @@ const PrintSection = ({ title, children, cols = 3 }) => (
   </div>
 );
 
-const EmployeePrintProfile = ({ employee, photoUrl }) => {
+const EmployeePrintProfile = ({ employee, photoUrl, logoUrl }) => {
   const joiningFormatted = employee?.date_of_joining
     ? new Date(employee.date_of_joining).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
     : "—";
@@ -724,12 +960,20 @@ const EmployeePrintProfile = ({ employee, photoUrl }) => {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <img
-              src="/logo.png"
-              alt="logo"
-              style={{ width: "48px", height: "48px", objectFit: "contain" }}
-              onError={(e) => { e.currentTarget.style.display = 'none'; }}
-            />
+            {logoUrl && (
+              <img
+                src={logoUrl}
+                alt="Agency Logo"
+                style={{ width: "48px", height: "48px", objectFit: "contain" }}
+                onError={(e) => {
+                  if (e.currentTarget.src !== window.location.origin + '/logo.png') {
+                    e.currentTarget.src = '/logo.png';
+                  } else {
+                    e.currentTarget.style.display = 'none';
+                  }
+                }}
+              />
+            )}
             <div>
               <div style={{ fontSize: "18px", fontWeight: 900, lineHeight: 1 }}>
                 <span style={{ color: "#d12525" }}>{COMPANY_NAME_1} </span>
@@ -777,7 +1021,12 @@ const EmployeePrintProfile = ({ employee, photoUrl }) => {
             }}
           >
             {photoUrl ? (
-              <img src={photoUrl} alt={employee.full_name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              <img
+                src={photoUrl}
+                alt={employee.full_name}
+                style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                onError={(e) => { e.currentTarget.style.display = 'none'; }}
+              />
             ) : (
               <span style={{ fontSize: "28px", color: "#9ca3af" }}>👤</span>
             )}
@@ -845,21 +1094,63 @@ const EmployeePrintProfile = ({ employee, photoUrl }) => {
 // ─── Main Component Export ────────────────────────────────────────────────────
 export default function EmployeeIDCard({ employee }) {
   const [generating, setGenerating] = useState(false);
+  const [photoDocUrl, setPhotoDocUrl] = useState(null);
+  const [agencyLogoUrl, setAgencyLogoUrl] = useState(null);
+  const [showLogoOnIdCard, setShowLogoOnIdCard] = useState(true);
+  const [showLogoOnPrintProfile, setShowLogoOnPrintProfile] = useState(true);
 
-  const photoUrl = employee?.photo_url
-    ? `${getServerBaseUrl()}/uploads/docs/${employee.photo_url}`
-    : null;
+  useEffect(() => {
+    // 1. Fetch agency settings to get agency_logo_url + where the logo should be shown
+    api.get('/settings/system/agency_settings')
+      .then((res) => {
+        if (res?.data) {
+          const parsed = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+          if (parsed?.agency_logo_url) {
+            setAgencyLogoUrl(resolveLogoUrl(parsed.agency_logo_url));
+          }
+          setShowLogoOnIdCard(parsed?.logo_locations?.id_card !== false);
+          setShowLogoOnPrintProfile(parsed?.logo_locations?.print_profile !== false);
+        }
+      })
+      .catch((err) => console.warn('Failed to load agency settings for ID card:', err));
+
+    // 2. Fetch employee documents if photo_url is not directly present
+    if (!employee?.photo_url && employee?.id) {
+      api.get(`/employees/${employee.id}/docs`)
+        .then((res) => {
+          const docs = res?.data?.documents || res?.data || [];
+          if (Array.isArray(docs)) {
+            const photoDoc = docs.find((d) => d.document_type === 'photo');
+            if (photoDoc?.file_path) {
+              setPhotoDocUrl(resolvePhotoUrl(photoDoc.file_path));
+            }
+          }
+        })
+        .catch((err) => console.warn('Failed to load employee docs for photo:', err));
+    }
+  }, [employee?.id, employee?.photo_url]);
+
+  const effectivePhotoUrl = resolvePhotoUrl(employee?.photo_url) || photoDocUrl;
+  const effectiveLogoUrl = showLogoOnIdCard ? (agencyLogoUrl || '/logo.png') : null;
+  const effectivePrintProfileLogoUrl = showLogoOnPrintProfile ? (agencyLogoUrl || '/logo.png') : null;
 
   const downloadPDF = async () => {
     try {
       setGenerating(true);
+
+      // 1. Prepare clipped photo data URL (rounded corners, 100% cover, zero gap)
       let photoDataUrl = null;
-      if (photoUrl) {
-        try {
-          photoDataUrl = await imgToDataURL(photoUrl);
-        } catch {
-          /* no photo */
-        }
+      if (effectivePhotoUrl) {
+        photoDataUrl = await prepareClippedPhoto(effectivePhotoUrl, 360, 428, 20);
+      }
+
+      // 2. Prepare square logo data URL (contain aspect ratio, centered transparent PNG)
+      let logoDataUrl = null;
+      if (effectiveLogoUrl) {
+        logoDataUrl = await prepareSquareLogo(effectiveLogoUrl, 240);
+      }
+      if (!logoDataUrl && showLogoOnIdCard && effectiveLogoUrl !== '/logo.png') {
+        logoDataUrl = await prepareSquareLogo('/logo.png', 240);
       }
 
       const pdf = new jsPDF({
@@ -875,8 +1166,8 @@ export default function EmployeeIDCard({ employee }) {
       const y0 = PDF_TOP_MARGIN;
 
       // Draw Front and Back side-by-side matching Image 3 sample
-      await drawFront(pdf, employee, x0, y0, photoDataUrl);
-      await drawBack(pdf, x0 + CW + PDF_CARD_GAP, y0);
+      await drawFront(pdf, employee, x0, y0, photoDataUrl, logoDataUrl);
+      await drawBack(pdf, x0 + CW + PDF_CARD_GAP, y0, logoDataUrl);
 
       const safeName = (employee?.full_name || "Employee").replace(/\s+/g, "_");
       pdf.save(`${safeName}_ID_Card.pdf`);
@@ -898,11 +1189,11 @@ export default function EmployeeIDCard({ employee }) {
         <div className="flex flex-wrap gap-6 justify-center mb-6 overflow-x-auto pb-2">
           <div>
             <p className="text-xs text-center text-slate-500 mb-2 uppercase tracking-wider font-semibold">Front Side</p>
-            <IDCardFront employee={employee} photoUrl={photoUrl} />
+            <IDCardFront employee={employee} photoUrl={effectivePhotoUrl} logoUrl={effectiveLogoUrl} />
           </div>
           <div>
             <p className="text-xs text-center text-slate-500 mb-2 uppercase tracking-wider font-semibold">Back Side</p>
-            <IDCardBack />
+            <IDCardBack logoUrl={effectiveLogoUrl} />
           </div>
         </div>
 
@@ -926,7 +1217,7 @@ export default function EmployeeIDCard({ employee }) {
       </div>
 
       {/* Print-only profile */}
-      <EmployeePrintProfile employee={employee} photoUrl={photoUrl} />
+      <EmployeePrintProfile employee={employee} photoUrl={effectivePhotoUrl} logoUrl={effectivePrintProfileLogoUrl} />
     </>
   );
 }

@@ -161,6 +161,7 @@ async function runMigrations(pool, query) {
               1050, // Table already exists
               1091, // Can't DROP; check that column/key exists
               1146, // Table doesn't exist (for migrations on tables from old schema)
+              3940, // Check constraint not found (DROP CHECK on a constraint schema.sql no longer creates)
             ];
             if (ignoredErrors.includes(stmtErr.errno)) {
               logger.warn(`   ⚠ Skipped (already done): ${stmtErr.message.slice(0, 80)}`);

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { format } from 'date-fns';
 import {
-  Database, HardDrive, FolderOpen, Download, Trash2,
+  Database, HardDrive, FolderOpen, Folder, Download, Trash2,
   Play, Clock, CheckCircle2, AlertCircle, ShieldCheck,
   RefreshCw, FileArchive, Settings2, Save,
   Paperclip, Copy, Check, Info, RotateCcw
@@ -110,11 +110,30 @@ export default function DatabaseBackupTab() {
   };
 
   const handleCopyUploadsPath = () => {
-    if (!uploadsInfo?.path) return;
-    navigator.clipboard.writeText(uploadsInfo.path);
+    const target = customDocPath || uploadsInfo?.path || storageData.current_path;
+    if (!target) return;
+    navigator.clipboard.writeText(target);
     setCopiedPath(true);
-    showToast('Uploads folder path copied to clipboard!', 'success');
+    showToast('Storage folder path copied to clipboard!', 'success');
     setTimeout(() => setCopiedPath(false), 2500);
+  };
+
+  const handleOpenFolder = async (folderPath) => {
+    const target = folderPath || customDocPath || storageData.current_path;
+    if (!target) return;
+    if (window.electronAPI && window.electronAPI.openFolder) {
+      try {
+        await window.electronAPI.openFolder(target);
+        return;
+      } catch (_) {}
+    }
+    try {
+      await api.post('/settings/storage/open-folder', { path: target });
+      showToast('Opening folder in Windows Explorer...', 'info');
+    } catch (err) {
+      console.warn('Could not open folder:', err);
+      showToast('Could not open folder: ' + (err.message || 'Unknown error'), 'error');
+    }
   };
 
   const handleDownloadAttachmentsZip = () => {
@@ -680,23 +699,35 @@ export default function DatabaseBackupTab() {
                 <FolderOpen className="w-3.5 h-3.5 text-teal-600" />
                 Documents Directory Path:
               </label>
-              <button
-                type="button"
-                onClick={handleCopyUploadsPath}
-                className="inline-flex items-center gap-1 text-[11px] font-semibold text-teal-700 hover:text-teal-800 bg-white hover:bg-teal-50 px-2 py-0.5 rounded border border-teal-200 transition-colors shadow-2xs cursor-pointer"
-              >
-                {copiedPath ? (
-                  <>
-                    <Check className="w-3 h-3 text-emerald-600" />
-                    <span className="text-emerald-700">Copied!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3 h-3 text-teal-600" />
-                    <span>Copy Path</span>
-                  </>
-                )}
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => handleOpenFolder(customDocPath || storageData.current_path)}
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-100 px-2 py-0.5 rounded border border-slate-300 transition-colors shadow-2xs cursor-pointer"
+                  title="Open storage folder in Windows Explorer"
+                >
+                  <Folder className="w-3 h-3 text-teal-600" />
+                  <span>Open in Explorer</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopyUploadsPath}
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-teal-700 hover:text-teal-800 bg-white hover:bg-teal-50 px-2 py-0.5 rounded border border-teal-200 transition-colors shadow-2xs cursor-pointer"
+                  title="Copy storage folder path to clipboard"
+                >
+                  {copiedPath ? (
+                    <>
+                      <Check className="w-3 h-3 text-emerald-600" />
+                      <span className="text-emerald-700">Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3 h-3 text-teal-600" />
+                      <span>Copy Path</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
             <div className="flex flex-col sm:flex-row gap-2">

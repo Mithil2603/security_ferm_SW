@@ -106,4 +106,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Select Folder Dialog
   selectFolder: (options) => ipcRenderer.invoke('select-folder', options),
+
+  // Open Folder in Windows Explorer
+  openFolder: (folderPath) => ipcRenderer.invoke('open-folder', folderPath),
 });

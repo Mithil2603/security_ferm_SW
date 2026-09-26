@@ -47,8 +47,9 @@ function generatePayslipPDF(payroll, employee, client, agencySettings, dataCallb
   const companyAddress = agencySettings?.agency_address || '123 Security Avenue, Business Park\nAhmedabad, Gujarat 380015';
 
   let hasLogo = false;
-  if (agencySettings?.agency_logo_url) {
+  if (agencySettings?.agency_logo_url && agencySettings?.logo_locations?.payslip !== false) {
     const storageConfig = require('./storageConfig');
+    const logoName = path.basename(agencySettings.agency_logo_url);
     let logoPath = path.join(storageConfig.getActiveUploadDir(), logoName);
     if (!fs.existsSync(logoPath)) {
       logoPath = path.join(storageConfig.getDefaultUploadDir(), logoName);

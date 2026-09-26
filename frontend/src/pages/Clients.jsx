@@ -33,7 +33,8 @@ const emptyForm = {
   rate_per_day: '',
   total_timeline_amount: '',
   addon_days: '',
-  guard_categories: []
+  guard_categories: [],
+  sites: []
 };
 
 export default function Clients() {
@@ -422,6 +423,28 @@ export default function Clients() {
     });
   };
 
+  const handleAddSite = () => {
+    setFormData(prev => ({
+      ...prev,
+      sites: [...(prev.sites || []), { name: '', address: '' }]
+    }));
+  };
+
+  const handleSiteChange = (index, field, value) => {
+    setFormData(prev => {
+      const updated = [...(prev.sites || [])];
+      updated[index] = { ...updated[index], [field]: value };
+      return { ...prev, sites: updated };
+    });
+  };
+
+  const handleRemoveSite = (index) => {
+    setFormData(prev => ({
+      ...prev,
+      sites: (prev.sites || []).filter((_, i) => i !== index)
+    }));
+  };
+
   const openCreateModal = () => {
     setEditingClient(null);
     const today = format(new Date(), 'yyyy-MM-dd');
@@ -435,7 +458,8 @@ export default function Clients() {
       employee_count: 1,
       guard_categories: [
         { role: 'Security Guard', guards_count: 1, monthly_rate: '', rate_per_day: '', hsn_code: '998525' }
-      ]
+      ],
+      sites: []
     });
     setError('');
     setIsModalOpen(true);
@@ -461,6 +485,18 @@ export default function Clients() {
       }];
     }
 
+    let clientSites = [];
+    if (client.sites) {
+      try {
+        const parsed = typeof client.sites === 'string' ? JSON.parse(client.sites) : client.sites;
+        if (Array.isArray(parsed)) {
+          clientSites = parsed.map(s => typeof s === 'string' ? { name: s, address: '' } : { name: s.name || '', address: s.address || '' });
+        }
+      } catch (e) {
+        clientSites = [];
+      }
+    }
+
     setFormData({
       name: client.name || '',
       address: client.address || '',
@@ -483,7 +519,8 @@ export default function Clients() {
       rate_per_day: client.rate_per_day !== null && client.rate_per_day !== undefined ? client.rate_per_day : '',
       total_timeline_amount: client.total_timeline_amount !== null && client.total_timeline_amount !== undefined ? client.total_timeline_amount : '',
       addon_days: '',
-      guard_categories: cats
+      guard_categories: cats,
+      sites: clientSites
     });
     setError('');
     setIsModalOpen(true);
@@ -520,6 +557,18 @@ export default function Clients() {
       }
       if (Array.isArray(formData.guard_categories) && formData.guard_categories.length > 0) {
         payload.guard_categories = formData.guard_categories;
+      }
+
+      // Filter out sites without a valid name
+      if (Array.isArray(formData.sites)) {
+        payload.sites = formData.sites
+          .filter(s => s && s.name && s.name.trim())
+          .map(s => ({
+            name: s.name.trim(),
+            address: (s.address || '').trim()
+          }));
+      } else {
+        payload.sites = [];
       }
 
       if (payload.client_type === 'event') {
@@ -855,6 +904,16 @@ export default function Clients() {
                       <div className="text-slate-500 text-xs mt-1 flex items-center gap-1">
                         <MapPin className="w-3 h-3" /> {client.city}, {client.state}
                       </div>
+                      {Array.isArray(client.sites) && client.sites.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {client.sites.map((s, idx) => (
+                            <span key={idx} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-teal-50 text-teal-700 border border-teal-200">
+                              <MapPin className="w-2.5 h-2.5 text-teal-600" />
+                              {typeof s === 'string' ? s : s.name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       <div className="font-medium text-slate-700">{client.contact_person || 'N/A'}</div>
@@ -1188,6 +1247,79 @@ export default function Clients() {
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">GST Number</label>
                   <input type="text" name="gst_number" value={formData.gst_number} onChange={handleInputChange} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent" />
+                </div>
+
+                {/* Client Sites Section */}
+                <div className="col-span-1 md:col-span-2 border-t border-slate-200 pt-4 mt-2">
+                  <div className="flex items-center justify-between mb-2.5">
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                        <MapPin className="w-4 h-4 text-teal-600" />
+                        Client Sites / Billing Locations
+                      </h4>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Add branches, projects, or premises for this client. You can generate bills specifically for each site.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleAddSite}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-lg transition-colors cursor-pointer shadow-2xs"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Add Site
+                    </button>
+                  </div>
+
+                  {(formData.sites || []).length === 0 ? (
+                    <div className="p-3 bg-slate-50 border border-dashed border-slate-200 rounded-xl text-center">
+                      <p className="text-xs text-slate-500">
+                        No sites added yet. Click <button type="button" onClick={handleAddSite} className="text-teal-700 font-semibold underline hover:text-teal-800 cursor-pointer">Add Site</button> if this client has distinct project locations or branches.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {(formData.sites || []).map((site, sIdx) => (
+                        <div key={sIdx} className="p-2.5 bg-slate-50/80 rounded-xl border border-slate-200 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
+                          <div className="sm:col-span-6">
+                            <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                              Site #{sIdx + 1} Name *
+                            </label>
+                            <input
+                              type="text"
+                              value={site.name || ''}
+                              onChange={(e) => handleSiteChange(sIdx, 'name', e.target.value)}
+                              placeholder="e.g. Masterpiece, Corporate Office, North Gate"
+                              className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-md focus:ring-2 focus:ring-teal-500"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-5">
+                            <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                              Address / Location <span className="text-slate-400 font-normal">(Optional)</span>
+                            </label>
+                            <input
+                              type="text"
+                              value={site.address || ''}
+                              onChange={(e) => handleSiteChange(sIdx, 'address', e.target.value)}
+                              placeholder="e.g. Near SG Highway"
+                              className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-md focus:ring-2 focus:ring-teal-500"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-1 flex justify-end pb-0.5">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveSite(sIdx)}
+                              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
+                              title="Remove site"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Guard Deployment & Timeline Section */}

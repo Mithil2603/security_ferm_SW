@@ -29,6 +29,9 @@ export default function Invoices() {
 
   const [attendanceSummary, setAttendanceSummary] = useState(null);
   const [fetchingAttendance, setFetchingAttendance] = useState(false);
+  const [isCustomSite, setIsCustomSite] = useState(false);
+
+  const [roundOffEnabled, setRoundOffEnabled] = useState(true);
 
   const [invoiceForm, setInvoiceForm] = useState({
     invoice_number: '', client_id: '', billing_period_start: '', billing_period_end: '',
@@ -49,12 +52,12 @@ export default function Invoices() {
           const daily = parseFloat((m / 31).toFixed(2));
           row.rate_per_day = daily;
           if (row.total_duty_days) {
-            row.amount = parseFloat((daily * (parseInt(row.total_duty_days) || 0)).toFixed(2));
+            row.amount = parseFloat((daily * (parseFloat(row.total_duty_days) || 0)).toFixed(2));
           }
         }
       } else if (field === 'rate_per_day' || field === 'total_duty_days') {
         const r = parseFloat(field === 'rate_per_day' ? value : row.rate_per_day) || 0;
-        const d = parseInt(field === 'total_duty_days' ? value : row.total_duty_days) || 0;
+        const d = parseFloat(field === 'total_duty_days' ? value : row.total_duty_days) || 0;
         if (r > 0 && d > 0) {
           row.amount = parseFloat((r * d).toFixed(2));
         }
@@ -70,7 +73,7 @@ export default function Invoices() {
       updated[index] = row;
       const totalAmt = updated.reduce((s, it) => s + (parseFloat(it.amount) || 0), 0);
       const totalGuards = updated.reduce((s, it) => s + (parseInt(it.guards_count) || 0), 0);
-      const totalDays = updated.reduce((s, it) => s + (parseInt(it.total_duty_days) || 0), 0);
+      const totalDays = updated.reduce((s, it) => s + (parseFloat(it.total_duty_days) || 0), 0);
 
       return {
         ...prev,
@@ -195,6 +198,9 @@ export default function Invoices() {
     fetchInvoices();
     fetchClients();
     fetchBankAccounts();
+    api.get('/settings/system/invoice_round_off_enabled')
+      .then(res => setRoundOffEnabled(res.data !== 'false'))
+      .catch(() => setRoundOffEnabled(true));
   }, [page]);
 
   const fetchClients = async () => {
@@ -298,7 +304,7 @@ export default function Invoices() {
         payload.monthly_rate = parseFloat(invoiceForm.monthly_rate);
       }
       if (invoiceForm.total_duty_days) {
-        payload.total_duty_days = parseInt(invoiceForm.total_duty_days, 10);
+        payload.total_duty_days = parseFloat(invoiceForm.total_duty_days);
       }
       if (invoiceForm.amount_subtotal !== '' && !isNaN(parseFloat(invoiceForm.amount_subtotal))) {
         payload.amount_subtotal = parseFloat(invoiceForm.amount_subtotal);
@@ -309,7 +315,7 @@ export default function Invoices() {
           payload.fixed_amount = parseFloat(invoiceForm.fixed_amount);
         }
         if (invoiceForm.rate_per_guard) payload.rate_per_guard = parseFloat(invoiceForm.rate_per_guard);
-        if (invoiceForm.duty_days_worked) payload.duty_days_worked = parseInt(invoiceForm.duty_days_worked, 10);
+        if (invoiceForm.duty_days_worked) payload.duty_days_worked = parseFloat(invoiceForm.duty_days_worked);
       }
       await api.post('/invoices', payload);
       toast.success('Single bill generated successfully');
@@ -502,8 +508,8 @@ export default function Invoices() {
         </div>
         <div className="flex gap-2">
           <button onClick={() => setIsEventOpen(true)}
-            className="bg-amber-100 hover:bg-amber-200 text-amber-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-amber-300 flex items-center gap-2">
-            <Zap className="w-4 h-4" />
+            className="bg-teal-50 hover:bg-teal-100 text-teal-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-teal-300 flex items-center gap-2">
+            <Zap className="w-4 h-4 text-teal-600" />
             Event Invoice
           </button>
           <button onClick={handleAutoGenerate} disabled={submitting}
@@ -682,7 +688,7 @@ export default function Invoices() {
                   onClick={() => setInvoiceForm(prev => ({ ...prev, invoice_type: 'event' }))}
                   className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
                     invoiceForm.invoice_type === 'event'
-                      ? 'bg-amber-500 text-white shadow-xs'
+                      ? 'bg-white text-teal-700 shadow-xs border border-slate-200'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
@@ -744,15 +750,18 @@ export default function Invoices() {
                     }
 
                     const itemsSubtotal = items.reduce((s, it) => s + (parseFloat(it.amount) || 0), 0);
+                    const clientSites = Array.isArray(selected?.sites) ? selected.sites : [];
+                    const defaultSite = clientSites.length === 1 ? (typeof clientSites[0] === 'string' ? clientSites[0] : clientSites[0].name) : '';
+                    setIsCustomSite(false);
 
                     setInvoiceForm(prev => ({
                       ...prev,
                       client_id: cid,
-                      site_name: prev.site_name || selected?.site_name || selected?.name || '',
+                      site_name: defaultSite || '',
                       guards_count: items.reduce((s, it) => s + (parseInt(it.guards_count) || 0), 0) || guardsCount,
                       monthly_rate: mRate,
                       rate_per_day: dRate,
-                      total_duty_days: items.reduce((s, it) => s + (parseInt(it.total_duty_days) || 0), 0) || dutyDays,
+                      total_duty_days: items.reduce((s, it) => s + (parseFloat(it.total_duty_days) || 0), 0) || dutyDays,
                       bill_items: items,
                       amount_subtotal: itemsSubtotal > 0 ? itemsSubtotal.toFixed(2) : (selected?.monthly_rate !== undefined ? selected.monthly_rate : prev.amount_subtotal),
                       ...(isEvent ? { invoice_type: 'event' } : {})
@@ -803,33 +812,82 @@ export default function Invoices() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Site Name *</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g. Masterpiece & Vadavi"
-                    value={invoiceForm.site_name} 
-                    onChange={(e) => setInvoiceForm(prev => ({ ...prev, site_name: e.target.value }))} 
-                    className={inputCls} 
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Payment Bank Account *</label>
-                  <select
-                    value={invoiceForm.bank_account_id}
-                    onChange={(e) => setInvoiceForm(prev => ({ ...prev, bank_account_id: e.target.value }))}
-                    className={inputCls}
-                  >
-                    <option value="">-- Default Firm Bank --</option>
-                    {bankAccounts.map(b => (
-                      <option key={b.id} value={b.id}>
-                        {b.bank_name} - {b.account_number}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+              {(() => {
+                const selectedClient = clients.find(c => String(c.id) === String(invoiceForm.client_id));
+                const selectedClientSites = Array.isArray(selectedClient?.sites) ? selectedClient.sites : [];
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-sm font-medium text-slate-700">Site Name *</label>
+                        {selectedClientSites.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsCustomSite(!isCustomSite);
+                              if (!isCustomSite) {
+                                setInvoiceForm(prev => ({ ...prev, site_name: '' }));
+                              }
+                            }}
+                            className="text-[11px] text-teal-600 hover:text-teal-700 font-medium underline cursor-pointer"
+                          >
+                            {isCustomSite ? 'Pick from client sites' : '+ Custom site name'}
+                          </button>
+                        )}
+                      </div>
+                      {selectedClientSites.length > 0 && !isCustomSite ? (
+                        <select
+                          value={invoiceForm.site_name}
+                          onChange={(e) => {
+                            if (e.target.value === '__custom__') {
+                              setIsCustomSite(true);
+                              setInvoiceForm(prev => ({ ...prev, site_name: '' }));
+                            } else {
+                              setInvoiceForm(prev => ({ ...prev, site_name: e.target.value }));
+                            }
+                          }}
+                          className={inputCls}
+                        >
+                          <option value="">-- Select Client Site --</option>
+                          {selectedClientSites.map((s, idx) => {
+                            const sName = typeof s === 'string' ? s : s.name;
+                            const sAddr = typeof s === 'object' && s.address ? ` (${s.address})` : '';
+                            return (
+                              <option key={idx} value={sName}>
+                                {sName}{sAddr}
+                              </option>
+                            );
+                          })}
+                          <option value="__custom__">➕ Enter Other / Custom Site...</option>
+                        </select>
+                      ) : (
+                        <input 
+                          type="text" 
+                          placeholder="e.g. Masterpiece & Vadavi"
+                          value={invoiceForm.site_name} 
+                          onChange={(e) => setInvoiceForm(prev => ({ ...prev, site_name: e.target.value }))} 
+                          className={inputCls} 
+                        />
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Payment Bank Account *</label>
+                      <select
+                        value={invoiceForm.bank_account_id}
+                        onChange={(e) => setInvoiceForm(prev => ({ ...prev, bank_account_id: e.target.value }))}
+                        className={inputCls}
+                      >
+                        <option value="">-- Default Firm Bank --</option>
+                        {bankAccounts.map(b => (
+                          <option key={b.id} value={b.id}>
+                            {b.bank_name} - {b.account_number}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {invoiceForm.invoice_type === 'event' ? (
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -977,6 +1035,7 @@ export default function Invoices() {
                               <input
                                 type="number"
                                 min="0"
+                                step="0.01"
                                 value={item.total_duty_days ?? ''}
                                 onChange={(e) => handleBillItemChange(idx, 'total_duty_days', e.target.value)}
                                 placeholder="31"
@@ -1180,8 +1239,8 @@ export default function Invoices() {
 
               {/* Event-specific Pricing */}
               {invoiceForm.invoice_type === 'event' && (
-                <div className="bg-amber-50/70 p-3.5 rounded-xl border border-amber-200 space-y-3">
-                  <div className="text-xs font-bold text-amber-900 uppercase tracking-wide">
+                <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-3">
+                  <div className="text-xs font-bold text-slate-800 uppercase tracking-wide">
                     Event Pricing (Full Payment - No Proration)
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1201,7 +1260,8 @@ export default function Invoices() {
                       <label className="block text-xs font-medium text-slate-700 mb-1">Or Days Worked</label>
                       <input
                         type="number"
-                        min="1"
+                        min="0.5"
+                        step="0.01"
                         placeholder="e.g. 10"
                         value={invoiceForm.duty_days_worked || ''}
                         onChange={e => setInvoiceForm(prev => ({ ...prev, duty_days_worked: e.target.value }))}
@@ -1210,7 +1270,7 @@ export default function Invoices() {
                     </div>
                   </div>
                   {(!invoiceForm.fixed_amount || parseFloat(invoiceForm.fixed_amount) <= 0) && (
-                    <div className="grid grid-cols-2 gap-3 pt-1 border-t border-amber-200/60">
+                    <div className="grid grid-cols-2 gap-3 pt-1 border-t border-slate-200">
                       <div>
                         <label className="block text-xs font-medium text-slate-700 mb-1">Guards Count</label>
                         <input
@@ -1300,15 +1360,15 @@ export default function Invoices() {
                 />
               </div>
 
-              <div className="flex items-center p-3 bg-amber-50 rounded-lg border border-amber-200">
+              <div className="flex items-center p-3 bg-slate-50 rounded-lg border border-slate-200">
                 <input 
                   type="checkbox" 
                   id="monthly_rcm" 
                   checked={invoiceForm.is_rcm_applicable} 
                   onChange={e => setInvoiceForm(prev => ({...prev, is_rcm_applicable: e.target.checked}))} 
-                  className="h-4 w-4 text-amber-600 focus:ring-amber-500 rounded border-amber-300 cursor-pointer" 
+                  className="h-4 w-4 text-teal-600 focus:ring-teal-500 rounded border-slate-300 cursor-pointer" 
                 />
-                <label htmlFor="monthly_rcm" className="ml-2 block text-xs font-semibold text-amber-900 cursor-pointer">
+                <label htmlFor="monthly_rcm" className="ml-2 block text-xs font-semibold text-slate-800 cursor-pointer">
                   Apply RCM (Reverse Charge Mechanism - GST paid by client)
                 </label>
               </div>
@@ -1340,28 +1400,28 @@ export default function Invoices() {
                   tax = taxable * 0.18;
                 }
                 const total = invoiceForm.is_rcm_applicable ? taxable : (taxable + tax);
-                const roundedTotal = Math.round(total);
-                const roundOff = parseFloat((roundedTotal - total).toFixed(2));
+                const roundedTotal = roundOffEnabled ? Math.round(total) : parseFloat(total.toFixed(2));
+                const roundOff = roundOffEnabled ? parseFloat((roundedTotal - total).toFixed(2)) : 0;
 
                 return (
-                  <div className={`p-3.5 rounded-xl border text-xs space-y-1.5 ${isEvent ? 'bg-amber-50/70 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
+                  <div className="p-3.5 rounded-xl border text-xs space-y-1.5 bg-slate-50 border-slate-200">
                     <div className="flex justify-between items-center pb-1 border-b border-slate-200/80">
                       <span className="font-bold text-slate-800">
                         {isEvent ? '⚡ Full Event Payment:' : 'Bill Subtotal Amount:'}
                       </span>
                       <span className="font-bold text-slate-900">
                         ₹{baseAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                        {isEvent && <span className="ml-1 text-[10px] text-amber-800 bg-amber-200 px-1 py-0.5 rounded font-normal">No Proration</span>}
+                        {isEvent && <span className="ml-1 text-[10px] text-teal-800 bg-teal-100 px-1 py-0.5 rounded font-normal">No Proration</span>}
                       </span>
                     </div>
                     {!isEvent && attendanceSummary?.absent_guard_days > 0 && (
-                      <div className="flex justify-between text-amber-800">
+                      <div className="flex justify-between text-slate-600">
                         <span>Absence Deduction ({attendanceSummary.absent_guard_days} guard-days):</span>
                         <span className="font-semibold">- ₹{parseFloat(attendanceSummary.absence_deduction || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
                     )}
                     {disc > 0 && (
-                      <div className="flex justify-between text-amber-700">
+                      <div className="flex justify-between text-slate-600">
                         <span>Discount:</span>
                         <span className="font-semibold">- ₹{disc.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
@@ -1373,12 +1433,10 @@ export default function Invoices() {
                     {Math.abs(roundOff) > 0 && (
                       <div className="flex justify-between text-slate-600">
                         <span>Round Off:</span>
-                        <span className="font-semibold text-slate-800">
-                          {roundOff > 0 ? `+₹${roundOff.toFixed(2)}` : `-₹${Math.abs(roundOff).toFixed(2)}`}
-                        </span>
+                        <span>₹{roundOff > 0 ? `+₹${roundOff.toFixed(2)}` : `-₹${Math.abs(roundOff).toFixed(2)}`}</span>
                       </div>
                     )}
-                    <div className={`flex justify-between text-sm font-bold pt-1.5 border-t border-slate-200 ${isEvent ? 'text-amber-900' : 'text-teal-800'}`}>
+                    <div className="flex justify-between text-sm font-bold pt-1.5 border-t border-slate-200 text-teal-800">
                       <span>Billed Total:</span>
                       <span>₹{roundedTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                     </div>

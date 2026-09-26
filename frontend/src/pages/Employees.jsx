@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   UserSquare2, Plus, Search, Edit2, Trash2, CheckCircle2, XCircle, 
   ShieldCheck, X, Upload, FileText, Download, 
   ExternalLink, Eye, Phone, Mail, MapPin, Calendar, CreditCard, Building, User,
   ArrowUpDown, ArrowUp, ArrowDown, Camera, Image as ImageIcon, Paperclip, RefreshCw, FileCheck,
-  FolderOpen, Copy, Check, HardDrive
+  FolderOpen, Folder, Copy, Check, HardDrive, Settings as SettingsIcon
 } from 'lucide-react';
 import api from '../services/api';
 import { getServerBaseUrl, getApiBaseUrl } from '../utils/apiUrl';
@@ -97,17 +98,50 @@ export default function Employees() {
   const [stagedOtherDocs, setStagedOtherDocs] = useState([]); // [{ id, title, file }]
   const [newOtherDocTitle, setNewOtherDocTitle] = useState('');
   const [newOtherDocFile, setNewOtherDocFile] = useState(null);
-  const [docsStoragePath, setDocsStoragePath] = useState('');
-  const [copiedStoragePath, setCopiedStoragePath] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const navigate = useNavigate();
+  const [docsStoragePath, setDocsStoragePath] = useState('');
+  const [storageLoading, setStorageLoading] = useState(false);
+  const [copiedStoragePath, setCopiedStoragePath] = useState(false);
 
-  const handleCopyStoragePath = (customPath) => {
-    const pathToCopy = customPath || docsStoragePath;
-    if (!pathToCopy) return;
-    navigator.clipboard.writeText(pathToCopy);
+  const fetchStoragePath = async () => {
+    try {
+      setStorageLoading(true);
+      const res = await api.get('/employees/docs/storage-path');
+      const pathVal = res?.data?.storage_path || res?.storage_path;
+      if (pathVal) {
+        setDocsStoragePath(pathVal);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch storage path:', err);
+    } finally {
+      setStorageLoading(false);
+    }
+  };
+
+  const handleCopyStoragePath = (targetPath) => {
+    if (!targetPath) return;
+    navigator.clipboard.writeText(targetPath);
     setCopiedStoragePath(true);
-    toast.success('Document storage path copied to clipboard!');
+    toast.success('Document storage path copied to clipboard');
     setTimeout(() => setCopiedStoragePath(false), 2500);
+  };
+
+  const handleOpenStorageFolder = async () => {
+    const target = docsStoragePath;
+    if (!target) return;
+    if (window.electronAPI && window.electronAPI.openFolder) {
+      try {
+        await window.electronAPI.openFolder(target);
+        return;
+      } catch (_) {}
+    }
+    try {
+      await api.post('/settings/storage/open-folder', { path: target });
+      toast.info('Opening storage folder in File Explorer...');
+    } catch (err) {
+      console.warn('Could not open folder in Explorer:', err);
+    }
   };
 
   const handleAddOtherDocSlot = () => {
@@ -140,15 +174,12 @@ export default function Employees() {
 
   const fetchDropdownData = async () => {
     try {
-      const [ssRes, clRes, storageRes] = await Promise.all([
+      const [ssRes, clRes] = await Promise.all([
         api.get('/employees/meta/salary-structures'),
-        api.get('/clients?limit=200'),
-        api.get('/employees/docs/storage-path').catch(() => null)
+        api.get('/clients?limit=200')
       ]);
       setSalaryStructures(ssRes.data || []);
       setClientsList(clRes.data || []);
-      const sp = storageRes?.data?.storage_path || storageRes?.storage_path;
-      if (sp) setDocsStoragePath(sp);
     } catch (err) {
       console.error('Failed to fetch dropdown data', err);
     }
@@ -158,8 +189,6 @@ export default function Employees() {
     try {
       const response = await api.get(`/employees/${empId}/docs`);
       setDocuments(response.data || []);
-      const sp = response.storage_path || response.data?.storage_path;
-      if (sp) setDocsStoragePath(sp);
     } catch (err) {
       console.error('Failed to fetch documents', err);
     }
@@ -168,6 +197,8 @@ export default function Employees() {
   useEffect(() => { fetchEmployees(); }, [searchTerm, page, sortBy, sortOrder]);
 
   useEffect(() => { setPage(1); }, [searchTerm, sortBy, sortOrder]);
+
+  useEffect(() => { fetchStoragePath(); }, []);
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -192,6 +223,7 @@ export default function Employees() {
     setViewingEmp(emp);
     setViewModalTab(tab);
     fetchDocuments(emp.id);
+    fetchStoragePath();
     setIsViewModalOpen(true);
   };
 
@@ -210,6 +242,7 @@ export default function Employees() {
     setDocuments([]);
     setError('');
     fetchDropdownData();
+    fetchStoragePath();
     setIsModalOpen(true);
   };
 
@@ -238,11 +271,12 @@ export default function Employees() {
       assigned_client_id: emp.assigned_client_id || '',
       emergency_contact_name: emp.emergency_contact_name || '',
       emergency_contact_phone: emp.emergency_contact_phone || '',
-      notes: emp.notes || '', is_active: emp.is_active !== undefined ? emp.is_active : true,
+      notes: emp.notes || '', is_active: emp.is_active !== undefined ? Boolean(emp.is_active) : true,
     });
     setError('');
     fetchDropdownData();
     fetchDocuments(emp.id);
+    fetchStoragePath();
     setIsModalOpen(true);
   };
 
@@ -458,6 +492,18 @@ export default function Employees() {
     } catch (err) {
       console.error('Failed to deactivate employee', err);
       toast.error('Failed to deactivate employee');
+    }
+  };
+
+  const handleReactivate = async (id) => {
+    try {
+      await api.patch(`/employees/${id}/reactivate`);
+      setConfirmDelete(null);
+      toast.success('Employee reactivated successfully');
+      fetchEmployees();
+    } catch (err) {
+      console.error('Failed to reactivate employee', err);
+      toast.error(err.response?.data?.message || 'Failed to reactivate employee');
     }
   };
 
@@ -691,9 +737,21 @@ export default function Employees() {
                         <button onClick={() => openEditModal(emp)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Edit">
                           <Edit2 className="w-4 h-4" />
                         </button>
-                        {emp.is_active && (
-                          <button onClick={() => setConfirmDelete({ id: emp.id, type: 'deactivate' })} className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Deactivate">
+                        {emp.is_active ? (
+                          <button 
+                            onClick={() => setConfirmDelete({ id: emp.id, type: 'deactivate' })} 
+                            className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" 
+                            title="Deactivate Employee"
+                          >
                             <XCircle className="w-4 h-4" />
+                          </button>
+                        ) : (
+                          <button 
+                            onClick={() => setConfirmDelete({ id: emp.id, type: 'reactivate' })} 
+                            className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" 
+                            title="Reactivate Employee"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
                           </button>
                         )}
                         <button onClick={() => setConfirmDelete({ id: emp.id, type: 'hard' })} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete Permanently">
@@ -710,25 +768,39 @@ export default function Employees() {
         <Pagination pagination={pagination} onPageChange={setPage} />
       </div>
 
-      {/* Deactivate/Delete Confirmation */}
+      {/* Deactivate/Delete/Reactivate Confirmation */}
       {confirmDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 animate-slide-up">
             <h3 className="text-lg font-bold text-slate-800 mb-2">
-              {confirmDelete.type === 'deactivate' ? 'Confirm Deactivation' : 'Confirm Permanent Delete'}
+              {confirmDelete.type === 'deactivate' ? 'Confirm Deactivation' 
+                : confirmDelete.type === 'reactivate' ? 'Confirm Reactivation' 
+                : 'Confirm Permanent Delete'}
             </h3>
             <p className="text-sm text-slate-600 mb-6">
               {confirmDelete.type === 'deactivate' 
                 ? 'Are you sure you want to deactivate this employee? They will be marked as inactive.' 
+                : confirmDelete.type === 'reactivate'
+                ? 'Are you sure you want to reactivate this employee? They will be marked as active and eligible for duty assignments.'
                 : 'Are you sure you want to PERMANENTLY delete this employee? This action cannot be undone and will fail if they have linked attendance or payroll records.'}
             </p>
             <div className="flex justify-end gap-3">
               <button onClick={() => setConfirmDelete(null)} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors">Cancel</button>
               <button 
-                onClick={() => confirmDelete.type === 'deactivate' ? handleDeactivate(confirmDelete.id) : handleHardDelete(confirmDelete.id)} 
-                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors shadow-sm"
+                onClick={() => {
+                  if (confirmDelete.type === 'deactivate') handleDeactivate(confirmDelete.id);
+                  else if (confirmDelete.type === 'reactivate') handleReactivate(confirmDelete.id);
+                  else handleHardDelete(confirmDelete.id);
+                }} 
+                className={`px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors shadow-sm ${
+                  confirmDelete.type === 'reactivate'
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : 'bg-red-600 hover:bg-red-700'
+                }`}
               >
-                {confirmDelete.type === 'deactivate' ? 'Deactivate' : 'Delete Permanently'}
+                {confirmDelete.type === 'deactivate' ? 'Deactivate' 
+                  : confirmDelete.type === 'reactivate' ? 'Reactivate' 
+                  : 'Delete Permanently'}
               </button>
             </div>
           </div>
@@ -956,35 +1028,64 @@ export default function Employees() {
                 {/* Local Drive Storage Location Display */}
                 <div className="mb-4 p-3 bg-slate-50 rounded-xl border border-slate-200/90 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="p-1.5 rounded-lg bg-white text-teal-600 border border-slate-200 shrink-0">
+                    <div className="p-1.5 rounded-lg bg-white text-teal-600 border border-slate-200 shrink-0 shadow-2xs">
                       <FolderOpen className="w-4 h-4" />
                     </div>
                     <div className="min-w-0">
                       <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
                         Local Drive Storage Folder:
                       </span>
-                      <span className="font-mono text-xs text-slate-800 font-semibold truncate block select-all" title={docsStoragePath || 'c:\\Users\\mithi\\OneDrive\\Documents\\Freelance Project\\security_ferm_SW\\uploads\\docs'}>
-                        {docsStoragePath || 'c:\\Users\\mithi\\OneDrive\\Documents\\Freelance Project\\security_ferm_SW\\uploads\\docs'}
+                      <span
+                        className="font-mono text-xs text-slate-800 font-semibold truncate block select-all"
+                        title={docsStoragePath || 'Detecting storage location...'}
+                      >
+                        {docsStoragePath || (storageLoading ? 'Detecting storage location...' : 'Default App Storage')}
                       </span>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleCopyStoragePath(docsStoragePath || 'c:\\Users\\mithi\\OneDrive\\Documents\\Freelance Project\\security_ferm_SW\\uploads\\docs')}
-                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-teal-700 hover:text-teal-800 bg-white hover:bg-teal-50 px-3 py-1.5 rounded-lg border border-teal-200 transition-colors shadow-2xs shrink-0 cursor-pointer"
-                  >
-                    {copiedStoragePath ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-600" />
-                        <span className="text-emerald-700">Copied!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5 text-teal-600" />
-                        <span>Copy Path</span>
-                      </>
-                    )}
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleOpenStorageFolder}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-300 transition-colors shadow-2xs cursor-pointer"
+                      title="Open folder in File Explorer"
+                    >
+                      <Folder className="w-3.5 h-3.5 text-teal-600" />
+                      <span>Open Folder</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyStoragePath(docsStoragePath)}
+                      disabled={!docsStoragePath}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-teal-700 hover:text-teal-800 bg-white hover:bg-teal-50 px-3 py-1.5 rounded-lg border border-teal-200 transition-colors shadow-2xs cursor-pointer disabled:opacity-50"
+                      title="Copy path to clipboard"
+                    >
+                      {copiedStoragePath ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span className="text-emerald-700">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5 text-teal-600" />
+                          <span>Copy Path</span>
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsModalOpen(false);
+                        setIsViewModalOpen(false);
+                        navigate('/settings?tab=backup');
+                      }}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800 bg-teal-50 hover:bg-teal-100 px-2.5 py-1.5 rounded-lg border border-teal-200 transition-colors cursor-pointer"
+                      title="Change document storage location (e.g. D: drive) in Settings"
+                    >
+                      <SettingsIcon className="w-3.5 h-3.5 text-teal-600" />
+                      <span>Change</span>
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1768,35 +1869,63 @@ export default function Employees() {
                 {/* Local Drive Storage Location Banner in View Modal */}
                 <div className="mb-3.5 p-3 bg-slate-50 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="p-1.5 rounded-lg bg-white text-teal-600 border border-slate-200 shrink-0">
+                    <div className="p-1.5 rounded-lg bg-white text-teal-600 border border-slate-200 shrink-0 shadow-2xs">
                       <FolderOpen className="w-4 h-4" />
                     </div>
                     <div className="min-w-0">
                       <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
                         Local Drive Storage Folder:
                       </span>
-                      <span className="font-mono text-xs text-slate-800 font-semibold truncate block select-all" title={docsStoragePath || 'c:\\Users\\mithi\\OneDrive\\Documents\\Freelance Project\\security_ferm_SW\\uploads\\docs'}>
-                        {docsStoragePath || 'c:\\Users\\mithi\\OneDrive\\Documents\\Freelance Project\\security_ferm_SW\\uploads\\docs'}
+                      <span
+                        className="font-mono text-xs text-slate-800 font-semibold truncate block select-all"
+                        title={docsStoragePath || 'Detecting storage location...'}
+                      >
+                        {docsStoragePath || (storageLoading ? 'Detecting storage location...' : 'Default App Storage')}
                       </span>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleCopyStoragePath(docsStoragePath || 'c:\\Users\\mithi\\OneDrive\\Documents\\Freelance Project\\security_ferm_SW\\uploads\\docs')}
-                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-teal-700 hover:text-teal-800 bg-white hover:bg-teal-50 px-2.5 py-1.5 rounded-lg border border-teal-200 transition-colors shadow-2xs shrink-0 cursor-pointer"
-                  >
-                    {copiedStoragePath ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-600" />
-                        <span className="text-emerald-700">Copied!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5 text-teal-600" />
-                        <span>Copy Path</span>
-                      </>
-                    )}
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleOpenStorageFolder}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-100 px-2.5 py-1.5 rounded-lg border border-slate-300 transition-colors shadow-2xs cursor-pointer"
+                      title="Open folder in File Explorer"
+                    >
+                      <Folder className="w-3.5 h-3.5 text-teal-600" />
+                      <span>Open Folder</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyStoragePath(docsStoragePath)}
+                      disabled={!docsStoragePath}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-teal-700 hover:text-teal-800 bg-white hover:bg-teal-50 px-2.5 py-1.5 rounded-lg border border-teal-200 transition-colors shadow-2xs cursor-pointer disabled:opacity-50"
+                      title="Copy path to clipboard"
+                    >
+                      {copiedStoragePath ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span className="text-emerald-700">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5 text-teal-600" />
+                          <span>Copy Path</span>
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsViewModalOpen(false);
+                        navigate('/settings?tab=backup');
+                      }}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800 bg-teal-50 hover:bg-teal-100 px-2.5 py-1.5 rounded-lg border border-teal-200 transition-colors cursor-pointer"
+                      title="Change document storage location (e.g. D: drive) in Settings"
+                    >
+                      <SettingsIcon className="w-3.5 h-3.5 text-teal-600" />
+                      <span>Change</span>
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

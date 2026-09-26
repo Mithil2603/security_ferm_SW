@@ -144,6 +144,7 @@ function generateInvoicePDF(invoice, client, agencySettings, dataCallback, endCa
 
   // Logo helper
   function drawLogo() {
+    if (agencySettings?.logo_locations?.invoice === false) return;
     if (agencySettings?.agency_logo_url) {
       const logoName = path.basename(agencySettings.agency_logo_url);
       const storageConfig = require('./storageConfig');

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
 import { format } from 'date-fns';
@@ -23,7 +24,7 @@ const TABS = [
   { id: 'salary', label: 'Salary Structures', icon: Banknote },
   { id: 'team',   label: 'Team Management',   icon: Users },
   { id: 'agency', label: 'Agency Profile',     icon: Building2 },
-  { id: 'backup', label: 'Database Backup',    icon: Database },
+  { id: 'backup', label: 'Database & Storage', icon: Database },
   { id: 'expenses', label: 'Expense Categories', icon: Receipt },
   { id: 'vendors', label: 'Vendors', icon: Building2 },
   { id: 'recurring', label: 'Recurring Expenses', icon: Clock },
@@ -34,7 +35,20 @@ const inputCls = 'w-full px-3 py-2 border border-slate-300 rounded-lg text-sm fo
 
 export default function Settings() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState('salary');
+  const [searchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState(
+    initialTab === 'storage' || initialTab === 'backup' ? 'backup' : (initialTab || 'salary')
+  );
+
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab === 'storage' || tab === 'backup') {
+      setActiveTab('backup');
+    } else if (tab && TABS.some(t => t.id === tab)) {
+      setActiveTab(tab);
+    }
+  }, [searchParams]);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -978,6 +992,13 @@ function AgencyProfileTab() {
     default_tax_rate: '18',
     invoice_prefix: 'INV',
     currency: 'INR',
+    logo_locations: {
+      id_card: true,
+      print_profile: true,
+      invoice: true,
+      payslip: true,
+      vendor_statement: true,
+    },
   });
 
   const [smtpSettings, setSmtpSettings] = useState({
@@ -989,10 +1010,13 @@ function AgencyProfileTab() {
 
   const [smtpSaved, setSmtpSaved] = useState(false);
 
+  const [roundOffEnabled, setRoundOffEnabled] = useState(true);
+  const [savingRoundOff, setSavingRoundOff] = useState(false);
+
   useEffect(() => {
     // Only fetch if admin
     if (user?.role !== 'admin') return;
-    
+
     api.get('/settings/system/agency_settings')
       .then(res => {
         if (res.data) setAgencySettings(JSON.parse(res.data));
@@ -1004,7 +1028,26 @@ function AgencyProfileTab() {
         if (res.data) setSmtpSettings(JSON.parse(res.data));
       })
       .catch(err => console.error('Failed to load smtp settings', err));
+
+    api.get('/settings/system/invoice_round_off_enabled')
+      .then(res => setRoundOffEnabled(res.data !== 'false'))
+      .catch(() => setRoundOffEnabled(true));
   }, [user]);
+
+  const saveRoundOffSetting = async (enabled) => {
+    setSavingRoundOff(true);
+    const prev = roundOffEnabled;
+    setRoundOffEnabled(enabled);
+    try {
+      await api.put('/settings/system/invoice_round_off_enabled', { value: enabled ? 'true' : 'false' });
+      toast.success(`Invoice round-off ${enabled ? 'enabled' : 'disabled'}`);
+    } catch (err) {
+      setRoundOffEnabled(prev);
+      toast.error('Failed to update round-off setting: ' + (err.response?.data?.message || err.message));
+    } finally {
+      setSavingRoundOff(false);
+    }
+  };
 
   const [agencyToast, setAgencyToast] = useState({ show: false, message: '', type: 'error' });
 
@@ -1142,6 +1185,41 @@ function AgencyProfileTab() {
           </div>
 
           <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Show Logo On</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {[
+                { key: 'id_card', label: 'Employee ID Card', desc: 'Front & back, on-screen and PDF' },
+                { key: 'print_profile', label: 'Employee Print Profile', desc: 'Printable full employee profile sheet' },
+                { key: 'invoice', label: 'Invoice / Bill PDF', desc: 'Bills generated for clients' },
+                { key: 'payslip', label: 'Salary Slip PDF', desc: 'Employee payslips' },
+                { key: 'vendor_statement', label: 'Vendor Statement', desc: 'Vendor ledger statement (screen/print)' },
+              ].map(opt => {
+                const checked = (agencySettings.logo_locations?.[opt.key]) !== false;
+                return (
+                  <label
+                    key={opt.key}
+                    className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer ${checked ? 'border-teal-400 bg-teal-50' : 'border-slate-200'}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => setAgencySettings({
+                        ...agencySettings,
+                        logo_locations: { ...(agencySettings.logo_locations || {}), [opt.key]: e.target.checked }
+                      })}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <span className="block text-sm font-medium text-slate-800">{opt.label}</span>
+                      <span className="block text-xs text-slate-500">{opt.desc}</span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Agency Name</label>
             <input value={agencySettings.agency_name} onChange={e => setAgencySettings({...agencySettings, agency_name: e.target.value})} className={inputCls} />
           </div>
@@ -1189,6 +1267,22 @@ function AgencyProfileTab() {
               <input value={agencySettings.jurisdiction_city || ''} onChange={e => setAgencySettings({...agencySettings, jurisdiction_city: e.target.value})} placeholder="e.g. Ahmedabad" className={inputCls} />
             </div>
           </div>
+
+          <label className="flex items-center justify-between gap-3 p-3 rounded-lg border border-slate-200 bg-slate-50 mt-2">
+            <span>
+              <span className="block text-sm font-medium text-slate-800">Round Off Bill Amount</span>
+              <span className="block text-xs text-slate-500 mt-0.5">
+                When enabled, the final billed amount on invoices is rounded to the nearest rupee (₹0.50 and above rounds up, below ₹0.50 rounds down). When disabled, the exact decimal amount is billed. Saves instantly.
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              checked={roundOffEnabled}
+              disabled={savingRoundOff}
+              onChange={e => saveRoundOffSetting(e.target.checked)}
+              className="w-5 h-5 accent-teal-600 shrink-0"
+            />
+          </label>
 
           <h4 className="text-sm font-bold text-slate-800 mt-6 mb-2 border-b pb-2">Bank Details for Invoice</h4>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

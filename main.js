@@ -280,6 +280,25 @@ ipcMain.handle('open-log-folder', async () => {
   return { success: true, path: logDir };
 });
 
+// ── IPC: Open Specific Folder in File Explorer ───────────────────────
+ipcMain.handle('open-folder', async (event, folderPath) => {
+  const target = folderPath || process.env.UPLOAD_DIR || path.join(userDataPath, 'uploads');
+  try {
+    if (!fs.existsSync(target)) {
+      fs.mkdirSync(target, { recursive: true });
+    }
+    if (process.platform === 'win32') {
+      const { exec } = require('child_process');
+      exec(`explorer.exe "${target}"`);
+    } else {
+      await shell.openPath(target);
+    }
+    return { success: true, path: target };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 // ── IPC: Get Latest Log Content ──────────────────────────────────────
 ipcMain.handle('get-latest-logs', async () => {
   try {

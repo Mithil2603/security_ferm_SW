@@ -116,4 +116,36 @@ describe('Employee Gender & ID Card Data Test Suite', () => {
     // Clean up
     await query('DELETE FROM employees WHERE id = $1', [res.body.data.id]);
   });
+
+  test('DELETE /api/employees/:id deactivates employee and returns is_active as false', async () => {
+    const res = await request(app)
+      .delete(`/api/employees/${createdEmpId}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+
+    const getRes = await request(app)
+      .get(`/api/employees/${createdEmpId}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(getRes.statusCode).toBe(200);
+    expect(getRes.body.data.is_active).toBe(false);
+  });
+
+  test('PATCH /api/employees/:id/reactivate re-activates employee and returns is_active as true', async () => {
+    const res = await request(app)
+      .patch(`/api/employees/${createdEmpId}/reactivate`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+
+    const getRes = await request(app)
+      .get(`/api/employees/${createdEmpId}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(getRes.statusCode).toBe(200);
+    expect(getRes.body.data.is_active).toBe(true);
+  });
 });

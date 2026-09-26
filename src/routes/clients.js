@@ -95,9 +95,18 @@ router.get('/', async (req, res) => {
             cats = [];
           }
         }
+        let sitesList = [];
+        if (r.sites) {
+          try {
+            sitesList = typeof r.sites === 'string' ? JSON.parse(r.sites) : r.sites;
+          } catch (e) {
+            sitesList = [];
+          }
+        }
         return {
           ...r,
           guard_categories: Array.isArray(cats) ? cats : [],
+          sites: Array.isArray(sitesList) ? sitesList : [],
           contract_start_date: formatDateLocal(r.contract_start_date),
           contract_end_date: formatDateLocal(r.contract_end_date)
         };
@@ -135,11 +144,20 @@ router.get('/:id', async (req, res) => {
         cats = [];
       }
     }
+    let sitesList = [];
+    if (cData.sites) {
+      try {
+        sitesList = typeof cData.sites === 'string' ? JSON.parse(cData.sites) : cData.sites;
+      } catch (e) {
+        sitesList = [];
+      }
+    }
     res.json({
       success: true,
       data: {
         ...cData,
         guard_categories: Array.isArray(cats) ? cats : [],
+        sites: Array.isArray(sitesList) ? sitesList : [],
         contract_start_date: formatDateLocal(cData.contract_start_date),
         contract_end_date: formatDateLocal(cData.contract_end_date)
       }
@@ -337,7 +355,7 @@ router.post('/', validate(schemas.createClient), async (req, res) => {
       name, address, city, state = 'Gujarat', postal_code, email, phone, contact_person, gst_number, 
       client_type = 'regular', monthly_rate, contract_start_date, contract_end_date, notes,
       employee_count = 1, timeline_unit = 'months', timeline_duration = 1, rate_per_day, total_timeline_amount,
-      guard_categories
+      guard_categories, sites
     } = req.body;
     
     if (!name || !address || !city) {
@@ -350,6 +368,15 @@ router.post('/', validate(schemas.createClient), async (req, res) => {
         parsedCategories = typeof guard_categories === 'string' ? JSON.parse(guard_categories) : guard_categories;
       } catch (e) {
         parsedCategories = null;
+      }
+    }
+
+    let parsedSites = null;
+    if (sites) {
+      try {
+        parsedSites = typeof sites === 'string' ? JSON.parse(sites) : sites;
+      } catch (e) {
+        parsedSites = null;
       }
     }
 
@@ -422,19 +449,29 @@ router.post('/', validate(schemas.createClient), async (req, res) => {
       `INSERT INTO clients (
         name, address, city, state, postal_code, email, phone, contact_person, gst_number, client_type, 
         monthly_rate, contract_start_date, contract_end_date, notes, created_by,
-        employee_count, timeline_unit, timeline_duration, rate_per_day, total_timeline_amount, addon_days, guard_categories
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,0,$21) RETURNING *`,
+        employee_count, timeline_unit, timeline_duration, rate_per_day, total_timeline_amount, addon_days, guard_categories, sites
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,0,$21,$22) RETURNING *`,
       [
         name, address, city, state, postal_code, email, phone, contact_person, gst_number, client_type || 'regular',
         finalMonthlyRate, finalStartDate, finalEndDate || null, notes, req.user.userId,
         guards, unit, duration, finalRatePerDay, finalTotalAmount,
-        parsedCategories ? JSON.stringify(parsedCategories) : null
+        parsedCategories ? JSON.stringify(parsedCategories) : null,
+        parsedSites ? JSON.stringify(parsedSites) : null
       ]
     );
 
     await logAudit(req, 'clients', result.rows[0].id, 'create', `Created client: ${name} (${guards} guards, ${finalStartDate} to ${finalEndDate})`);
 
-    res.status(201).json({ success: true, data: result.rows[0], message: 'Client created successfully' });
+    const createdClientRow = result.rows[0];
+    res.status(201).json({
+      success: true,
+      data: {
+        ...createdClientRow,
+        guard_categories: Array.isArray(parsedCategories) ? parsedCategories : [],
+        sites: Array.isArray(parsedSites) ? parsedSites : []
+      },
+      message: 'Client created successfully'
+    });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'clients' });
     res.status(500).json({ success: false, message: 'Failed to create client' });
@@ -448,7 +485,7 @@ router.put('/:id', validate(schemas.updateClient), async (req, res) => {
       name, address, city, state, postal_code, email, phone, contact_person, gst_number, client_type, 
       monthly_rate, contract_start_date, contract_end_date, notes, is_active,
       employee_count, timeline_unit, timeline_duration, rate_per_day, total_timeline_amount,
-      addon_days, guard_categories
+      addon_days, guard_categories, sites
     } = req.body;
 
     const existingRes = await query('SELECT * FROM clients WHERE id = $1', [req.params.id]);
@@ -463,6 +500,15 @@ router.put('/:id', validate(schemas.updateClient), async (req, res) => {
         parsedCategories = typeof guard_categories === 'string' ? JSON.parse(guard_categories) : guard_categories;
       } catch (e) {
         parsedCategories = null;
+      }
+    }
+
+    let parsedSites = undefined;
+    if (sites !== undefined) {
+      try {
+        parsedSites = typeof sites === 'string' ? JSON.parse(sites) : sites;
+      } catch (e) {
+        parsedSites = null;
       }
     }
 
@@ -523,6 +569,7 @@ router.put('/:id', validate(schemas.updateClient), async (req, res) => {
     }
 
     const guardCatsJson = parsedCategories !== undefined ? (parsedCategories ? JSON.stringify(parsedCategories) : null) : undefined;
+    const sitesJson = parsedSites !== undefined ? (parsedSites ? JSON.stringify(parsedSites) : null) : undefined;
 
     await query(
       `UPDATE clients SET 
@@ -531,15 +578,17 @@ router.put('/:id', validate(schemas.updateClient), async (req, res) => {
         notes=$14, is_active=$15, employee_count=$16, timeline_unit=$17, timeline_duration=$18, rate_per_day=$19, 
         total_timeline_amount=$20, addon_days=$21, 
         guard_categories=CASE WHEN $22 IS NOT NULL THEN $22 ELSE guard_categories END,
+        sites=CASE WHEN $23 IS NOT NULL THEN $23 ELSE sites END,
         updated_at=CURRENT_TIMESTAMP
-       WHERE id=$23`,
+       WHERE id=$24`,
       [
         name || existing.name, address || existing.address, city || existing.city, state || existing.state, postal_code || existing.postal_code,
         email !== undefined ? email : existing.email, phone !== undefined ? phone : existing.phone,
         contact_person !== undefined ? contact_person : existing.contact_person, gst_number !== undefined ? gst_number : existing.gst_number,
         client_type || existing.client_type, finalMonthlyRate, finalStartDate, finalEndDate || null,
         notes !== undefined ? notes : existing.notes, isActiveBool, guards, unit, duration,
-        finalRatePerDay, finalTotalAmount, newAddonDays, guardCatsJson !== undefined ? guardCatsJson : null, req.params.id
+        finalRatePerDay, finalTotalAmount, newAddonDays, guardCatsJson !== undefined ? guardCatsJson : null,
+        sitesJson !== undefined ? sitesJson : null, req.params.id
       ]
     );
 
@@ -555,12 +604,21 @@ router.put('/:id', validate(schemas.updateClient), async (req, res) => {
         resCats = [];
       }
     }
+    let resSites = [];
+    if (updatedRow.sites) {
+      try {
+        resSites = typeof updatedRow.sites === 'string' ? JSON.parse(updatedRow.sites) : updatedRow.sites;
+      } catch (e) {
+        resSites = [];
+      }
+    }
 
     res.json({ 
       success: true, 
       data: {
         ...updatedRow,
         guard_categories: Array.isArray(resCats) ? resCats : [],
+        sites: Array.isArray(resSites) ? resSites : [],
         contract_start_date: formatDateLocal(updatedRow.contract_start_date),
         contract_end_date: formatDateLocal(updatedRow.contract_end_date)
       }, 

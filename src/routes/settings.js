@@ -539,6 +539,24 @@ router.post('/storage/system-folder-picker', async (req, res) => {
     } else {
       res.json({ success: true, folderPath: null, canceled: true });
     }
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// POST /api/settings/storage/open-folder - Open directory in OS file explorer
+router.post('/storage/open-folder', async (req, res) => {
+  try {
+    const fs = require('fs');
+    const targetDir = req.body.path || storageConfig.getActiveUploadDir();
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+    if (process.platform === 'win32') {
+      const { exec } = require('child_process');
+      exec(`explorer.exe "${targetDir}"`);
+    }
+    res.json({ success: true, path: targetDir });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
