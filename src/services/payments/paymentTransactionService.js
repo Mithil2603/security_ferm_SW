@@ -86,15 +86,15 @@ async function sumPriorTaxDetail(referenceType, referenceId) {
   };
 }
 
-async function insertPaymentTransaction({ transaction_type, party_type, party_id, reference_type, reference_id, amount, payment_method, bank_account_id, payment_date, transaction_reference, attachment_url, notes, created_by }) {
+async function insertPaymentTransaction({ transaction_type, party_type, party_id, reference_type, reference_id, amount, payment_method, bank_account_id, payment_date, transaction_reference, attachment_url, notes, created_by, employee_bank_snapshot }) {
   const result = await query(
     `INSERT INTO payment_transactions
       (transaction_type, party_type, party_id, reference_type, reference_id, amount,
-       payment_method, bank_account_id, payment_date, transaction_reference, attachment_url, notes, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       payment_method, bank_account_id, payment_date, transaction_reference, attachment_url, notes, created_by, employee_bank_snapshot)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
      RETURNING *`,
     [transaction_type, party_type, party_id, reference_type || 'none', reference_id || null, amount,
-     payment_method, bank_account_id || null, payment_date, transaction_reference || null, attachment_url || null, notes || null, created_by]
+     payment_method, bank_account_id || null, payment_date, transaction_reference || null, attachment_url || null, notes || null, created_by, employee_bank_snapshot || null]
   );
   return result.rows[0];
 }
@@ -141,6 +141,57 @@ async function createPostedVoucher({ direction, amount, bankAccountId, partyType
     ]
   );
   return result.rows[0].id;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BANK ENTRY — bank charges, interest credited, other misc charges/credits, and
+// inter-account transfers (bank<->bank, cash<->bank). These aren't tied to any
+// client/vendor/employee — they're direct adjustments to a bank/cash account's
+// own balance, or a movement between two of the agency's own accounts. Posted
+// immediately (no manual approval step), same as every other payment-module
+// entry point, reusing the existing 'journal' (single account) and 'contra'
+// (two-account transfer) voucher types.
+// ─────────────────────────────────────────────────────────────────────────────
+async function recordBankEntry(params, userId) {
+  const { kind, bank_account_id, to_account_id, amount, entry_date, narration, transaction_ref } = params;
+  const finalAmount = parseFloat(amount);
+  if (isNaN(finalAmount) || finalAmount <= 0) throw new Error('A valid amount is required');
+  const entryDate = entry_date || todayStr();
+
+  let voucherType, debitAccountId, creditAccountId, finalNarration;
+
+  if (kind === 'transfer') {
+    if (!bank_account_id || !to_account_id) throw new Error('Both a from-account and a to-account are required for a transfer');
+    if (String(bank_account_id) === String(to_account_id)) throw new Error('From and To accounts must be different');
+    voucherType = 'contra';
+    creditAccountId = bank_account_id; // money leaves the source account
+    debitAccountId = to_account_id;    // money arrives at the destination account
+    finalNarration = narration || 'Transfer between accounts';
+  } else {
+    if (!bank_account_id) throw new Error('A bank/cash account is required');
+    voucherType = 'journal';
+    const isDebit = kind === 'bank_charge' || kind === 'other_debit';
+    debitAccountId = isDebit ? bank_account_id : null;
+    creditAccountId = isDebit ? null : bank_account_id;
+    finalNarration = narration || (
+      kind === 'bank_charge' ? 'Bank charges'
+      : kind === 'interest_credited' ? 'Interest credited'
+      : kind === 'other_credit' ? 'Other credit'
+      : 'Other charge'
+    );
+  }
+
+  const voucherNumber = await getNextVoucherNumber(voucherType, entryDate);
+  const result = await query(
+    `INSERT INTO vouchers
+      (voucher_number, voucher_type, voucher_date, amount, debit_account_id, credit_account_id,
+       party_type, narration, transaction_ref, status, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'posted',$10)
+     RETURNING *`,
+    [voucherNumber, voucherType, entryDate, finalAmount, debitAccountId || null, creditAccountId || null,
+     'other', finalNarration, transaction_ref || null, userId]
+  );
+  return result.rows[0];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -354,14 +405,24 @@ async function recordVendorPayment(params, userId) {
 // ─────────────────────────────────────────────────────────────────────────────
 async function recordSalaryPayment(params, userId) {
   const {
-    reference_type, reference_id, amount, payment_date, payment_method,
-    bank_account_id, transaction_reference, attachment_url, notes
+    reference_type, reference_id, employee_id, amount, payment_date, payment_method,
+    bank_account_id, transaction_reference, attachment_url, notes, employee_bank_snapshot
   } = params;
 
   const payDate = payment_date || todayStr();
   let employeeId, employeeName, payrollId = null, netSalary;
 
-  if (reference_type === 'salary_slip') {
+  // Direct/ad-hoc payment: no payroll run or salary slip to close out — just
+  // pay the employee directly (e.g. an advance, off-cycle reimbursement).
+  // Nothing to mark "paid" in payroll/salary_slips since there's no such row.
+  if (!reference_id) {
+    if (!employee_id) throw new Error('employee_id is required for a direct salary payment');
+    const empRes = await query('SELECT full_name FROM employees WHERE id = $1', [employee_id]);
+    if (empRes.rows.length === 0) throw new Error('Employee not found');
+    employeeId = employee_id;
+    employeeName = empRes.rows[0].full_name;
+    netSalary = null;
+  } else if (reference_type === 'salary_slip') {
     const salarySlipService = require('../payroll/salarySlipService');
     const slip = await salarySlipService.markPaid(reference_id, { payment_date: payDate, payment_method, transaction_reference });
     const empRes = await query('SELECT full_name FROM employees WHERE id = $1', [slip.employee_id]);
@@ -405,18 +466,21 @@ async function recordSalaryPayment(params, userId) {
 
   const resolvedBankAccountId = bank_account_id || await resolveDefaultBankAccountId(payment_method);
   const finalAmount = parseFloat(amount) || parseFloat(netSalary) || 0;
+  if (finalAmount <= 0) throw new Error('A valid payment amount is required');
+  const finalReferenceType = (payrollId || reference_id) ? 'payroll' : 'none';
+  const finalReferenceId = payrollId || reference_id || null;
 
   const paymentTx = await insertPaymentTransaction({
     transaction_type: 'salary_payment', party_type: 'employee', party_id: employeeId,
-    reference_type: 'payroll', reference_id: payrollId || reference_id, amount: finalAmount,
+    reference_type: finalReferenceType, reference_id: finalReferenceId, amount: finalAmount,
     payment_method, bank_account_id: resolvedBankAccountId, payment_date: payDate,
-    transaction_reference, attachment_url, notes, created_by: userId
+    transaction_reference, attachment_url, notes, created_by: userId, employee_bank_snapshot
   });
 
   const voucherId = await createPostedVoucher({
     direction: 'payment', amount: finalAmount, bankAccountId: resolvedBankAccountId,
     partyType: 'employee', partyId: employeeId, partyName: employeeName,
-    referenceType: 'payroll', referenceId: payrollId || reference_id, voucherDate: payDate,
+    referenceType: finalReferenceType, referenceId: finalReferenceId, voucherDate: payDate,
     narration: `Salary payment - ${employeeName}`, createdBy: userId
   });
   if (voucherId) {
@@ -426,4 +490,4 @@ async function recordSalaryPayment(params, userId) {
   return { payment_transaction: { ...paymentTx, voucher_id: voucherId }, employee_id: employeeId, payroll_id: payrollId };
 }
 
-module.exports = { recordClientReceipt, recordVendorPayment, recordSalaryPayment, resolveDefaultBankAccountId };
+module.exports = { recordClientReceipt, recordVendorPayment, recordSalaryPayment, recordBankEntry, resolveDefaultBankAccountId };

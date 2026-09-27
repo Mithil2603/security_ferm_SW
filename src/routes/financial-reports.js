@@ -62,10 +62,10 @@ router.post('/kpis/calculate', async (req, res) => {
       const endDate   = req.body.end_date   || new Date().toISOString().split('T')[0];
 
       const [revenueRow, expensesRow, empRow, arRow, payablesRow, cashRow] = await Promise.all([
-        query(`SELECT COALESCE(SUM(final_amount),0) as total FROM invoices WHERE invoice_date BETWEEN $1 AND $2 AND status IN ('sent','paid','partially_paid')`, [startDate, endDate]),
-        query(`SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE expense_date BETWEEN $1 AND $2 AND status = 'approved'`, [startDate, endDate]),
+        query(`SELECT COALESCE(SUM(final_amount),0) as total FROM invoices WHERE invoice_date BETWEEN $1 AND $2 AND status != 'cancelled'`, [startDate, endDate]),
+        query(`SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE expense_date BETWEEN $1 AND $2 AND status != 'pending'`, [startDate, endDate]),
         query(`SELECT COUNT(*) as cnt FROM employees WHERE is_active = 1`),
-        query(`SELECT COALESCE(SUM(payment_due),0) as total FROM invoices WHERE status IN ('sent','partially_paid','overdue')`),
+        query(`SELECT COALESCE(SUM(payment_due),0) as total FROM invoices WHERE status != 'cancelled' AND payment_due > 0`),
         query(`SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE status = 'pending'`),
         query(`SELECT COALESCE(SUM(opening_balance),0) as total FROM bank_accounts WHERE is_active = 1`),
       ]);

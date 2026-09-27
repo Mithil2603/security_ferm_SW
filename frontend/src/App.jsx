@@ -320,7 +320,7 @@ function App() {
             <Route path="/employees" element={<ProtectedRoute permission="manage_employees"><Employees /></ProtectedRoute>} />
             <Route path="/attendance" element={<ProtectedRoute permission={['manage_employees', 'manage_payroll']}><Attendance /></ProtectedRoute>} />
             <Route path="/invoices" element={<ProtectedRoute permission="manage_invoices"><Invoices /></ProtectedRoute>} />
-            <Route path="/payments" element={<ProtectedRoute permission={['manage_invoices', 'manage_expenses', 'manage_payroll']}><Payments /></ProtectedRoute>} />
+            <Route path="/payments" element={<ProtectedRoute permission={['manage_invoices', 'manage_expenses', 'manage_payroll', 'manage_vouchers']}><Payments /></ProtectedRoute>} />
             <Route path="/payroll" element={<ProtectedRoute permission="manage_payroll"><Payroll /></ProtectedRoute>} />
             <Route path="/ledger" element={<ProtectedRoute permission="manage_payroll"><Ledger /></ProtectedRoute>} />
             <Route path="/account-ledger" element={<ProtectedRoute permission={['view_reports', 'manage_invoices', 'manage_expenses']}><AccountLedger /></ProtectedRoute>} />

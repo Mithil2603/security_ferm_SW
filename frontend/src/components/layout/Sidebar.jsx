@@ -38,7 +38,7 @@ const navItems = [
   { name: 'Employees', path: '/employees', icon: UserSquare2, roles: ['admin', 'manager'], permission: 'manage_employees' },
   { name: 'Attendance', path: '/attendance', icon: CalendarCheck, roles: ['admin', 'manager', 'accountant'], permission: 'manage_employees' },
   { name: 'Invoicing', path: '/invoices', icon: FileText, roles: ['admin', 'accountant'], permission: 'manage_invoices' },
-  { name: 'Payments', path: '/payments', icon: CreditCard, roles: ['admin', 'accountant', 'manager'], permission: ['manage_invoices', 'manage_expenses', 'manage_payroll'] },
+  { name: 'Bank & Payments', path: '/payments', icon: CreditCard, roles: ['admin', 'accountant', 'manager'], permission: ['manage_invoices', 'manage_expenses', 'manage_payroll', 'manage_vouchers'] },
   { name: 'Payroll', path: '/payroll', icon: Banknote, roles: ['admin', 'accountant'], permission: 'manage_payroll' },
   { name: 'Employee Ledger', path: '/ledger', icon: Banknote, roles: ['admin', 'accountant', 'manager'], permission: 'manage_payroll' },
   { name: 'Expenses', path: '/expenses', icon: Receipt, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },

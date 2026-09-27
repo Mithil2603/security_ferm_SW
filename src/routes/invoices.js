@@ -179,6 +179,7 @@ router.get("/", async (req, res) => {
       status,
       from_date,
       to_date,
+      search,
       page = 1,
       limit = 50,
     } = req.query;
@@ -186,6 +187,13 @@ router.get("/", async (req, res) => {
     let params = [];
     let pc = 1;
 
+    if (search) {
+      conditions.push(
+        `(i.invoice_number LIKE $${pc} OR c.name LIKE $${pc} OR i.site_name LIKE $${pc})`,
+      );
+      params.push(`%${search}%`);
+      pc++;
+    }
     if (client_id) {
       conditions.push(`i.client_id = $${pc}`);
       params.push(client_id);
@@ -225,7 +233,7 @@ router.get("/", async (req, res) => {
     );
 
     const countResult = await query(
-      `SELECT COUNT(*) AS count FROM invoices i ${where}`,
+      `SELECT COUNT(*) AS count FROM invoices i JOIN clients c ON i.client_id = c.id ${where}`,
       params,
     );
 

@@ -26,37 +26,44 @@ class FinancialReportingService {
    */
   async generateCashFlow(startDate, endDate) {
     // Operating Activities
+    // Status filters use exclude-lists (not allow-lists) throughout this
+    // function — an allow-list of e.g. ('sent','partially_paid','overdue')
+    // silently drops real, collectible 'draft' invoices and real 'paid'
+    // expenses, understating both sides of the statement.
     const revenue = await query(
       `SELECT COALESCE(SUM(payment_received), 0) as collected
        FROM invoices WHERE invoice_date BETWEEN $1 AND $2
-       AND status IN ('paid', 'partially_paid')`,
+       AND status != 'cancelled'`,
       [startDate, endDate]
     );
 
     const expenses = await query(
       `SELECT COALESCE(SUM(amount), 0) as paid
        FROM expenses WHERE expense_date BETWEEN $1 AND $2
-       AND status = 'approved'`,
+       AND status != 'pending'`,
       [startDate, endDate]
     );
 
+    // Real disbursed salary lives in the legacy `payroll` table (payroll_month
+    // is a proper DATE there) — `salary_slips` is a newer, largely-draft
+    // table that both new and old "mark paid" flows keep in sync with
+    // `payroll`, but historical paid salary predates that and only exists here.
     const payroll = await query(
       `SELECT COALESCE(SUM(net_salary), 0) as paid
-       FROM salary_slips WHERE DATE_FORMAT(payroll_month, '%Y-%m') >= DATE_FORMAT($1, '%Y-%m')
-         AND DATE_FORMAT(payroll_month, '%Y-%m') <= DATE_FORMAT($2, '%Y-%m')
-       AND status = 'paid'`,
+       FROM payroll WHERE payroll_month BETWEEN $1 AND $2
+       AND payment_status = 'paid'`,
       [startDate, endDate]
     );
 
     // Receivables change
     const arStart = await query(
       `SELECT COALESCE(SUM(payment_due), 0) as ar FROM invoices
-       WHERE invoice_date < $1 AND status IN ('sent', 'partially_paid', 'overdue')`,
+       WHERE invoice_date < $1 AND status != 'cancelled' AND payment_due > 0`,
       [startDate]
     );
     const arEnd = await query(
       `SELECT COALESCE(SUM(payment_due), 0) as ar FROM invoices
-       WHERE invoice_date <= $1 AND status IN ('sent', 'partially_paid', 'overdue')`,
+       WHERE invoice_date <= $1 AND status != 'cancelled' AND payment_due > 0`,
       [endDate]
     );
     const arChange = parseFloat(arEnd.rows[0].ar) - parseFloat(arStart.rows[0].ar);
@@ -124,23 +131,24 @@ class FinancialReportingService {
     const actualRevenue = await query(
       `SELECT COALESCE(SUM(final_amount), 0) as total
        FROM invoices WHERE invoice_date BETWEEN $1 AND $2
-       AND status IN ('sent', 'paid', 'partially_paid')`,
+       AND status != 'cancelled'`,
       [startDate, endDate]
     );
 
     const actualExpenses = await query(
       `SELECT category, COALESCE(SUM(amount), 0) as total
        FROM expenses WHERE expense_date BETWEEN $1 AND $2
-       AND status = 'approved'
+       AND status != 'pending'
        GROUP BY category`,
       [startDate, endDate]
     );
 
+    // See generateCashFlow above — real paid salary lives in `payroll`, not
+    // the largely-draft `salary_slips` table.
     const actualPayroll = await query(
-      `SELECT COALESCE(SUM(total_earnings), 0) as total
-       FROM salary_slips WHERE DATE_FORMAT(payroll_month, '%Y-%m') >= DATE_FORMAT($1, '%Y-%m')
-         AND DATE_FORMAT(payroll_month, '%Y-%m') <= DATE_FORMAT($2, '%Y-%m')
-       AND status IN ('approved', 'paid')`,
+      `SELECT COALESCE(SUM(net_salary), 0) as total
+       FROM payroll WHERE payroll_month BETWEEN $1 AND $2
+       AND payment_status = 'paid'`,
       [startDate, endDate]
     );
 
@@ -253,29 +261,30 @@ class FinancialReportingService {
       `SELECT COALESCE(SUM(final_amount), 0) as invoiced,
               COALESCE(SUM(payment_received), 0) as collected
        FROM invoices WHERE strftime('%Y-%m', invoice_date) = $1
-       AND status IN ('sent', 'paid', 'partially_paid')`,
+       AND status != 'cancelled'`,
       [month]
     );
 
     // Expenses
     const exp = await query(
       `SELECT COALESCE(SUM(amount), 0) as total FROM expenses
-       WHERE strftime('%Y-%m', expense_date) = $1 AND status = 'approved'`,
+       WHERE strftime('%Y-%m', expense_date) = $1 AND status != 'pending'`,
       [month]
     );
 
-    // Payroll
+    // Payroll — real paid salary lives in the legacy `payroll` table (see
+    // generateCashFlow); `salary_slips` is largely still 'draft'.
     const payroll = await query(
-      `SELECT COALESCE(SUM(total_earnings), 0) as total FROM salary_slips
-       WHERE payroll_month = $1
-       AND status IN ('approved', 'paid')`,
+      `SELECT COALESCE(SUM(net_salary), 0) as total FROM payroll
+       WHERE DATE_FORMAT(payroll_month, '%Y-%m') = $1
+       AND payment_status = 'paid'`,
       [month]
     );
 
     // AR / AP
     const ar = await query(
       `SELECT COALESCE(SUM(payment_due), 0) as total FROM invoices
-       WHERE status IN ('sent', 'partially_paid', 'overdue')
+       WHERE status != 'cancelled' AND payment_due > 0
        AND invoice_date <= $1`,
       [endDate]
     );

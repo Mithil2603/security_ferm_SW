@@ -110,6 +110,9 @@ router.get('/', async (req, res) => {
         if (emp.bank_account_number && emp.bank_account_number.length >= 4) {
           emp.bank_account_number = 'XXXXX' + emp.bank_account_number.slice(-4);
         }
+        if (emp.previous_bank_account_number && emp.previous_bank_account_number.length >= 4) {
+          emp.previous_bank_account_number = 'XXXXX' + emp.previous_bank_account_number.slice(-4);
+        }
       } else {
         if (emp.aadhar_number) {
           const raw = String(emp.aadhar_number).replace(/\D/g, '');
@@ -166,6 +169,7 @@ router.get('/:id', async (req, res) => {
       if (emp.aadhar_number && emp.aadhar_number.length >= 4) emp.aadhar_number = 'XXXX-XXXX-' + emp.aadhar_number.slice(-4);
       if (emp.pan_number && emp.pan_number.length >= 4) emp.pan_number = 'XXXXX' + emp.pan_number.slice(-4);
       if (emp.bank_account_number && emp.bank_account_number.length >= 4) emp.bank_account_number = 'XXXXX' + emp.bank_account_number.slice(-4);
+      if (emp.previous_bank_account_number && emp.previous_bank_account_number.length >= 4) emp.previous_bank_account_number = 'XXXXX' + emp.previous_bank_account_number.slice(-4);
     } else {
       if (emp.aadhar_number) {
         const raw = String(emp.aadhar_number).replace(/\D/g, '');
@@ -392,8 +396,16 @@ router.put('/:id', validate(schemas.updateEmployee), async (req, res) => {
       date_of_joining, designation, salary_structure_id, assigned_client_id,
       emergency_contact_name, emergency_contact_phone, notes, is_active } = req.body;
 
-    // Fetch existing employee record to protect read-only Aadhar & PAN from accidental masking
-    const existingEmpRes = await query('SELECT aadhar_number, pan_number FROM employees WHERE id = $1', [req.params.id]);
+    // Fetch existing employee record to protect read-only Aadhar, PAN & bank
+    // details from accidental masking (the GET response masks these for
+    // non-admins, so a naive save-back would otherwise overwrite real values
+    // with "XXXXX1234").
+    const existingEmpRes = await query(
+      `SELECT aadhar_number, pan_number, bank_account_number, bank_ifsc_code, bank_name, bank_account_holder_name,
+              previous_bank_account_number, previous_bank_ifsc_code, previous_bank_name, previous_bank_account_holder_name, bank_updated_at
+       FROM employees WHERE id = $1`,
+      [req.params.id]
+    );
     const existingEmp = existingEmpRes.rows[0];
 
     const isAdmin = req.user && req.user.role === 'admin';
@@ -421,6 +433,34 @@ router.put('/:id', validate(schemas.updateEmployee), async (req, res) => {
       }
     }
 
+    // Bank details: ignore an incoming masked value (e.g. "XXXXX1234") — that
+    // just means the field arrived unchanged from a masked view, not that the
+    // user wants to erase/overwrite the real account number.
+    let finalBankAccountNumber = existingEmp ? existingEmp.bank_account_number : null;
+    if (bank_account_number !== undefined && bank_account_number !== null) {
+      const trimmed = String(bank_account_number).trim();
+      if (trimmed !== '' && !trimmed.toUpperCase().startsWith('XXXXX')) {
+        finalBankAccountNumber = trimmed;
+      } else if (trimmed === '') {
+        finalBankAccountNumber = null;
+      }
+    }
+    const finalBankIfsc = bank_ifsc_code !== undefined ? (bank_ifsc_code || null) : (existingEmp ? existingEmp.bank_ifsc_code : null);
+    const finalBankName = bank_name !== undefined ? (bank_name || null) : (existingEmp ? existingEmp.bank_name : null);
+    const finalBankHolderName = bank_account_holder_name !== undefined ? (bank_account_holder_name || null) : (existingEmp ? existingEmp.bank_account_holder_name : null);
+
+    // If the real account number actually changed, archive the old bank
+    // details as "previous" (one level back) so a salary payment can still
+    // be routed there if needed — e.g. correcting a payment made just before
+    // the employee updated their bank.
+    const bankActuallyChanged = existingEmp && existingEmp.bank_account_number &&
+      finalBankAccountNumber && existingEmp.bank_account_number !== finalBankAccountNumber;
+    const finalPrevBankAccountNumber = bankActuallyChanged ? existingEmp.bank_account_number : (existingEmp ? existingEmp.previous_bank_account_number : null);
+    const finalPrevBankIfsc = bankActuallyChanged ? existingEmp.bank_ifsc_code : (existingEmp ? existingEmp.previous_bank_ifsc_code : null);
+    const finalPrevBankName = bankActuallyChanged ? existingEmp.bank_name : (existingEmp ? existingEmp.previous_bank_name : null);
+    const finalPrevBankHolderName = bankActuallyChanged ? existingEmp.bank_account_holder_name : (existingEmp ? existingEmp.previous_bank_account_holder_name : null);
+    const finalBankUpdatedAt = bankActuallyChanged ? new Date() : (existingEmp ? existingEmp.bank_updated_at : null);
+
     // Coerce is_active to boolean
     const isActiveBool = is_active !== undefined ? Boolean(is_active) : true;
 
@@ -429,12 +469,14 @@ router.put('/:id', validate(schemas.updateEmployee), async (req, res) => {
         aadhar_number=$8, pan_number=$9, bank_account_number=$10, bank_ifsc_code=$11, bank_name=$12,
         bank_account_holder_name=$13, date_of_joining=$14, designation=$15, salary_structure_id=$16,
         assigned_client_id=$17, emergency_contact_name=$18, emergency_contact_phone=$19, notes=$20,
-        is_active=$21, updated_at=CURRENT_TIMESTAMP
-       WHERE id=$22`,
+        is_active=$21, previous_bank_account_number=$22, previous_bank_ifsc_code=$23, previous_bank_name=$24,
+        previous_bank_account_holder_name=$25, bank_updated_at=$26, updated_at=CURRENT_TIMESTAMP
+       WHERE id=$27`,
       [full_name, phone, email, date_of_birth || null, gender || null, address, city, finalAadhar, finalPan,
-        bank_account_number, bank_ifsc_code, bank_name, bank_account_holder_name,
+        finalBankAccountNumber, finalBankIfsc, finalBankName, finalBankHolderName,
         date_of_joining, designation, salary_structure_id || null, assigned_client_id || null,
         emergency_contact_name, emergency_contact_phone, notes, isActiveBool,
+        finalPrevBankAccountNumber, finalPrevBankIfsc, finalPrevBankName, finalPrevBankHolderName, finalBankUpdatedAt,
         req.params.id]
     );
 

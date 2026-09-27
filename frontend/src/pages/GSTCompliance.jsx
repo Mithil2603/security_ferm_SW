@@ -23,7 +23,17 @@ export default function GSTCompliance() {
 
   const fetchFilings = async () => { try { setLoading(true); const r = await api.get('/gst/filings?limit=24'); setFilings(r.data || []); } catch {} finally { setLoading(false); } };
   const fetchHSN = async () => { try { setLoading(true); const r = await api.get('/gst/hsn-sac'); setHsnCodes(r.data || []); } catch {} finally { setLoading(false); } };
-  const fetchConfig = async () => { try { const r = await api.get('/gst/config'); setConfig(r.data); if (r.data) setConfigForm(r.data); } catch {} };
+  const fetchConfig = async () => {
+    try {
+      const r = await api.get('/gst/config');
+      setConfig(r.data);
+      // MySQL returns DECIMAL columns as strings (e.g. "18.00"), which won't
+      // match any <option value={18}> by strict equality — coerce to a number
+      // so the dropdown actually shows the saved rate instead of defaulting
+      // to the first option.
+      if (r.data) setConfigForm({ ...r.data, default_tax_rate: parseFloat(r.data.default_tax_rate) || 18 });
+    } catch {}
+  };
 
   useEffect(() => {
     fetchConfig();

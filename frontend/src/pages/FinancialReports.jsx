@@ -3,6 +3,15 @@ import { TrendingUp, DollarSign, BarChart3, PieChart, ArrowUpRight, ArrowDownRig
 import api from '../services/api';
 import TableSkeleton from '../components/TableSkeleton';
 
+// Indian financial year: Apr-Mar. Matches the same rule the backend uses to
+// tag snapshots/filings, so "current FY" here always lines up with whatever
+// FY newly-generated data actually gets stored under.
+function getCurrentFY() {
+  const now = new Date();
+  const year = now.getFullYear();
+  return now.getMonth() >= 3 ? `${year}-${String(year + 1).slice(2)}` : `${year - 1}-${String(year).slice(2)}`;
+}
+
 export default function FinancialReports() {
   const [tab, setTab] = useState('kpis'); // kpis | cashflow | budgets
   const [snapshots, setSnapshots] = useState([]);
@@ -10,7 +19,7 @@ export default function FinancialReports() {
   const [budgets, setBudgets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [createBudget, setCreateBudget] = useState(false);
-  const [budgetForm, setBudgetForm] = useState({ name: '', financial_year: '2025-26', budget_type: 'annual', notes: '' });
+  const [budgetForm, setBudgetForm] = useState({ name: '', financial_year: getCurrentFY(), budget_type: 'annual', notes: '' });
 
   const fmt = (v) => `₹${Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 0 })}`;
 
@@ -19,7 +28,7 @@ export default function FinancialReports() {
   const [generatingSnapshot, setGeneratingSnapshot] = useState(false);
 
   const fetchSnapshots = async () => {
-    try { setLoading(true); const r = await api.get('/financial-reports/snapshots?financial_year=2025-26'); setSnapshots(r.data || []); }
+    try { setLoading(true); const r = await api.get(`/financial-reports/snapshots?financial_year=${getCurrentFY()}`); setSnapshots(r.data || []); }
     catch {} finally { setLoading(false); }
   };
 

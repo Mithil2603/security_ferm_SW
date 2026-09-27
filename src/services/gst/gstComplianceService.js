@@ -165,7 +165,7 @@ class GSTComplianceService {
 
     // Get all paid/sent invoices for the period
     const invoices = await query(
-      `SELECT i.*, c.company_name as buyer_name, c.gst_number as buyer_gstin,
+      `SELECT i.*, c.name as buyer_name, c.gst_number as buyer_gstin,
               c.state_code as buyer_state_code, c.address as buyer_address
        FROM invoices i
        JOIN clients c ON i.client_id = c.id
@@ -188,13 +188,18 @@ class GSTComplianceService {
         inv.buyer_state_code || (inv.buyer_gstin ? inv.buyer_gstin.substring(0, 2) : config.state_code),
         inv.final_amount
       );
-      const taxType = this.determineTaxType(
-        config.state_code,
-        inv.buyer_state_code || (inv.buyer_gstin ? inv.buyer_gstin.substring(0, 2) : config.state_code)
-      );
-
       const taxableValue = parseFloat(inv.amount_subtotal || 0);
-      const gstAmounts = this.calculateGST(taxableValue, inv.tax_rate || 18, taxType);
+      // Use the invoice's own stored, already-billed GST split rather than
+      // recalculating from amount_subtotal × tax_rate — tax_rate is 0 on some
+      // older invoices even though real GST was charged and stored in
+      // cgst_amount/sgst_amount/igst_amount, so recomputing would silently
+      // disagree with what the client was actually billed (and with GSTR-3B,
+      // which already reads these same stored columns directly).
+      const gstAmounts = {
+        cgst: parseFloat(inv.cgst_amount || 0),
+        sgst: parseFloat(inv.sgst_amount || 0),
+        igst: parseFloat(inv.igst_amount || 0),
+      };
 
       totalTaxable += taxableValue;
       totalCGST += gstAmounts.cgst;
@@ -211,7 +216,10 @@ class GSTComplianceService {
         sgst: gstAmounts.sgst,
         igst: gstAmounts.igst,
         place_of_supply: inv.place_of_supply || inv.buyer_state_code || config.state_code,
-        sac_code: inv.sac_code || '998915',
+        // hsn_code is what invoice creation actually populates on every real
+        // invoice; sac_code is a separate, never-set column left at its
+        // migration default — prefer the real value.
+        sac_code: inv.hsn_code || inv.sac_code || '998525',
         supply_type: supplyType,
       };
 
@@ -233,7 +241,7 @@ class GSTComplianceService {
       }
 
       // HSN Summary
-      const sac = inv.sac_code || '998915';
+      const sac = inv.hsn_code || inv.sac_code || '998525';
       if (!hsnSummary[sac]) {
         hsnSummary[sac] = { hsn_sc: sac, desc: 'Security Services', qty: 0,
           total_val: 0, taxable_val: 0, cgst: 0, sgst: 0, igst: 0 };
@@ -354,15 +362,17 @@ class GSTComplianceService {
       [returnPeriod]
     );
 
-    // Input tax credit (from expenses/vendor invoices)
+    // Input tax credit (from expenses/vendor bills) — expenses store the GST
+    // split directly (cgst_amount/sgst_amount/igst_amount), there's no combined
+    // tax_amount column to halve.
     const itc = await query(
-      `SELECT 
-         COALESCE(SUM(CASE WHEN tax_type = 'cgst_sgst' THEN tax_amount / 2 ELSE 0 END), 0) as cgst,
-         COALESCE(SUM(CASE WHEN tax_type = 'cgst_sgst' THEN tax_amount / 2 ELSE 0 END), 0) as sgst,
-         COALESCE(SUM(CASE WHEN tax_type = 'igst' THEN tax_amount ELSE 0 END), 0) as igst
+      `SELECT
+         COALESCE(SUM(cgst_amount), 0) as cgst,
+         COALESCE(SUM(sgst_amount), 0) as sgst,
+         COALESCE(SUM(igst_amount), 0) as igst
        FROM expenses
        WHERE strftime('%Y-%m', expense_date) = $1
-         AND status = 'approved'
+         AND status != 'rejected'
          AND tax_type IS NOT NULL AND tax_type != 'none'`,
       [returnPeriod]
     );

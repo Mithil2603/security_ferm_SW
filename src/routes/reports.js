@@ -1225,11 +1225,35 @@ async function fetchGstBifurcation(type, from_date, to_date) {
   throw new Error('Invalid type');
 }
 
+// Both TDS and GST bifurcation are small GROUP-BY-party aggregation reports
+// (one row per client/vendor, not per transaction), so pagination is applied
+// in application code on the already-grouped result rather than with SQL
+// LIMIT/OFFSET — this keeps grand totals correct (summed across ALL matching
+// parties) while still only sending one page of rows to the client, without
+// needing a second COUNT(*) query over the same GROUP BY.
+function paginateReport(rows, page, limit, sumFields) {
+  const totals = {};
+  sumFields.forEach(f => { totals[f] = 0; });
+  rows.forEach(r => {
+    sumFields.forEach(f => { totals[f] += parseFloat(r[f]) || 0; });
+  });
+  const p = Math.max(1, parseInt(page) || 1);
+  const l = Math.max(1, parseInt(limit) || 20);
+  const start = (p - 1) * l;
+  const pageRows = rows.slice(start, start + l);
+  return {
+    rows: pageRows,
+    totals,
+    pagination: { total: rows.length, page: p, limit: l, totalPages: Math.max(1, Math.ceil(rows.length / l)) }
+  };
+}
+
 router.get('/tds', async (req, res) => {
   try {
-    const { from_date, to_date, type = 'client' } = req.query;
+    const { from_date, to_date, type = 'client', page = 1, limit = 20 } = req.query;
     const rows = await fetchTdsReport(type, from_date, to_date);
-    res.json({ success: true, data: rows });
+    const { rows: pageRows, totals, pagination } = paginateReport(rows, page, limit, ['total_tds_deducted', 'total_amount_paid']);
+    res.json({ success: true, data: pageRows, totals, pagination });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'reports' });
     logger.error('TDS report error:', error);
@@ -1240,9 +1264,10 @@ router.get('/tds', async (req, res) => {
 // GET /api/reports/gst-bifurcation
 router.get('/gst-bifurcation', async (req, res) => {
   try {
-    const { from_date, to_date, type = 'client' } = req.query;
+    const { from_date, to_date, type = 'client', page = 1, limit = 20 } = req.query;
     const rows = await fetchGstBifurcation(type, from_date, to_date);
-    res.json({ success: true, data: rows });
+    const { rows: pageRows, totals, pagination } = paginateReport(rows, page, limit, ['total_taxable_value', 'total_cgst', 'total_sgst', 'total_igst', 'total_invoice_amount']);
+    res.json({ success: true, data: pageRows, totals, pagination });
   } catch (error) {
     if (error.message === 'Invalid type') {
       return res.status(400).json({ success: false, message: 'Invalid type' });

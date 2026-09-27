@@ -76,6 +76,8 @@ export default function Invoices() {
   const [submitting, setSubmitting] = useState(false);
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
 
   const [attendanceSummary, setAttendanceSummary] = useState(null);
   const [fetchingAttendance, setFetchingAttendance] = useState(false);
@@ -223,7 +225,7 @@ export default function Invoices() {
   const fetchInvoices = async () => {
     try {
       setLoading(true);
-      const response = await api.get(`/invoices?page=${page}&limit=20`);
+      const response = await api.get(`/invoices?search=${encodeURIComponent(debouncedSearch)}&page=${page}&limit=20`);
       setInvoices(response.data || []);
       if (response.pagination) setPagination(response.pagination);
     } catch (err) {
@@ -247,13 +249,23 @@ export default function Invoices() {
   };
 
   useEffect(() => {
-    fetchInvoices();
     fetchClients();
     fetchBankAccounts();
     api.get('/settings/system/invoice_round_off_enabled')
       .then(res => setRoundOffEnabled(res.data !== 'false'))
       .catch(() => setRoundOffEnabled(true));
-  }, [page]);
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchTerm), 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  useEffect(() => { setPage(1); }, [debouncedSearch]);
+
+  useEffect(() => {
+    fetchInvoices();
+  }, [page, debouncedSearch]);
 
   const fetchClients = async () => {
     try {
@@ -579,6 +591,19 @@ export default function Invoices() {
             <Plus className="w-4 h-4" />
             Generate Single Bill
           </button>
+        </div>
+      </div>
+
+      <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+        <div className="relative">
+          <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Search by invoice number, client, or site..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
+          />
         </div>
       </div>
 
