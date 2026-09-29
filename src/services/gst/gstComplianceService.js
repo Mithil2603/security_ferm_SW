@@ -62,6 +62,30 @@ class GSTComplianceService {
     return this.getHSNSACCodes();
   }
 
+  async updateHSNSACCode(id, data) {
+    const existing = await query('SELECT id FROM hsn_sac_codes WHERE id = $1', [id]);
+    if (existing.rows.length === 0) throw new Error('HSN/SAC code not found');
+
+    await query(
+      `UPDATE hsn_sac_codes
+       SET code = $1, type = $2, description = $3, gst_rate = $4,
+           cgst_rate = $5, sgst_rate = $6, igst_rate = $7
+       WHERE id = $8`,
+      [data.code, data.type, data.description, data.gst_rate,
+       data.cgst_rate || data.gst_rate / 2, data.sgst_rate || data.gst_rate / 2,
+       data.igst_rate || data.gst_rate, id]
+    );
+    return this.getHSNSACCodes();
+  }
+
+  // Soft delete only — hsn_sac_id is referenced by invoice_gst_details, so a
+  // hard delete could orphan historical rows. Hiding it from getHSNSACCodes'
+  // default is_active=1 filter is enough to keep it out of new invoices.
+  async deactivateHSNSACCode(id) {
+    await query('UPDATE hsn_sac_codes SET is_active = 0 WHERE id = $1', [id]);
+    return this.getHSNSACCodes();
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // GST Configuration
   // ═══════════════════════════════════════════════════════════════════════════
@@ -126,6 +150,20 @@ class GSTComplianceService {
       return 'cgst_sgst';
     }
     return 'igst';
+  }
+
+  // Invoices never persist their own tax_rate (the column defaults to 0 and
+  // invoice creation never sets it), so reading it directly shows "0%" next
+  // to a real, non-zero GST split. Deriving the rate from what was actually
+  // charged (gstAmount / taxableValue) keeps the displayed % truthful for
+  // any rate — not just a hardcoded guess like 18 — and naturally falls
+  // back to a real stored rate when one exists (e.g. expenses, which do
+  // collect it directly from the user).
+  _effectiveTaxRate(storedRate, taxableValue, gstAmount) {
+    const stored = parseFloat(storedRate || 0);
+    if (stored > 0) return stored;
+    if (!taxableValue) return 0;
+    return Math.round((gstAmount / taxableValue) * 100);
   }
 
   /**
@@ -211,7 +249,7 @@ class GSTComplianceService {
         invoice_date: this._formatDate(inv.invoice_date),
         invoice_value: parseFloat(inv.final_amount || 0),
         taxable_value: taxableValue,
-        tax_rate: inv.tax_rate || 18,
+        tax_rate: this._effectiveTaxRate(inv.tax_rate, taxableValue, gstAmounts.cgst + gstAmounts.sgst + gstAmounts.igst),
         cgst: gstAmounts.cgst,
         sgst: gstAmounts.sgst,
         igst: gstAmounts.igst,
@@ -379,7 +417,7 @@ class GSTComplianceService {
         buyer_gstin: inv.buyer_gstin || null,
         invoice_value: parseFloat(inv.final_amount || 0),
         taxable_value: taxableValue,
-        tax_rate: parseFloat(inv.tax_rate || 0),
+        tax_rate: this._effectiveTaxRate(inv.tax_rate, taxableValue, cgst + sgst + igst),
         cgst, sgst, igst,
         place_of_supply: inv.place_of_supply || buyerState,
         supply_type: supplyType,
@@ -440,7 +478,7 @@ class GSTComplianceService {
         vendor_gstin: r.vendor_gstin || 'N/A',
         description: r.description,
         taxable_value: taxableValue,
-        tax_rate: parseFloat(r.tax_rate || 0),
+        tax_rate: this._effectiveTaxRate(r.tax_rate, taxableValue, cgst + sgst + igst),
         cgst, sgst, igst,
         is_rcm_applicable: !!r.is_rcm_applicable,
       };

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FileText, Settings, Layers, Download, Eye, X, Plus, Zap, ChevronRight } from 'lucide-react';
+import { FileText, Settings, Layers, Download, Eye, X, Plus, Zap, ChevronRight, Pencil, Trash2 } from 'lucide-react';
 import api from '../services/api';
 import TableSkeleton from '../components/TableSkeleton';
 
@@ -20,6 +20,11 @@ export default function GSTCompliance() {
   // Return Period Modal State
   const [returnModal, setReturnModal] = useState({ open: false, type: 'GSTR1', period: new Date().toISOString().slice(0, 7) });
   const [generatingReturn, setGeneratingReturn] = useState(false);
+
+  // HSN/SAC Add/Edit Modal State
+  const emptyHsnForm = { code: '', type: 'SAC', description: '', gst_rate: 18, cgst_rate: '', sgst_rate: '', igst_rate: '' };
+  const [hsnModal, setHsnModal] = useState({ open: false, editingId: null, form: emptyHsnForm });
+  const [savingHsn, setSavingHsn] = useState(false);
 
   const fetchFilings = async () => { try { setLoading(true); const r = await api.get('/gst/filings?limit=24'); setFilings(r.data || []); } catch {} finally { setLoading(false); } };
   const fetchHSN = async () => { try { setLoading(true); const r = await api.get('/gst/hsn-sac'); setHsnCodes(r.data || []); } catch {} finally { setLoading(false); } };
@@ -65,6 +70,52 @@ export default function GSTCompliance() {
     }
   };
 
+  // ─── HSN/SAC Code Management ───────────────────────────────────────────────
+  const openHsnAdd = () => setHsnModal({ open: true, editingId: null, form: emptyHsnForm });
+  const openHsnEdit = (c) => setHsnModal({
+    open: true,
+    editingId: c.id,
+    form: { code: c.code, type: c.type, description: c.description, gst_rate: c.gst_rate, cgst_rate: c.cgst_rate ?? '', sgst_rate: c.sgst_rate ?? '', igst_rate: c.igst_rate ?? '' },
+  });
+  const closeHsnModal = () => setHsnModal({ open: false, editingId: null, form: emptyHsnForm });
+
+  const handleHsnSubmit = async (e) => {
+    e.preventDefault();
+    setSavingHsn(true);
+    try {
+      const payload = {
+        code: hsnModal.form.code.trim(),
+        type: hsnModal.form.type,
+        description: hsnModal.form.description.trim(),
+        gst_rate: parseFloat(hsnModal.form.gst_rate),
+        ...(hsnModal.form.cgst_rate !== '' && { cgst_rate: parseFloat(hsnModal.form.cgst_rate) }),
+        ...(hsnModal.form.sgst_rate !== '' && { sgst_rate: parseFloat(hsnModal.form.sgst_rate) }),
+        ...(hsnModal.form.igst_rate !== '' && { igst_rate: parseFloat(hsnModal.form.igst_rate) }),
+      };
+      if (hsnModal.editingId) {
+        await api.put(`/gst/hsn-sac/${hsnModal.editingId}`, payload);
+      } else {
+        await api.post('/gst/hsn-sac', payload);
+      }
+      closeHsnModal();
+      fetchHSN();
+    } catch (err) {
+      alert(err.message || 'Failed to save HSN/SAC code');
+    } finally {
+      setSavingHsn(false);
+    }
+  };
+
+  const deactivateHsn = async (c) => {
+    if (!window.confirm(`Remove ${c.code} — ${c.description} from the active HSN/SAC list?`)) return;
+    try {
+      await api.delete(`/gst/hsn-sac/${c.id}`);
+      fetchHSN();
+    } catch (err) {
+      alert(err.message || 'Failed to remove code');
+    }
+  };
+
   const saveConfig = async (e) => {
     e.preventDefault();
     try {
@@ -104,6 +155,11 @@ export default function GSTCompliance() {
               <Zap className="w-4 h-4" /> Generate GSTR-3B
             </button>
           </div>
+        )}
+        {tab === 'hsn' && (
+          <button onClick={openHsnAdd} className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm">
+            <Plus className="w-4 h-4" /> Add Code
+          </button>
         )}
       </div>
 
@@ -184,10 +240,13 @@ export default function GSTCompliance() {
                 <th className="text-right p-4 font-medium">CGST</th>
                 <th className="text-right p-4 font-medium">SGST</th>
                 <th className="text-right p-4 font-medium">IGST</th>
+                <th className="text-right p-4 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {hsnCodes.map(c => (
+              {hsnCodes.length === 0 ? (
+                <tr><td colSpan="8" className="p-8 text-center text-slate-400">No HSN/SAC codes yet. Add one to get started.</td></tr>
+              ) : hsnCodes.map(c => (
                 <tr key={c.id} className="border-b border-slate-200 hover:bg-slate-50">
                   <td className="p-4 font-mono text-teal-600 font-bold">{c.code}</td>
                   <td className="p-4"><span className="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded">{c.type}</span></td>
@@ -196,6 +255,10 @@ export default function GSTCompliance() {
                   <td className="p-4 text-right text-slate-500">{c.cgst_rate}%</td>
                   <td className="p-4 text-right text-slate-500">{c.sgst_rate}%</td>
                   <td className="p-4 text-right text-slate-500">{c.igst_rate}%</td>
+                  <td className="p-4 text-right flex gap-1 justify-end">
+                    <button onClick={() => openHsnEdit(c)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500" title="Edit"><Pencil className="w-4 h-4" /></button>
+                    <button onClick={() => deactivateHsn(c)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500" title="Remove"><Trash2 className="w-4 h-4" /></button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -329,6 +392,78 @@ export default function GSTCompliance() {
                 <button type="button" onClick={() => setReturnModal({ ...returnModal, open: false })} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
                 <button type="submit" disabled={generatingReturn} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50">
                   {generatingReturn ? 'Generating...' : `Generate ${returnModal.type}`}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* HSN/SAC Add/Edit Modal */}
+      {hsnModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-slide-up">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-teal-50">
+              <h3 className="text-lg font-bold text-teal-800">{hsnModal.editingId ? 'Edit' : 'Add'} HSN/SAC Code</h3>
+              <button type="button" onClick={closeHsnModal} className="text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+            <form onSubmit={handleHsnSubmit} className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Code *</label>
+                  <input required maxLength={8} value={hsnModal.form.code}
+                    onChange={e => setHsnModal({ ...hsnModal, form: { ...hsnModal.form, code: e.target.value } })}
+                    placeholder="e.g. 998525"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm font-mono" autoFocus />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Type *</label>
+                  <select required value={hsnModal.form.type}
+                    onChange={e => setHsnModal({ ...hsnModal, form: { ...hsnModal.form, type: e.target.value } })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm">
+                    <option value="SAC">SAC (Services)</option>
+                    <option value="HSN">HSN (Goods)</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Description *</label>
+                <input required value={hsnModal.form.description}
+                  onChange={e => setHsnModal({ ...hsnModal, form: { ...hsnModal.form, description: e.target.value } })}
+                  placeholder="e.g. Security Guard Services"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm" />
+              </div>
+              <div className="grid grid-cols-4 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">GST %</label>
+                  <input required type="number" step="0.01" min="0" max="28" value={hsnModal.form.gst_rate}
+                    onChange={e => setHsnModal({ ...hsnModal, form: { ...hsnModal.form, gst_rate: e.target.value } })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">CGST %</label>
+                  <input type="number" step="0.01" min="0" value={hsnModal.form.cgst_rate} placeholder="auto"
+                    onChange={e => setHsnModal({ ...hsnModal, form: { ...hsnModal.form, cgst_rate: e.target.value } })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">SGST %</label>
+                  <input type="number" step="0.01" min="0" value={hsnModal.form.sgst_rate} placeholder="auto"
+                    onChange={e => setHsnModal({ ...hsnModal, form: { ...hsnModal.form, sgst_rate: e.target.value } })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">IGST %</label>
+                  <input type="number" step="0.01" min="0" value={hsnModal.form.igst_rate} placeholder="auto"
+                    onChange={e => setHsnModal({ ...hsnModal, form: { ...hsnModal.form, igst_rate: e.target.value } })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm" />
+                </div>
+              </div>
+              <p className="text-xs text-slate-400">Leave CGST/SGST/IGST blank to split the GST % automatically (CGST = SGST = half; IGST = full rate).</p>
+              <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-slate-100">
+                <button type="button" onClick={closeHsnModal} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
+                <button type="submit" disabled={savingHsn} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50">
+                  {savingHsn ? 'Saving...' : hsnModal.editingId ? 'Save Changes' : 'Add Code'}
                 </button>
               </div>
             </form>

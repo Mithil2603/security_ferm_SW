@@ -117,6 +117,55 @@ router.post('/hsn-sac', requirePermission('manage_settings'), async (req, res) =
   }
 });
 
+router.put('/hsn-sac/:id', requirePermission('manage_settings'), async (req, res) => {
+  try {
+    const schema = Joi.object({
+      code: Joi.string().max(8).required(),
+      type: Joi.string().valid('HSN', 'SAC').required(),
+      description: Joi.string().required(),
+      gst_rate: Joi.number().min(0).max(28).required(),
+      cgst_rate: Joi.number().min(0),
+      sgst_rate: Joi.number().min(0),
+      igst_rate: Joi.number().min(0),
+    });
+    const { error, value } = schema.validate(req.body);
+    if (error) return res.status(400).json({ success: false, message: error.details[0].message });
+
+    const result = await gstService.updateHSNSACCode(req.params.id, value);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    if (err.message === 'HSN/SAC code not found') {
+      return res.status(404).json({ success: false, message: err.message });
+    }
+    logError({
+      error: err,
+      req,
+      severity: ERROR_SEVERITY.HIGH,
+      category: ERROR_CATEGORY.GST,
+      feature: 'gst-compliance',
+      extra: { message: 'Update HSN/SAC error:' }
+    });
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.delete('/hsn-sac/:id', requirePermission('manage_settings'), async (req, res) => {
+  try {
+    const result = await gstService.deactivateHSNSACCode(req.params.id);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    logError({
+      error: err,
+      req,
+      severity: ERROR_SEVERITY.HIGH,
+      category: ERROR_CATEGORY.GST,
+      feature: 'gst-compliance',
+      extra: { message: 'Deactivate HSN/SAC error:' }
+    });
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // GST Calculation (pure, no DB)
 // ═══════════════════════════════════════════════════════════════════════════
