@@ -338,6 +338,129 @@ class GSTComplianceService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // GSTR-1A Preview — read-only B2B/B2CS/B2CL breakdown for a date range, for
+  // the Tax Reports screen. Unlike generateGSTR1 (which produces the official
+  // filing JSON for one return period and writes a gstr_filings row), this
+  // never writes anything — it's just a live reference view, and reads GST
+  // straight from each invoice's own stored cgst/sgst/igst split rather than
+  // recomputing it, so it can never disagree with what was actually billed.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async previewGSTR1A(from_date, to_date) {
+    const config = await this.getConfig();
+    if (!config) throw new Error('GST configuration not found. Please set it up under GST Compliance → Configuration first.');
+
+    const invoices = await query(
+      `SELECT i.*, c.name as buyer_name, c.gst_number as buyer_gstin, c.state_code as buyer_state_code
+       FROM invoices i
+       JOIN clients c ON i.client_id = c.id
+       WHERE i.invoice_date BETWEEN $1 AND $2 AND i.status != 'cancelled'
+       ORDER BY i.invoice_date`,
+      [from_date, to_date]
+    );
+
+    const b2b = [], b2cs = [], b2cl = [];
+    let totalTaxable = 0, totalCGST = 0, totalSGST = 0, totalIGST = 0;
+
+    for (const inv of invoices.rows) {
+      const buyerState = inv.buyer_state_code || (inv.buyer_gstin ? inv.buyer_gstin.substring(0, 2) : config.state_code);
+      const supplyType = this.classifySupplyType(inv.buyer_gstin, config.state_code, buyerState, inv.final_amount);
+
+      const taxableValue = parseFloat(inv.amount_subtotal || 0);
+      const cgst = parseFloat(inv.cgst_amount || 0);
+      const sgst = parseFloat(inv.sgst_amount || 0);
+      const igst = parseFloat(inv.igst_amount || 0);
+      totalTaxable += taxableValue; totalCGST += cgst; totalSGST += sgst; totalIGST += igst;
+
+      const record = {
+        invoice_number: inv.invoice_number,
+        invoice_date: this._formatDate(inv.invoice_date),
+        buyer_name: inv.buyer_name,
+        buyer_gstin: inv.buyer_gstin || null,
+        invoice_value: parseFloat(inv.final_amount || 0),
+        taxable_value: taxableValue,
+        tax_rate: parseFloat(inv.tax_rate || 0),
+        cgst, sgst, igst,
+        place_of_supply: inv.place_of_supply || buyerState,
+        supply_type: supplyType,
+      };
+
+      if (supplyType === 'B2B') b2b.push(record);
+      else if (supplyType === 'B2CL') b2cl.push(record);
+      else b2cs.push(record);
+    }
+
+    return {
+      period: { from: from_date, to: to_date },
+      b2b, b2cs, b2cl,
+      summary: {
+        total_invoices: invoices.rows.length,
+        b2b_count: b2b.length, b2cs_count: b2cs.length, b2cl_count: b2cl.length,
+        total_taxable: parseFloat(totalTaxable.toFixed(2)),
+        total_cgst: parseFloat(totalCGST.toFixed(2)),
+        total_sgst: parseFloat(totalSGST.toFixed(2)),
+        total_igst: parseFloat(totalIGST.toFixed(2)),
+      },
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GSTR-2B Preview — purchase/ITC register for a date range. Real GSTR-2B is
+  // auto-drafted from what vendors report on their own GSTR-1 filings — this
+  // app has no GSTN integration, so this is the self-reported equivalent:
+  // every vendor bill with GST, read from the bill's own fixed split (not
+  // prorated by payment), matching how a purchase register is conventionally
+  // built (by bill/invoice received, not by when it was paid).
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async getGSTR2B(from_date, to_date) {
+    const result = await query(
+      `SELECT e.id, e.expense_date, e.description, e.amount, e.tax_type, e.tax_rate,
+              e.cgst_amount, e.sgst_amount, e.igst_amount, e.is_rcm_applicable,
+              v.name as vendor_name, v.tax_id as vendor_gstin
+       FROM expenses e
+       LEFT JOIN vendors v ON e.vendor_id = v.id
+       WHERE e.expense_date BETWEEN $1 AND $2
+         AND e.status != 'pending'
+         AND e.tax_type IS NOT NULL AND e.tax_type != 'none'
+       ORDER BY e.expense_date`,
+      [from_date, to_date]
+    );
+
+    let totalTaxable = 0, totalCGST = 0, totalSGST = 0, totalIGST = 0;
+    const rows = result.rows.map(r => {
+      const cgst = parseFloat(r.cgst_amount || 0);
+      const sgst = parseFloat(r.sgst_amount || 0);
+      const igst = parseFloat(r.igst_amount || 0);
+      const taxableValue = parseFloat((parseFloat(r.amount || 0) - cgst - sgst - igst).toFixed(2));
+      totalTaxable += taxableValue; totalCGST += cgst; totalSGST += sgst; totalIGST += igst;
+      return {
+        bill_date: this._formatDate(r.expense_date),
+        vendor_name: r.vendor_name || 'Unknown Vendor',
+        vendor_gstin: r.vendor_gstin || 'N/A',
+        description: r.description,
+        taxable_value: taxableValue,
+        tax_rate: parseFloat(r.tax_rate || 0),
+        cgst, sgst, igst,
+        is_rcm_applicable: !!r.is_rcm_applicable,
+      };
+    });
+
+    return {
+      period: { from: from_date, to: to_date },
+      rows,
+      summary: {
+        bill_count: rows.length,
+        total_taxable: parseFloat(totalTaxable.toFixed(2)),
+        total_cgst: parseFloat(totalCGST.toFixed(2)),
+        total_sgst: parseFloat(totalSGST.toFixed(2)),
+        total_igst: parseFloat(totalIGST.toFixed(2)),
+        total_itc: parseFloat((totalCGST + totalSGST + totalIGST).toFixed(2)),
+      },
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // GSTR-3B Summary
   // ═══════════════════════════════════════════════════════════════════════════
 

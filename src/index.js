@@ -158,6 +158,7 @@ app.use('/api/payroll', extendTimeout, payrollRoutes);
 app.use('/api/invoices', extendTimeout, invoicesRoutes);
 app.use('/api/reports', extendTimeout, reportsRoutes);
 app.use('/api/expenses', expensesRoutes);
+app.use('/api/purchase-orders', require('./routes/purchase-orders'));
 app.use('/api/settings', settingsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/ledger', ledgerRoutes);

@@ -248,6 +248,65 @@ router.post('/gstr3b/generate', requirePermission('manage_payroll'), async (req,
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// GSTR-1A Preview (read-only B2B/B2CS/B2CL breakdown for a date range)
+// ═══════════════════════════════════════════════════════════════════════════
+
+router.get('/gstr1/preview', async (req, res) => {
+  try {
+    const schema = Joi.object({
+      from_date: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).required(),
+      to_date: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).required(),
+    });
+    const { error, value } = schema.validate(req.query);
+    if (error) return res.status(400).json({ success: false, message: error.details[0].message });
+
+    const result = await gstService.previewGSTR1A(value.from_date, value.to_date);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    if (err.message.includes('GST configuration not found')) {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+    logError({
+      error: err,
+      req,
+      severity: ERROR_SEVERITY.MEDIUM,
+      category: ERROR_CATEGORY.GST,
+      feature: 'gst-compliance',
+      extra: { message: 'GSTR-1A preview error:' }
+    });
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GSTR-2B Preview (purchase/ITC register for a date range)
+// ═══════════════════════════════════════════════════════════════════════════
+
+router.get('/gstr2b', async (req, res) => {
+  try {
+    const schema = Joi.object({
+      from_date: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).required(),
+      to_date: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).required(),
+    });
+    const { error, value } = schema.validate(req.query);
+    if (error) return res.status(400).json({ success: false, message: error.details[0].message });
+
+    const result = await gstService.getGSTR2B(value.from_date, value.to_date);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    logError({
+      error: err,
+      req,
+      severity: ERROR_SEVERITY.MEDIUM,
+      category: ERROR_CATEGORY.GST,
+      feature: 'gst-compliance',
+      extra: { message: 'GSTR-2B preview error:' }
+    });
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Filings Management
 // ═══════════════════════════════════════════════════════════════════════════
 
