@@ -278,18 +278,20 @@ class GSTComplianceService {
         b2cs.push(record);
       }
 
-      // HSN Summary
+      // HSN Summary — field names/uqc match the real GSTN HSN summary schema
+      // (hsn_sc/desc/uqc/qty/val/txval/camt/samt/iamt/csamt), not ad-hoc names,
+      // so this section of the exported JSON is upload-shaped like the rest.
       const sac = inv.hsn_code || inv.sac_code || '998525';
       if (!hsnSummary[sac]) {
-        hsnSummary[sac] = { hsn_sc: sac, desc: 'Security Services', qty: 0,
-          total_val: 0, taxable_val: 0, cgst: 0, sgst: 0, igst: 0 };
+        hsnSummary[sac] = { hsn_sc: sac, desc: 'Security Services', uqc: 'OTH-OTHERS', qty: 0,
+          val: 0, txval: 0, iamt: 0, camt: 0, samt: 0, csamt: 0 };
       }
       hsnSummary[sac].qty++;
-      hsnSummary[sac].total_val += parseFloat(inv.final_amount || 0);
-      hsnSummary[sac].taxable_val += taxableValue;
-      hsnSummary[sac].cgst += gstAmounts.cgst;
-      hsnSummary[sac].sgst += gstAmounts.sgst;
-      hsnSummary[sac].igst += gstAmounts.igst;
+      hsnSummary[sac].val += parseFloat(inv.final_amount || 0);
+      hsnSummary[sac].txval += taxableValue;
+      hsnSummary[sac].camt += gstAmounts.cgst;
+      hsnSummary[sac].samt += gstAmounts.sgst;
+      hsnSummary[sac].iamt += gstAmounts.igst;
     }
 
     // Build GSTR-1 JSON (simplified government format)
@@ -305,6 +307,7 @@ class GSTComplianceService {
           val: i.invoice_value,
           pos: i.place_of_supply,
           rchrg: 'N',
+          inv_typ: 'R',
           itms: [{
             num: 1,
             itm_det: {
@@ -313,10 +316,15 @@ class GSTComplianceService {
               camt: i.cgst,
               samt: i.sgst,
               iamt: i.igst,
+              csamt: 0,
             }
           }]
         }))
       })),
+      // B2CS covers unregistered buyers both intra-state (CGST+SGST) and
+      // inter-state up to ₹2.5L (IGST) — _aggregateB2CS must carry igst
+      // through per row, not just camt/samt, or inter-state small-buyer tax
+      // silently vanishes from the filed return.
       b2cs: this._aggregateB2CS(b2cs, config.state_code),
       b2cl: b2cl.map(i => ({
         pos: i.buyer_state,
@@ -326,7 +334,7 @@ class GSTComplianceService {
           val: i.invoice_value,
           itms: [{
             num: 1,
-            itm_det: { txval: i.taxable_value, rt: i.tax_rate, iamt: i.igst }
+            itm_det: { txval: i.taxable_value, rt: i.tax_rate, iamt: i.igst, csamt: 0 }
           }]
         }]
       })),
@@ -665,22 +673,120 @@ class GSTComplianceService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   _aggregateB2CS(records, sellerState) {
-    // B2CS is aggregated by rate + place_of_supply
+    // B2CS covers unregistered buyers both intra-state (CGST+SGST) and
+    // inter-state up to ₹2.5L (IGST) — must aggregate igst too, or an
+    // inter-state small-buyer sale's tax silently disappears from the return.
     const agg = {};
     for (const r of records) {
       const key = `${r.tax_rate}-${r.place_of_supply || sellerState}`;
       if (!agg[key]) {
         agg[key] = { rt: r.tax_rate, pos: r.place_of_supply || sellerState,
-          typ: 'OE', txval: 0, camt: 0, samt: 0 };
+          typ: 'OE', txval: 0, camt: 0, samt: 0, iamt: 0, csamt: 0 };
       }
       agg[key].txval += r.taxable_value;
       agg[key].camt += r.cgst;
       agg[key].samt += r.sgst;
+      agg[key].iamt += r.igst;
     }
     return Object.values(agg).map(a => ({
       ...a, txval: parseFloat(a.txval.toFixed(2)),
       camt: parseFloat(a.camt.toFixed(2)), samt: parseFloat(a.samt.toFixed(2)),
+      iamt: parseFloat(a.iamt.toFixed(2)),
     }));
+  }
+
+  // Flattens a stored filing's GSTN-format JSON (nested, compact keys like
+  // ctin/inv/itm_det/camt) into plain tabular sections — shared by the Excel
+  // and PDF exports so the two formats can never disagree on what a filing
+  // contains.
+  _flattenFilingForExport(filing) {
+    const j = filing.json || (filing.json_data ? JSON.parse(filing.json_data) : {});
+
+    if (filing.return_type === 'GSTR1') {
+      const b2bRows = [];
+      (j.b2b || []).forEach(buyer => {
+        (buyer.inv || []).forEach(inv => {
+          const item = (inv.itms && inv.itms[0] && inv.itms[0].itm_det) || {};
+          b2bRows.push({
+            gstin: buyer.ctin, invoice_no: inv.inum, date: inv.idt,
+            place_of_supply: inv.pos, invoice_value: inv.val,
+            taxable_value: item.txval || 0, rate: item.rt || 0,
+            cgst: item.camt || 0, sgst: item.samt || 0, igst: item.iamt || 0,
+          });
+        });
+      });
+      const b2csRows = (j.b2cs || []).map(r => ({
+        place_of_supply: r.pos, rate: r.rt || 0, taxable_value: r.txval || 0,
+        cgst: r.camt || 0, sgst: r.samt || 0, igst: r.iamt || 0,
+      }));
+      const b2clRows = [];
+      (j.b2cl || []).forEach(entry => {
+        (entry.inv || []).forEach(inv => {
+          const item = (inv.itms && inv.itms[0] && inv.itms[0].itm_det) || {};
+          b2clRows.push({
+            place_of_supply: entry.pos, invoice_no: inv.inum, date: inv.idt,
+            invoice_value: inv.val, taxable_value: item.txval || 0,
+            rate: item.rt || 0, igst: item.iamt || 0,
+          });
+        });
+      });
+      const hsnRows = (j.hsn?.data || []).map(h => ({
+        hsn_sac: h.hsn_sc, description: h.desc, quantity: h.qty,
+        taxable_value: h.txval, cgst: h.camt, sgst: h.samt, igst: h.iamt,
+        total_value: h.val,
+      }));
+
+      return {
+        sections: [
+          { name: 'B2B (Registered)', rows: b2bRows, columns: [
+            { key: 'gstin', label: 'GSTIN', width: 1.4 }, { key: 'invoice_no', label: 'Invoice No', width: 1.2 },
+            { key: 'date', label: 'Date', width: 0.9 }, { key: 'place_of_supply', label: 'POS', width: 0.6 },
+            { key: 'invoice_value', label: 'Invoice Value', width: 1, align: 'right' },
+            { key: 'taxable_value', label: 'Taxable Value', width: 1, align: 'right' },
+            { key: 'rate', label: 'Rate %', width: 0.6, align: 'right' },
+            { key: 'cgst', label: 'CGST', width: 0.8, align: 'right' }, { key: 'sgst', label: 'SGST', width: 0.8, align: 'right' },
+            { key: 'igst', label: 'IGST', width: 0.8, align: 'right' },
+          ] },
+          { name: 'B2CS (Unregistered)', rows: b2csRows, columns: [
+            { key: 'place_of_supply', label: 'POS', width: 0.8 }, { key: 'rate', label: 'Rate %', width: 0.8, align: 'right' },
+            { key: 'taxable_value', label: 'Taxable Value', width: 1.2, align: 'right' },
+            { key: 'cgst', label: 'CGST', width: 1, align: 'right' }, { key: 'sgst', label: 'SGST', width: 1, align: 'right' },
+            { key: 'igst', label: 'IGST', width: 1, align: 'right' },
+          ] },
+          { name: 'B2CL (Unregistered > ₹2.5L, Inter-State)', rows: b2clRows, columns: [
+            { key: 'place_of_supply', label: 'POS', width: 0.7 }, { key: 'invoice_no', label: 'Invoice No', width: 1.3 },
+            { key: 'date', label: 'Date', width: 0.9 }, { key: 'invoice_value', label: 'Invoice Value', width: 1, align: 'right' },
+            { key: 'taxable_value', label: 'Taxable Value', width: 1, align: 'right' },
+            { key: 'rate', label: 'Rate %', width: 0.6, align: 'right' }, { key: 'igst', label: 'IGST', width: 0.9, align: 'right' },
+          ] },
+          { name: 'HSN Summary', rows: hsnRows, columns: [
+            { key: 'hsn_sac', label: 'HSN/SAC', width: 0.9 }, { key: 'description', label: 'Description', width: 1.6 },
+            { key: 'quantity', label: 'Qty', width: 0.6, align: 'right' },
+            { key: 'taxable_value', label: 'Taxable Value', width: 1, align: 'right' },
+            { key: 'cgst', label: 'CGST', width: 0.8, align: 'right' }, { key: 'sgst', label: 'SGST', width: 0.8, align: 'right' },
+            { key: 'igst', label: 'IGST', width: 0.8, align: 'right' }, { key: 'total_value', label: 'Total Value', width: 1, align: 'right' },
+          ] },
+        ],
+      };
+    }
+
+    // GSTR3B — one small summary table
+    const rows = [
+      { particulars: 'Outward Taxable Supplies', taxable_value: j['3.1']?.osup_det?.txval || 0,
+        cgst: j['3.1']?.osup_det?.camt || 0, sgst: j['3.1']?.osup_det?.samt || 0, igst: j['3.1']?.osup_det?.iamt || 0 },
+      { particulars: 'Input Tax Credit Available', taxable_value: '',
+        cgst: j['4']?.itc_avl?.camt || 0, sgst: j['4']?.itc_avl?.samt || 0, igst: j['4']?.itc_avl?.iamt || 0 },
+      { particulars: 'Net Tax Payable', taxable_value: '',
+        cgst: j['6.1']?.tax_payable?.camt || 0, sgst: j['6.1']?.tax_payable?.samt || 0, igst: j['6.1']?.tax_payable?.iamt || 0 },
+    ];
+    return {
+      sections: [{ name: 'GSTR-3B Summary', rows, columns: [
+        { key: 'particulars', label: 'Particulars', width: 2 },
+        { key: 'taxable_value', label: 'Taxable Value', width: 1, align: 'right' },
+        { key: 'cgst', label: 'CGST', width: 1, align: 'right' }, { key: 'sgst', label: 'SGST', width: 1, align: 'right' },
+        { key: 'igst', label: 'IGST', width: 1, align: 'right' },
+      ] }],
+    };
   }
 
   _formatDate(dateStr) {

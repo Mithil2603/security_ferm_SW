@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { 
-  LayoutDashboard, 
-  Users, 
-  UserSquare2, 
-  CalendarCheck, 
-  FileText, 
-  Banknote, 
+import {
+  LayoutDashboard,
+  Users,
+  UserSquare2,
+  CalendarCheck,
+  FileText,
+  Banknote,
   Receipt,
   PieChart,
   Settings,
@@ -16,11 +16,7 @@ import {
   BookOpen,
   BarChart3,
   Landmark,
-  RefreshCw,
-  Layers,
-  ClipboardCheck,
   ClipboardList,
-  Calculator,
   Shield,
   Zap,
   Activity,
@@ -29,52 +25,104 @@ import {
   Target,
   Truck,
   Building2,
-  CreditCard
+  CreditCard,
+  ChevronDown
 } from 'lucide-react';
 import classNames from 'classnames';
 
-const navItems = [
+// Flat, standalone entries that sit above/below the collapsible groups.
+const topItems = [
   { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['admin', 'manager', 'accountant', 'employee'] },
-  { name: 'Clients', path: '/clients', icon: Users, roles: ['admin', 'manager'], permission: 'manage_invoices' },
-  { name: 'Employees', path: '/employees', icon: UserSquare2, roles: ['admin', 'manager'], permission: 'manage_employees' },
-  { name: 'Attendance', path: '/attendance', icon: CalendarCheck, roles: ['admin', 'manager', 'accountant'], permission: 'manage_employees' },
-  { name: 'Invoicing', path: '/invoices', icon: FileText, roles: ['admin', 'accountant'], permission: 'manage_invoices' },
-  { name: 'Bank & Payments', path: '/payments', icon: CreditCard, roles: ['admin', 'accountant', 'manager'], permission: ['manage_invoices', 'manage_expenses', 'manage_payroll', 'manage_vouchers'] },
-  { name: 'Payroll', path: '/payroll', icon: Banknote, roles: ['admin', 'accountant'], permission: 'manage_payroll' },
-  { name: 'Employee Ledger', path: '/ledger', icon: Banknote, roles: ['admin', 'accountant', 'manager'], permission: 'manage_payroll' },
-  { name: 'Expenses', path: '/expenses', icon: Receipt, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },
-  { name: 'Vendors', path: '/vendors', icon: Building2, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },
-  { name: 'Purchase Orders', path: '/purchase-orders', icon: ClipboardList, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },
-  { name: 'Vendor Ledger', path: '/vendor-ledger', icon: Truck, roles: ['admin', 'accountant', 'manager'], permission: ['manage_expenses', 'view_reports'] },
-  { name: 'Party Ledger', path: '/party-ledger', icon: BookOpen, roles: ['admin', 'accountant', 'manager'], permission: ['manage_invoices', 'view_reports'] },
-  { name: 'Reports', path: '/reports', icon: PieChart, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
-  { name: 'Tax Reports', path: '/tax-reports', icon: Receipt, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
-  { name: 'PF & Gratuity', path: '/pf-gratuity', icon: Shield, roles: ['admin', 'accountant'], permission: 'manage_payroll' },
-  { name: 'GST Compliance', path: '/gst-compliance', icon: FileText, roles: ['admin', 'accountant'], permission: 'manage_payroll' },
-  { name: 'Financial Reports', path: '/financial-reports', icon: BarChart3, roles: ['admin', 'accountant'], permission: 'view_reports' },
-  { name: 'Workflows', path: '/workflows', icon: Zap, roles: ['admin'] },
-  { name: 'Statement Archive', path: '/statements', icon: Archive, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
-  { name: 'P&L Account', path: '/pl-account', icon: Wallet, roles: ['admin'], permission: 'view_pl_account' },
-  { name: 'Balance Sheet', path: '/balance-sheet', icon: BarChart3, roles: ['admin', 'accountant'], permission: 'view_balance_sheet' },
-  { name: 'Vouchers', path: '/vouchers', icon: BookOpen, roles: ['admin', 'accountant'], permission: ['view_vouchers', 'create_vouchers', 'edit_vouchers', 'delete_vouchers', 'approve_vouchers', 'manage_vouchers'] },
-  { name: 'Bank Reconciliation', path: '/bank-reconciliation', icon: Landmark, roles: ['admin', 'accountant'], permission: 'manage_bank_reconciliation' },
-  { name: 'Budgets vs Actuals', path: '/budgets', icon: Target, roles: ['admin', 'accountant'], permission: 'manage_budgets' },
-  { name: 'divider' },
-  { name: 'Audit Logs', path: '/audit-logs', icon: Activity, roles: ['admin'], permission: 'manage_settings' },
-  { name: 'Settings', path: '/settings', icon: Settings, roles: ['admin'], permission: 'manage_settings' },
+];
+
+const bottomItems = [
   { name: 'Help', path: '/help', icon: HelpCircle, roles: ['admin', 'manager', 'accountant', 'employee'] },
+];
+
+// Everything else, grouped so the sidebar reads as a handful of categories
+// instead of one long undifferentiated list — each group collapses/expands
+// independently, and the group containing the current page auto-expands.
+const navGroups = [
+  {
+    key: 'hr',
+    label: 'HR & Workforce',
+    icon: UserSquare2,
+    children: [
+      { name: 'Employees', path: '/employees', icon: UserSquare2, roles: ['admin', 'manager'], permission: 'manage_employees' },
+      { name: 'Attendance', path: '/attendance', icon: CalendarCheck, roles: ['admin', 'manager', 'accountant'], permission: 'manage_employees' },
+      { name: 'Payroll', path: '/payroll', icon: Banknote, roles: ['admin', 'accountant'], permission: 'manage_payroll' },
+      { name: 'Employee Ledger', path: '/ledger', icon: Banknote, roles: ['admin', 'accountant', 'manager'], permission: 'manage_payroll' },
+      { name: 'PF & Gratuity', path: '/pf-gratuity', icon: Shield, roles: ['admin', 'accountant'], permission: 'manage_payroll' },
+    ],
+  },
+  {
+    key: 'clients',
+    label: 'Clients & Billing',
+    icon: Users,
+    children: [
+      { name: 'Clients', path: '/clients', icon: Users, roles: ['admin', 'manager'], permission: 'manage_invoices' },
+      { name: 'Invoicing', path: '/invoices', icon: FileText, roles: ['admin', 'accountant'], permission: 'manage_invoices' },
+      { name: 'Party Ledger', path: '/party-ledger', icon: BookOpen, roles: ['admin', 'accountant', 'manager'], permission: ['manage_invoices', 'view_reports'] },
+    ],
+  },
+  {
+    key: 'vendors',
+    label: 'Vendors & Expenses',
+    icon: Building2,
+    children: [
+      { name: 'Vendors', path: '/vendors', icon: Building2, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },
+      { name: 'Purchase Orders', path: '/purchase-orders', icon: ClipboardList, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },
+      { name: 'Vendor Ledger', path: '/vendor-ledger', icon: Truck, roles: ['admin', 'accountant', 'manager'], permission: ['manage_expenses', 'view_reports'] },
+      { name: 'Expenses', path: '/expenses', icon: Receipt, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },
+    ],
+  },
+  {
+    key: 'banking',
+    label: 'Banking & Accounts',
+    icon: Landmark,
+    children: [
+      { name: 'Bank & Payments', path: '/payments', icon: CreditCard, roles: ['admin', 'accountant', 'manager'], permission: ['manage_invoices', 'manage_expenses', 'manage_payroll', 'manage_vouchers'] },
+      { name: 'Vouchers', path: '/vouchers', icon: BookOpen, roles: ['admin', 'accountant'], permission: ['view_vouchers', 'create_vouchers', 'edit_vouchers', 'delete_vouchers', 'approve_vouchers', 'manage_vouchers'] },
+      { name: 'Bank Reconciliation', path: '/bank-reconciliation', icon: Landmark, roles: ['admin', 'accountant'], permission: 'manage_bank_reconciliation' },
+    ],
+  },
+  {
+    key: 'reports',
+    label: 'Reports & Compliance',
+    icon: PieChart,
+    children: [
+      { name: 'Reports', path: '/reports', icon: PieChart, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
+      { name: 'Tax Reports', path: '/tax-reports', icon: Receipt, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
+      { name: 'GST Compliance', path: '/gst-compliance', icon: FileText, roles: ['admin', 'accountant'], permission: 'manage_payroll' },
+      { name: 'Financial Reports', path: '/financial-reports', icon: BarChart3, roles: ['admin', 'accountant'], permission: 'view_reports' },
+      { name: 'P&L Account', path: '/pl-account', icon: Wallet, roles: ['admin'], permission: 'view_pl_account' },
+      { name: 'Balance Sheet', path: '/balance-sheet', icon: BarChart3, roles: ['admin', 'accountant'], permission: 'view_balance_sheet' },
+      { name: 'Budgets vs Actuals', path: '/budgets', icon: Target, roles: ['admin', 'accountant'], permission: 'manage_budgets' },
+      { name: 'Statement Archive', path: '/statements', icon: Archive, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
+    ],
+  },
+  {
+    key: 'system',
+    label: 'System',
+    icon: Settings,
+    children: [
+      { name: 'Workflows', path: '/workflows', icon: Zap, roles: ['admin'] },
+      { name: 'Audit Logs', path: '/audit-logs', icon: Activity, roles: ['admin'], permission: 'manage_settings' },
+      { name: 'Settings', path: '/settings', icon: Settings, roles: ['admin'], permission: 'manage_settings' },
+    ],
+  },
 ];
 
 export default function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const userPerms = Array.isArray(user?.permissions)
     ? user.permissions
     : (typeof user?.permissions === 'string' ? (() => { try { return JSON.parse(user.permissions); } catch (_) { return []; } })() : []);
 
   const hasAccess = (item) => {
-    if (item.name === 'divider') return true;
     if (!user) return false;
     if (user.role === 'admin' || userPerms.includes('*')) return true;
 
@@ -94,7 +142,28 @@ export default function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
     return false;
   };
 
-  const filteredNav = navItems.filter(hasAccess);
+  const filteredTop = topItems.filter(hasAccess);
+  const filteredBottom = bottomItems.filter(hasAccess);
+  const filteredGroups = navGroups
+    .map(g => ({ ...g, children: g.children.filter(hasAccess) }))
+    .filter(g => g.children.length > 0);
+
+  // Accordion behavior: only one group open at a time. Navigating to a page
+  // opens whichever group contains it (and closes whatever else was open);
+  // manually clicking a group's own header toggles it independently of the
+  // route, so the group you're currently in can still be collapsed on
+  // purpose without snapping back open until you actually navigate again.
+  const activeGroupKey = navGroups.find(g => g.children.some(c => c.path === location.pathname))?.key || null;
+  const [openGroup, setOpenGroup] = useState(activeGroupKey);
+
+  useEffect(() => {
+    setOpenGroup(activeGroupKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
+
+  const toggleGroup = (key) => {
+    setOpenGroup(prev => (prev === key ? null : key));
+  };
 
   const [appVersion, setAppVersion] = useState('');
   useEffect(() => {
@@ -103,11 +172,29 @@ export default function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
     }
   }, []);
 
+  const renderLink = (item) => {
+    const Icon = item.icon;
+    return (
+      <NavLink
+        key={item.name}
+        to={item.path}
+        onClick={() => setMobileMenuOpen(false)}
+        className={({ isActive }) => classNames(
+          isActive ? 'bg-teal-500/10 text-teal-400 border-r-2 border-teal-500' : 'text-slate-300 hover:bg-slate-800 hover:text-white',
+          'group flex items-center px-3 py-2.5 text-sm font-medium rounded-l-lg transition-all duration-200 ease-in-out'
+        )}
+      >
+        <Icon className="mr-3 flex-shrink-0 h-5 w-5 transition-colors" aria-hidden="true" />
+        {item.name}
+      </NavLink>
+    );
+  };
+
   return (
     <>
       {/* Mobile overlay */}
       {mobileMenuOpen && (
-        <div 
+        <div
           className="fixed inset-0 z-40 bg-slate-900/80 backdrop-blur-sm md:hidden animate-fade-in"
           onClick={() => setMobileMenuOpen(false)}
         />
@@ -120,7 +207,7 @@ export default function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
       )}>
         <div className="flex items-center justify-between h-16 bg-slate-950 px-4 shadow-sm">
           <div className="flex items-center space-x-3">
-            <div 
+            <div
               className="w-8 h-8 bg-teal-500 rounded-lg flex items-center justify-center shadow-lg shadow-teal-500/20 cursor-pointer"
               onDoubleClick={() => {
                 setMobileMenuOpen(false);
@@ -132,38 +219,59 @@ export default function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
             </div>
             <span className="text-white font-bold text-lg tracking-wide uppercase">SecurManage</span>
           </div>
-          <button 
+          <button
             className="md:hidden text-slate-400 hover:text-white"
             onClick={() => setMobileMenuOpen(false)}
           >
             <X className="w-6 h-6" />
           </button>
         </div>
-        <div className="flex flex-col flex-1 overflow-y-auto">
-          <nav className="flex-1 px-3 py-6 space-y-1">
-            {filteredNav.map((item, idx) => {
-              if (item.name === 'divider') {
-                return <hr key={`div-${idx}`} className="my-3 border-slate-700/50" />;
-              }
-              const Icon = item.icon;
+        <div className="flex flex-col flex-1 min-h-0">
+          <nav className="flex-1 min-h-0 overflow-y-auto sidebar-scroll px-3 py-6 space-y-1">
+            {filteredTop.map(renderLink)}
+
+            {filteredGroups.length > 0 && <hr className="my-3 border-slate-700/50" />}
+
+            {filteredGroups.map(group => {
+              const GroupIcon = group.icon;
+              const hasActiveChild = group.children.some(c => c.path === location.pathname);
+              const isOpen = openGroup === group.key;
               return (
-                <NavLink
-                  key={item.name}
-                  to={item.path}
-                  onClick={() => setMobileMenuOpen(false)}
-                  className={({ isActive }) => classNames(
-                    isActive ? 'bg-teal-500/10 text-teal-400 border-r-2 border-teal-500' : 'text-slate-300 hover:bg-slate-800 hover:text-white',
-                    'group flex items-center px-3 py-2.5 text-sm font-medium rounded-l-lg transition-all duration-200 ease-in-out'
+                <div key={group.key}>
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.key)}
+                    className={classNames(
+                      'w-full flex items-center justify-between px-3 py-2.5 text-xs font-bold uppercase tracking-wide rounded-lg transition-colors duration-200',
+                      hasActiveChild ? 'text-teal-400' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    )}
+                  >
+                    <span className="flex items-center">
+                      <GroupIcon className="mr-3 flex-shrink-0 h-5 w-5" aria-hidden="true" />
+                      {group.label}
+                    </span>
+                    <ChevronDown className={classNames('h-4 w-4 transition-transform duration-200', isOpen ? 'rotate-180' : '')} />
+                  </button>
+                  {isOpen && (
+                    <div className="mt-1 ml-3 pl-2 border-l border-slate-700/50 space-y-1">
+                      {group.children.map(renderLink)}
+                    </div>
                   )}
-                >
-                  <Icon className={classNames('mr-3 flex-shrink-0 h-5 w-5 transition-colors')} aria-hidden="true" />
-                  {item.name}
-                </NavLink>
+                </div>
               );
             })}
+
           </nav>
+
+          {/* Pinned to the bottom, outside the scroll area, so Help never
+              scrolls out of view no matter how many groups are expanded. */}
+          {filteredBottom.length > 0 && (
+            <div className="shrink-0 px-3 py-3 border-t border-slate-800 space-y-1">
+              {filteredBottom.map(renderLink)}
+            </div>
+          )}
           {appVersion && (
-            <div className="px-4 py-3 border-t border-slate-800">
+            <div className="shrink-0 px-4 py-3 border-t border-slate-800">
               <p className="text-xs text-slate-500 text-center">v{appVersion}</p>
             </div>
           )}

@@ -441,4 +441,86 @@ router.get('/filings/:id/download', async (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Download Excel / PDF (human-readable exports of the same filing)
+// ═══════════════════════════════════════════════════════════════════════════
+
+router.get('/filings/:id/download/excel', async (req, res) => {
+  try {
+    const filing = await gstService.getFiling(parseInt(req.params.id));
+    if (!filing) return res.status(404).json({ success: false, message: 'Filing not found' });
+
+    const ExcelJS = require('exceljs');
+    const { sections } = gstService._flattenFilingForExport(filing);
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Security Firm Software';
+    workbook.created = new Date();
+
+    sections.forEach(section => {
+      const sheet = workbook.addWorksheet(section.name.slice(0, 31));
+      sheet.columns = section.columns.map(c => ({ header: c.label, key: c.key, width: 18 }));
+      section.rows.forEach(r => sheet.addRow(r));
+      sheet.getRow(1).font = { bold: true };
+      sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEEEEE' } };
+    });
+
+    const filename = `${filing.return_type}_${filing.return_period}_${filing.gstin}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    logError({
+      error: err,
+      req,
+      severity: ERROR_SEVERITY.HIGH,
+      category: ERROR_CATEGORY.GST,
+      feature: 'gst-compliance',
+      extra: { message: 'Excel export filing error:' }
+    });
+    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.get('/filings/:id/download/pdf', async (req, res) => {
+  try {
+    const filing = await gstService.getFiling(parseInt(req.params.id));
+    if (!filing) return res.status(404).json({ success: false, message: 'Filing not found' });
+
+    const { query } = require('../database/connection');
+    const { generateMultiSectionReportPDF } = require('../utils/paymentsPdfGenerator');
+    const { sections } = gstService._flattenFilingForExport(filing);
+    const agencySetting = await query("SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'");
+    const agencySettings = agencySetting.rows.length > 0 ? JSON.parse(agencySetting.rows[0].setting_value) : null;
+
+    const chunks = [];
+    generateMultiSectionReportPDF(
+      {
+        title: `${filing.return_type} — ${filing.return_period}`,
+        subtitleLines: [`GSTIN: ${filing.gstin} | Status: ${filing.status.toUpperCase()}`],
+        sections,
+        agencySettings,
+      },
+      (chunk) => chunks.push(chunk),
+      () => {
+        const pdfBuffer = Buffer.concat(chunks);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Length', pdfBuffer.length);
+        res.setHeader('Content-Disposition', `attachment; filename="${filing.return_type}_${filing.return_period}_${filing.gstin}.pdf"`);
+        res.end(pdfBuffer);
+      }
+    );
+  } catch (err) {
+    logError({
+      error: err,
+      req,
+      severity: ERROR_SEVERITY.HIGH,
+      category: ERROR_CATEGORY.GST,
+      feature: 'gst-compliance',
+      extra: { message: 'PDF export filing error:' }
+    });
+    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 module.exports = router;

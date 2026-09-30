@@ -31,6 +31,8 @@ const emptyForm = {
   tds_rate: '',
 };
 
+const emptyExpenseItem = { description: '', quantity: '1', unit_price: '' };
+
 export default function Expenses() {
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -44,7 +46,10 @@ export default function Expenses() {
   const [pagination, setPagination] = useState(null);
   const [categories, setCategories] = useState([]);
   const [vendors, setVendors] = useState([]);
-  
+  const [purchaseOrders, setPurchaseOrders] = useState([]);
+  const [selectedPoId, setSelectedPoId] = useState('');
+  const [items, setItems] = useState([{ ...emptyExpenseItem }]);
+
   // Quick Add Vendor State
   const [isVendorModalOpen, setIsVendorModalOpen] = useState(false);
   const [vendorForm, setVendorForm] = useState({ name: '', contact_info: '', payment_terms_days: '0' });
@@ -81,6 +86,15 @@ export default function Expenses() {
     }
   };
 
+  const fetchPurchaseOrders = async () => {
+    try {
+      const res = await api.get('/purchase-orders?status=draft&limit=100');
+      setPurchaseOrders(res.data || []);
+    } catch (err) {
+      console.error('Failed to fetch purchase orders', err);
+    }
+  };
+
   const fetchExpenses = async () => {
     try {
       setLoading(true);
@@ -95,10 +109,11 @@ export default function Expenses() {
     }
   };
 
-  useEffect(() => { 
-    fetchExpenses(); 
+  useEffect(() => {
+    fetchExpenses();
     fetchCategories();
     fetchVendors();
+    fetchPurchaseOrders();
   }, [statusFilter, page]);
 
   useEffect(() => { setPage(1); }, [statusFilter]);
@@ -108,9 +123,22 @@ export default function Expenses() {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
+  const updateItem = (idx, field, value) => {
+    setItems(prev => {
+      const next = [...prev];
+      next[idx] = { ...next[idx], [field]: value };
+      return next;
+    });
+  };
+  const addItem = () => setItems(prev => [...prev, { ...emptyExpenseItem }]);
+  const removeItem = (idx) => setItems(prev => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== idx)));
+  const itemsSubtotal = items.reduce((s, it) => s + (parseFloat(it.quantity) || 0) * (parseFloat(it.unit_price) || 0), 0);
+
   const openCreateModal = () => {
     setFormData({ ...emptyForm, expense_date: format(new Date(), 'yyyy-MM-dd') });
+    setItems([{ ...emptyExpenseItem }]);
     setReceiptFile(null);
+    setSelectedPoId('');
     setError('');
     setIsModalOpen(true);
   };
@@ -118,6 +146,35 @@ export default function Expenses() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+
+    if (selectedPoId) {
+      if (!formData.expense_date) {
+        const msg = 'Please select the bill date';
+        setError(msg);
+        toast.warning(msg);
+        return;
+      }
+      setSubmitting(true);
+      try {
+        await api.post(`/purchase-orders/${selectedPoId}/convert-to-bill`, {
+          expense_date: formData.expense_date,
+          payment_method: formData.payment_method,
+        });
+        toast.success('Purchase order converted to a bill!');
+        setIsModalOpen(false);
+        setSelectedPoId('');
+        setFormData({ ...emptyForm, expense_date: format(new Date(), 'yyyy-MM-dd') });
+        fetchExpenses();
+        fetchPurchaseOrders();
+      } catch (err) {
+        const msg = err.response?.data?.message || err.message || 'Failed to convert purchase order to a bill';
+        setError(msg);
+        toast.error(msg);
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
 
     // Field validations
     if (!formData.expense_date) {
@@ -132,19 +189,22 @@ export default function Expenses() {
       toast.warning(msg);
       return;
     }
-    if (!formData.description || formData.description.trim().length < 3) {
-      const msg = 'Please provide a clear description (at least 3 characters)';
+    if (items.some(it => !it.description.trim() || !(parseFloat(it.quantity) > 0) || it.unit_price === '')) {
+      const msg = 'Every item needs a name, a positive quantity, and a unit price';
       setError(msg);
       toast.warning(msg);
       return;
     }
-    const amt = parseFloat(formData.amount);
+    const amt = itemsSubtotal;
     if (isNaN(amt) || amt <= 0) {
       const msg = 'Please enter a valid amount greater than zero';
       setError(msg);
       toast.warning(msg);
       return;
     }
+    const description = items.length === 1
+      ? items[0].description.trim()
+      : items.map(it => `${it.description.trim()} (x${it.quantity})`).join(', ');
 
     if (receiptFile) {
       // Validate receipt size (max 10MB)
@@ -169,6 +229,7 @@ export default function Expenses() {
     try {
       const data = new FormData();
       Object.keys(formData).forEach(key => {
+        if (key === 'description' || key === 'amount') return;
         if (formData[key] !== null && formData[key] !== undefined) {
           if (key === 'vendor_id') {
             if (formData[key] && parseInt(formData[key]) > 0) {
@@ -179,15 +240,18 @@ export default function Expenses() {
           }
         }
       });
+      data.append('description', description);
+      data.append('amount', amt.toFixed(2));
       if (receiptFile) data.append('receipt_file', receiptFile);
 
       await api.post('/expenses', data, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
-      
+
       toast.success('Expense recorded successfully!');
       setIsModalOpen(false);
       setFormData({ ...emptyForm, expense_date: format(new Date(), 'yyyy-MM-dd') });
+      setItems([{ ...emptyExpenseItem }]);
       setReceiptFile(null);
       fetchExpenses();
     } catch (err) {
@@ -380,7 +444,7 @@ export default function Expenses() {
               <tr>
                 <th className="px-6 py-4 font-semibold">Date</th>
                 <th className="px-6 py-4 font-semibold">Category</th>
-                <th className="px-6 py-4 font-semibold">Description / Vendor</th>
+                <th className="px-6 py-4 font-semibold">Item / Vendor</th>
                 <th className="px-4 py-4 font-semibold text-center">Receipt</th>
                 <th className="px-6 py-4 font-semibold text-right">Amount / Bal</th>
                 <th className="px-6 py-4 font-semibold">Status</th>
@@ -602,7 +666,7 @@ export default function Expenses() {
       {/* ─── Record Expense Modal ─────────────────────────────────────────────────── */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in overflow-y-auto">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-slide-up my-6 max-h-[90vh] flex flex-col">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden animate-slide-up my-6 max-h-[90vh] flex flex-col">
             <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
               <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                 <Receipt className="w-5 h-5 text-teal-600" /> Record Expense
@@ -611,30 +675,37 @@ export default function Expenses() {
             </div>
             <form onSubmit={handleSubmit} className="p-6 overflow-y-auto flex-1 space-y-4">
               {error && <div className="p-3 bg-red-50 text-red-700 text-sm rounded-lg border border-red-100">{error}</div>}
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Expense Date *</label>
-                  <input required type="date" name="expense_date" value={formData.expense_date} onChange={handleInputChange} className={inputCls} />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Category *</label>
-                  <select required name="category" value={formData.category} onChange={handleInputChange} className={inputCls}>
-                    <option value="">-- Select Category --</option>
-                    {categories.map(c => <option key={c.id} value={c.name}>{c.name.replace('_', ' ').toUpperCase()}</option>)}
-                  </select>
-                </div>
-              </div>
 
+              {/* Convert from an existing Purchase Order, instead of entering a bill manually */}
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Description *</label>
-                <input required type="text" name="description" value={formData.description} onChange={handleInputChange} className={inputCls} placeholder="What was this expense for?" />
+                <label className="block text-sm font-medium text-slate-700 mb-1">Create from Purchase Order (Optional)</label>
+                <select value={selectedPoId} onChange={e => setSelectedPoId(e.target.value)} className={inputCls}>
+                  <option value="">-- Enter Bill Manually --</option>
+                  {purchaseOrders.map(po => (
+                    <option key={po.id} value={po.id}>
+                      {po.po_number} — {po.vendor_name} (₹{parseFloat(po.total_amount).toLocaleString('en-IN')})
+                    </option>
+                  ))}
+                </select>
               </div>
+
+              {selectedPoId && (() => {
+                const po = purchaseOrders.find(p => String(p.id) === String(selectedPoId));
+                if (!po) return null;
+                return (
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-sm space-y-1">
+                    <div className="flex justify-between"><span className="text-slate-500">Vendor</span><span className="font-semibold text-slate-800">{po.vendor_name}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Items</span><span className="font-semibold text-slate-800">{po.item_count} item(s)</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Bill Amount</span><span className="font-bold text-emerald-700">₹{parseFloat(po.total_amount).toLocaleString('en-IN')}</span></div>
+                    <p className="text-xs text-slate-500 pt-1">Category, item, amount, GST and TDS are all carried over from this purchase order — just confirm the bill date and payment method below.</p>
+                  </div>
+                );
+              })()}
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Amount (₹) *</label>
-                  <input required type="number" min="0.01" step="0.01" name="amount" value={formData.amount} onChange={handleInputChange} className={inputCls} placeholder="0.00" />
+                  <label className="block text-sm font-medium text-slate-700 mb-1">{selectedPoId ? 'Bill Date *' : 'Expense Date *'}</label>
+                  <input required type="date" name="expense_date" value={formData.expense_date} onChange={handleInputChange} className={inputCls} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Payment Method *</label>
@@ -642,6 +713,57 @@ export default function Expenses() {
                     {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                   </select>
                 </div>
+              </div>
+
+              {!selectedPoId && <>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Category *</label>
+                <select required name="category" value={formData.category} onChange={handleInputChange} className={inputCls}>
+                  <option value="">-- Select Category --</option>
+                  {categories.map(c => <option key={c.id} value={c.name}>{c.name.replace('_', ' ').toUpperCase()}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Items *</label>
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 text-xs font-bold text-slate-500 uppercase">
+                      <tr>
+                        <th className="p-2 text-left">Item</th>
+                        <th className="p-2 text-right w-20">Qty</th>
+                        <th className="p-2 text-right w-28">Unit Price (₹)</th>
+                        <th className="p-2 text-right w-28">Amount (₹)</th>
+                        <th className="p-2 w-10"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {items.map((it, idx) => (
+                        <tr key={idx}>
+                          <td className="p-2">
+                            <input type="text" value={it.description} onChange={e => updateItem(idx, 'description', e.target.value)} placeholder="e.g. Office Supplies" className="w-full px-2 py-1.5 border border-slate-200 rounded text-sm" />
+                          </td>
+                          <td className="p-2">
+                            <input type="number" min="0.01" step="0.01" value={it.quantity} onChange={e => updateItem(idx, 'quantity', e.target.value)} className="w-full px-2 py-1.5 border border-slate-200 rounded text-sm text-right" />
+                          </td>
+                          <td className="p-2">
+                            <input type="number" min="0" step="0.01" value={it.unit_price} onChange={e => updateItem(idx, 'unit_price', e.target.value)} className="w-full px-2 py-1.5 border border-slate-200 rounded text-sm text-right" />
+                          </td>
+                          <td className="p-2 text-right font-medium text-slate-700">
+                            ₹{((parseFloat(it.quantity) || 0) * (parseFloat(it.unit_price) || 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          </td>
+                          <td className="p-2 text-center">
+                            <button type="button" onClick={() => removeItem(idx)} className="text-slate-400 hover:text-rose-600"><Trash2 className="w-4 h-4" /></button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <button type="button" onClick={addItem} className="w-full py-2 text-xs font-semibold text-teal-700 hover:bg-teal-50 border-t border-slate-200 flex items-center justify-center gap-1">
+                    <Plus className="w-3.5 h-3.5" /> Add Item
+                  </button>
+                </div>
+                <p className="text-right text-sm font-bold text-slate-800 mt-1">Total: ₹{itemsSubtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
               </div>
 
               {/* Vendor Selection with Quick Add New Vendor */}
@@ -745,11 +867,12 @@ export default function Expenses() {
                 <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
                 <textarea name="notes" value={formData.notes} onChange={handleInputChange} rows="2" className={inputCls} placeholder="Additional details..." />
               </div>
+              </>}
 
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
                 <button type="submit" disabled={submitting} className="px-5 py-2 text-sm font-bold text-white bg-teal-600 rounded-lg hover:bg-teal-700 shadow-md disabled:opacity-50">
-                  {submitting ? 'Saving...' : 'Record Expense'}
+                  {submitting ? 'Saving...' : selectedPoId ? 'Convert to Bill' : 'Record Expense'}
                 </button>
               </div>
             </form>

@@ -84,7 +84,7 @@ export default function PurchaseOrders() {
     e.preventDefault();
     if (!form.vendor_id) { toast.error('Please select a vendor'); return; }
     if (form.items.some(it => !it.description || !(parseFloat(it.quantity) > 0) || it.unit_price === '')) {
-      toast.error('Every line item needs a description, a positive quantity, and a unit price');
+      toast.error('Every line item needs an item name, a positive quantity, and a unit price');
       return;
     }
     setSubmitting(true);
@@ -212,7 +212,7 @@ export default function PurchaseOrders() {
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-xs font-bold text-slate-500 uppercase">
                 <tr>
-                  <th className="p-2 text-left">Description</th>
+                  <th className="p-2 text-left">Item</th>
                   <th className="p-2 text-left w-24">HSN</th>
                   <th className="p-2 text-right w-24">Qty</th>
                   <th className="p-2 text-right w-32">Unit Price (₹)</th>

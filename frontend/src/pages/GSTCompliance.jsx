@@ -132,8 +132,31 @@ export default function GSTCompliance() {
     } catch { alert('Failed to load filing'); }
   };
 
-  const downloadFiling = (id) => {
-    window.open(`/api/gst/filings/${id}/download`, '_blank');
+  // Plain window.open() can't attach the Authorization header this API
+  // requires, so it silently 401s and nothing downloads — fetch as a blob
+  // through the authenticated `api` client instead, then save it manually.
+  const [downloadingId, setDownloadingId] = useState(null);
+  const downloadFiling = async (filing, format) => {
+    const { id, return_type, return_period, gstin } = filing;
+    const path = format === 'json' ? `/gst/filings/${id}/download` : `/gst/filings/${id}/download/${format}`;
+    const ext = format === 'json' ? 'json' : format;
+    setDownloadingId(`${id}-${format}`);
+    try {
+      const res = await api.get(path, { responseType: 'blob' });
+      const blob = new Blob([res]);
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${return_type}_${return_period}_${gstin}.${ext}`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(err.message || `Failed to download ${format.toUpperCase()}`);
+    } finally {
+      setDownloadingId(null);
+    }
   };
 
   return (
@@ -151,7 +174,7 @@ export default function GSTCompliance() {
             <button onClick={() => generateReturn('GSTR1')} className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm">
               <Zap className="w-4 h-4" /> Generate GSTR-1
             </button>
-            <button onClick={() => generateReturn('GSTR3B')} className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm">
+            <button onClick={() => generateReturn('GSTR3B')} className="flex items-center gap-2 bg-teal-800 hover:bg-teal-900 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm">
               <Zap className="w-4 h-4" /> Generate GSTR-3B
             </button>
           </div>
@@ -199,7 +222,7 @@ export default function GSTCompliance() {
               ) : filings.map(f => (
                 <tr key={f.id} className="border-b border-slate-200 hover:bg-slate-50 transition-colors">
                   <td className="p-4">
-                    <span className={`text-xs font-bold px-2 py-1 rounded ${f.return_type === 'GSTR1' ? 'bg-indigo-500/20 text-teal-600' : 'bg-purple-500/20 text-purple-400'}`}>
+                    <span className={`text-xs font-bold px-2 py-1 rounded border ${f.return_type === 'GSTR1' ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200'}`}>
                       {f.return_type}
                     </span>
                   </td>
@@ -210,15 +233,28 @@ export default function GSTCompliance() {
                   <td className="p-4 text-right text-slate-700">{fmt(f.total_igst)}</td>
                   <td className="p-4 text-center text-slate-900">{f.total_invoices}</td>
                   <td className="p-4 text-center">
-                    <span className={`text-xs px-2 py-0.5 rounded ${
-                      f.status === 'filed' ? 'bg-emerald-500/20 text-emerald-600' :
-                      f.status === 'generated' ? 'bg-amber-500/20 text-amber-600' :
-                      'bg-slate-100 text-slate-500'
+                    <span className={`text-xs px-2 py-0.5 rounded border font-medium ${
+                      f.status === 'filed' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                      f.status === 'generated' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                      'bg-slate-100 text-slate-600 border-slate-200'
                     }`}>{f.status}</span>
                   </td>
-                  <td className="p-4 text-right flex gap-1 justify-end">
-                    <button onClick={() => openFiling(f.id)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500" title="View"><Eye className="w-4 h-4" /></button>
-                    <button onClick={() => downloadFiling(f.id)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500" title="Download JSON"><Download className="w-4 h-4" /></button>
+                  <td className="p-4 text-right">
+                    <div className="flex gap-1 justify-end items-center">
+                      <button onClick={() => openFiling(f.id)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500" title="View"><Eye className="w-4 h-4" /></button>
+                      <span className="w-px h-4 bg-slate-200 mx-0.5" />
+                      {['json', 'excel', 'pdf'].map(fmt => (
+                        <button
+                          key={fmt}
+                          onClick={() => downloadFiling(f, fmt)}
+                          disabled={downloadingId === `${f.id}-${fmt}`}
+                          className="px-1.5 py-1 rounded-lg hover:bg-slate-100 text-slate-500 text-[10px] font-bold uppercase disabled:opacity-40 flex items-center gap-0.5"
+                          title={`Download ${fmt.toUpperCase()}`}
+                        >
+                          <Download className="w-3 h-3" /> {fmt === 'excel' ? 'XLS' : fmt}
+                        </button>
+                      ))}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -273,41 +309,41 @@ export default function GSTCompliance() {
           <form onSubmit={saveConfig} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs text-slate-400 mb-1">GSTIN *</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1">GSTIN *</label>
                 <input type="text" value={configForm.gstin} onChange={e => setConfigForm({...configForm, gstin: e.target.value})} maxLength={15} required
-                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 font-mono" placeholder="24AAAAA0000A1Z5" />
+                  className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-800 focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all font-mono" placeholder="24AAAAA0000A1Z5" />
               </div>
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Financial Year *</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Financial Year *</label>
                 <input type="text" value={configForm.financial_year} onChange={e => setConfigForm({...configForm, financial_year: e.target.value})} required
-                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900" placeholder="2025-26" />
+                  className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-800 focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all" placeholder="2025-26" />
               </div>
             </div>
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Legal Name *</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Legal Name *</label>
               <input type="text" value={configForm.legal_name} onChange={e => setConfigForm({...configForm, legal_name: e.target.value})} required
-                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900" />
+                className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-800 focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all" />
             </div>
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Trade Name</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Trade Name</label>
               <input type="text" value={configForm.trade_name || ''} onChange={e => setConfigForm({...configForm, trade_name: e.target.value})}
-                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900" />
+                className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-800 focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all" />
             </div>
             <div className="grid grid-cols-3 gap-4">
               <div>
-                <label className="block text-xs text-slate-400 mb-1">State Code *</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1">State Code *</label>
                 <input type="text" value={configForm.state_code} onChange={e => setConfigForm({...configForm, state_code: e.target.value})} maxLength={2} required
-                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 font-mono" />
+                  className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-800 focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all font-mono" />
               </div>
               <div>
-                <label className="block text-xs text-slate-400 mb-1">State Name *</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1">State Name *</label>
                 <input type="text" value={configForm.state_name} onChange={e => setConfigForm({...configForm, state_name: e.target.value})} required
-                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900" />
+                  className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-800 focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all" />
               </div>
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Default GST Rate</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Default GST Rate</label>
                 <select value={configForm.default_tax_rate} onChange={e => setConfigForm({...configForm, default_tax_rate: parseFloat(e.target.value)})}
-                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900">
+                  className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-800 focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all">
                   <option value={5}>5%</option>
                   <option value={12}>12%</option>
                   <option value={18}>18%</option>
@@ -332,21 +368,21 @@ export default function GSTCompliance() {
             </div>
             <div className="p-6 overflow-y-auto space-y-4">
               <div className="grid grid-cols-4 gap-4">
-                <div className="bg-slate-900/50 rounded-lg p-3 text-center">
-                  <p className="text-xs text-slate-400">Taxable Value</p>
-                  <p className="text-lg font-bold text-slate-900">{fmt(viewFiling.total_taxable_value)}</p>
+                <div className="bg-white border border-teal-100 rounded-lg p-3 text-center">
+                  <p className="text-xs text-slate-500">Taxable Value</p>
+                  <p className="text-lg font-bold text-slate-800">{fmt(viewFiling.total_taxable_value)}</p>
                 </div>
-                <div className="bg-slate-900/50 rounded-lg p-3 text-center">
-                  <p className="text-xs text-slate-400">CGST</p>
-                  <p className="text-lg font-bold text-blue-600">{fmt(viewFiling.total_cgst)}</p>
+                <div className="bg-white border border-teal-100 rounded-lg p-3 text-center">
+                  <p className="text-xs text-slate-500">CGST</p>
+                  <p className="text-lg font-bold text-teal-700">{fmt(viewFiling.total_cgst)}</p>
                 </div>
-                <div className="bg-slate-900/50 rounded-lg p-3 text-center">
-                  <p className="text-xs text-slate-400">SGST</p>
-                  <p className="text-lg font-bold text-blue-600">{fmt(viewFiling.total_sgst)}</p>
+                <div className="bg-white border border-teal-100 rounded-lg p-3 text-center">
+                  <p className="text-xs text-slate-500">SGST</p>
+                  <p className="text-lg font-bold text-teal-700">{fmt(viewFiling.total_sgst)}</p>
                 </div>
-                <div className="bg-slate-900/50 rounded-lg p-3 text-center">
-                  <p className="text-xs text-slate-400">IGST</p>
-                  <p className="text-lg font-bold text-orange-400">{fmt(viewFiling.total_igst)}</p>
+                <div className="bg-white border border-teal-100 rounded-lg p-3 text-center">
+                  <p className="text-xs text-slate-500">IGST</p>
+                  <p className="text-lg font-bold text-amber-600">{fmt(viewFiling.total_igst)}</p>
                 </div>
               </div>
               {viewFiling.json && (
@@ -359,9 +395,16 @@ export default function GSTCompliance() {
               )}
             </div>
             <div className="p-4 border-t border-slate-200 flex gap-3">
-              <button onClick={() => downloadFiling(viewFiling.id)} className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">
-                <Download className="w-4 h-4" /> Download JSON
-              </button>
+              {['json', 'excel', 'pdf'].map(fmt => (
+                <button
+                  key={fmt}
+                  onClick={() => downloadFiling(viewFiling, fmt)}
+                  disabled={downloadingId === `${viewFiling.id}-${fmt}`}
+                  className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+                >
+                  <Download className="w-4 h-4" /> {downloadingId === `${viewFiling.id}-${fmt}` ? 'Downloading...' : `Download ${fmt === 'excel' ? 'Excel' : fmt.toUpperCase()}`}
+                </button>
+              ))}
               <button onClick={() => setViewFiling(null)} className="px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors font-medium">Close</button>
             </div>
           </div>

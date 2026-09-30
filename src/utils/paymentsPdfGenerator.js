@@ -125,4 +125,98 @@ function generateTabularReportPDF({ title, subtitleLines = [], columns, rows, to
   doc.end();
 }
 
-module.exports = { generateTabularReportPDF };
+/**
+ * Same look-and-feel as generateTabularReportPDF, but for a report made of
+ * several independently-shaped tables in one document (e.g. a GSTR-1 filing's
+ * B2B / B2CS / B2CL / HSN breakdown) — one PDFDocument, one title block, each
+ * section gets its own heading + column set, empty sections are skipped.
+ *
+ * @param {object} opts
+ * @param {string} opts.title
+ * @param {string[]} [opts.subtitleLines]
+ * @param {{name:string, columns:{key:string,label:string,width?:number,align?:string}[], rows:object[]}[]} opts.sections
+ * @param {object} [opts.agencySettings]
+ */
+function generateMultiSectionReportPDF({ title, subtitleLines = [], sections, agencySettings }, dataCallback, endCallback) {
+  const landscape = sections.some((s) => s.columns.length > 6);
+  const doc = new PDFDocument({ margin: 40, size: 'A4', layout: landscape ? 'landscape' : 'portrait', autoFirstPage: true });
+  if (typeof dataCallback === 'function') doc.on('data', dataCallback);
+  if (typeof endCallback === 'function') doc.on('end', endCallback);
+
+  const agencyName = agencySettings?.agency_name || process.env.COMPANY_NAME || 'EAGLE EYE SECURITY SERVICE';
+  const pageWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const startX = doc.page.margins.left;
+  const bottomLimit = doc.page.height - doc.page.margins.bottom;
+
+  drawLogoIfEnabled(doc, agencySettings, startX, 30);
+  doc.font('Helvetica-Bold').fontSize(15).fillColor('#8B1E1E').text(agencyName, startX, 30, { width: pageWidth, align: 'center' });
+  doc.font('Helvetica-Bold').fontSize(12).fillColor('#1a365d').text(title, startX, 52, { width: pageWidth, align: 'center' });
+
+  let y = 70;
+  doc.font('Helvetica').fontSize(8.5).fillColor('#555');
+  subtitleLines.forEach((line) => {
+    doc.text(line, startX, y, { width: pageWidth, align: 'center' });
+    y += 12;
+  });
+  y += 10;
+
+  const rowHeight = 16;
+  function ensureSpace(extra = 0) {
+    if (y + rowHeight + extra > bottomLimit) {
+      doc.addPage();
+      y = doc.page.margins.top;
+    }
+  }
+  function truncateToWidth(text, maxWidth) {
+    let str = String(text ?? '');
+    if (doc.widthOfString(str) <= maxWidth) return str;
+    while (str.length > 1 && doc.widthOfString(str + '…') > maxWidth) {
+      str = str.slice(0, -1);
+    }
+    return str + '…';
+  }
+
+  const nonEmptySections = sections.filter((s) => s.rows.length > 0);
+  if (nonEmptySections.length === 0) {
+    doc.font('Helvetica').fontSize(9).fillColor('#94a3b8').text('No data for this period.', startX, y);
+  }
+
+  nonEmptySections.forEach((section) => {
+    ensureSpace(30);
+    doc.font('Helvetica-Bold').fontSize(10).fillColor('#0f766e').text(section.name, startX, y, { width: pageWidth });
+    y += 16;
+
+    const totalWeight = section.columns.reduce((s, c) => s + (c.width || 1), 0);
+    const colPx = section.columns.map((c) => (pageWidth * (c.width || 1)) / totalWeight);
+
+    function drawRow(values, opts = {}) {
+      ensureSpace();
+      let x = startX;
+      doc.font(opts.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(8).fillColor(opts.color || '#111827');
+      section.columns.forEach((col, i) => {
+        const cellWidth = colPx[i] - 4;
+        const text = truncateToWidth(values[i], cellWidth);
+        doc.text(text, x + 2, y + 2, { width: cellWidth, align: col.align || 'left', lineBreak: false });
+        x += colPx[i];
+      });
+      y += rowHeight;
+    }
+
+    doc.rect(startX, y - 2, pageWidth, rowHeight).fill('#f1f5f9');
+    drawRow(section.columns.map((c) => c.label), { bold: true, color: '#334155' });
+    doc.moveTo(startX, y).lineTo(startX + pageWidth, y).strokeColor('#cbd5e1').lineWidth(0.5).stroke();
+
+    section.rows.forEach((r) => drawRow(section.columns.map((c) => r[c.key])));
+    y += 14;
+  });
+
+  y += 6;
+  if (y + 12 <= bottomLimit) {
+    doc.font('Helvetica').fontSize(7).fillColor('#94a3b8')
+      .text(`Generated ${new Date().toLocaleString('en-IN')}`, startX, y, { width: pageWidth, align: 'center' });
+  }
+
+  doc.end();
+}
+
+module.exports = { generateTabularReportPDF, generateMultiSectionReportPDF };

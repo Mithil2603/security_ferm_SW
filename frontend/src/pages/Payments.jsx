@@ -425,7 +425,7 @@ export default function Payments() {
                 >
                   <option value="">-- Select Account --</option>
                   {bankAccounts.map(b => (
-                    <option key={b.id} value={b.id}>{b.account_name} ({b.account_type})</option>
+                    <option key={b.id} value={b.id}>{b.account_name}{b.bank_name ? ` — ${b.bank_name}` : ''} ({b.account_type})</option>
                   ))}
                 </select>
               </div>
@@ -440,7 +440,7 @@ export default function Payments() {
                   >
                     <option value="">-- Select Account --</option>
                     {bankAccounts.filter(b => String(b.id) !== String(bankForm.bank_account_id)).map(b => (
-                      <option key={b.id} value={b.id}>{b.account_name} ({b.account_type})</option>
+                      <option key={b.id} value={b.id}>{b.account_name}{b.bank_name ? ` — ${b.bank_name}` : ''} ({b.account_type})</option>
                     ))}
                   </select>
                 </div>
@@ -675,7 +675,7 @@ export default function Payments() {
                 >
                   <option value="">-- Select Account --</option>
                   {bankAccounts.map(a => (
-                    <option key={a.id} value={a.id}>{a.account_name} ({a.account_type})</option>
+                    <option key={a.id} value={a.id}>{a.account_name}{a.bank_name ? ` — ${a.bank_name}` : ''} ({a.account_type})</option>
                   ))}
                 </select>
               </div>
