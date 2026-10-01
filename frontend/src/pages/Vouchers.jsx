@@ -481,7 +481,7 @@ export default function Vouchers() {
                     style={inputStyle}>
                     <option value="">— Select —</option>
                     {bankAccounts.map(a => (
-                      <option key={a.id} value={a.id}>{a.account_name} ({a.account_type})</option>
+                      <option key={a.id} value={a.id}>{a.account_name} ({a.bank_name || (a.account_type === 'cash' ? 'Cash' : a.account_type)})</option>
                     ))}
                   </select>
                 </div>
@@ -491,7 +491,7 @@ export default function Vouchers() {
                     style={inputStyle}>
                     <option value="">— Select —</option>
                     {bankAccounts.map(a => (
-                      <option key={a.id} value={a.id}>{a.account_name} ({a.account_type})</option>
+                      <option key={a.id} value={a.id}>{a.account_name} ({a.bank_name || (a.account_type === 'cash' ? 'Cash' : a.account_type)})</option>
                     ))}
                   </select>
                 </div>

@@ -22,6 +22,7 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
     amount_subtotal: '',
     discount_amount: '0',
     tax_type: 'none',
+    tax_rate: '18',
     is_rcm_applicable: false,
     due_date: '',
     notes: '',
@@ -155,6 +156,7 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
         amount_subtotal: invoice.amount_subtotal || '',
         discount_amount: invoice.discount_amount || '0',
         tax_type: invoice.tax_type || 'none',
+        tax_rate: invoice.tax_rate || (invoice.tax_type && invoice.tax_type !== 'none' ? '18' : ''),
         is_rcm_applicable: Boolean(invoice.is_rcm_applicable),
         due_date: formatDate(invoice.due_date),
         notes: invoice.notes || '',
@@ -481,8 +483,8 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
                 className={inputCls}
               >
                 <option value="none">No Tax</option>
-                <option value="cgst_sgst">CGST + SGST (18%)</option>
-                <option value="igst">IGST (18%)</option>
+                <option value="cgst_sgst">CGST + SGST</option>
+                <option value="igst">IGST</option>
               </select>
             </div>
             <div>
@@ -498,14 +500,28 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
             </div>
           </div>
 
+          {form.tax_type !== 'none' && (
+            <div>
+              <label className={labelCls}>GST Rate (%)</label>
+              <input
+                type="number" min="0" max="100" step="0.01"
+                value={form.tax_rate}
+                onChange={e => setForm({ ...form, tax_rate: e.target.value })}
+                className={inputCls}
+                placeholder="e.g. 5, 12, 18, 28"
+              />
+            </div>
+          )}
+
           {/* Live Financial Summary */}
           {(() => {
             const sub = parseFloat(form.amount_subtotal) || 0;
             const disc = parseFloat(form.discount_amount) || 0;
             const taxable = Math.max(0, sub - disc);
+            const rate = parseFloat(form.tax_rate) || 0;
             let tax = 0;
             if (form.tax_type === 'cgst_sgst' || form.tax_type === 'igst') {
-              tax = taxable * 0.18;
+              tax = taxable * (rate / 100);
             }
             const total = form.is_rcm_applicable ? taxable : (taxable + tax);
             const roundedTotal = roundOffEnabled ? Math.round(total) : parseFloat(total.toFixed(2));

@@ -800,7 +800,7 @@ export default function Expenses() {
                     <option value="igst">IGST</option>
                   </select>
                   <input
-                    type="number" min="0" max="28" step="0.1" name="tax_rate"
+                    type="number" min="0" max="100" step="0.1" name="tax_rate"
                     value={formData.tax_rate} onChange={handleInputChange}
                     disabled={formData.tax_type === 'none'}
                     className={`${inputCls} disabled:opacity-50`} placeholder="GST rate %"

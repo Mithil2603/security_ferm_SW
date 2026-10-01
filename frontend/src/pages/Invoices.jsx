@@ -88,7 +88,8 @@ export default function Invoices() {
   const [invoiceForm, setInvoiceForm] = useState({
     invoice_number: '', client_id: '', billing_period_start: '', billing_period_end: '',
     site_name: '', bank_account_id: '', particular: 'Security Guard',
-    tax_type: 'none', is_rcm_applicable: false, discount_amount: '0', notes: '',
+    tax_type: 'none', tax_rate: '18', manual_cgst: '', manual_sgst: '', manual_igst: '',
+    is_rcm_applicable: false, discount_amount: '0', notes: '',
     absent_guard_days: 0, absence_deduction: 0,
     bill_items: []
   });
@@ -306,6 +307,10 @@ export default function Invoices() {
       guards_count: '',
       total_duty_days: '',
       tax_type: 'none',
+      tax_rate: '18',
+      manual_cgst: '',
+      manual_sgst: '',
+      manual_igst: '',
       is_rcm_applicable: false,
       discount_amount: '0',
       notes: '',
@@ -354,6 +359,17 @@ export default function Invoices() {
         absent_guard_days: parseFloat(invoiceForm.absent_guard_days) || 0,
         absence_deduction: parseFloat(invoiceForm.absence_deduction) || 0
       };
+      // Manual GST ₹ amounts (if the user filled them in) take priority over
+      // the rate — these are internal form-only field names, not what the API expects.
+      delete payload.manual_cgst;
+      delete payload.manual_sgst;
+      delete payload.manual_igst;
+      if (invoiceForm.tax_type === 'cgst_sgst' && (invoiceForm.manual_cgst !== '' || invoiceForm.manual_sgst !== '')) {
+        payload.cgst_amount = parseFloat(invoiceForm.manual_cgst) || 0;
+        payload.sgst_amount = parseFloat(invoiceForm.manual_sgst) || 0;
+      } else if (invoiceForm.tax_type === 'igst' && invoiceForm.manual_igst !== '') {
+        payload.igst_amount = parseFloat(invoiceForm.manual_igst) || 0;
+      }
       if (Array.isArray(invoiceForm.bill_items) && invoiceForm.bill_items.length > 0) {
         payload.bill_items = invoiceForm.bill_items;
       }
@@ -1498,7 +1514,7 @@ export default function Invoices() {
                     }`}
                   >
                     <span className="text-xs font-bold text-slate-800">Intra-State</span>
-                    <span className="text-[10px] text-slate-500">9% CGST + 9% SGST</span>
+                    <span className="text-[10px] text-slate-500">{(parseFloat(invoiceForm.tax_rate) || 0) / 2}% CGST + {(parseFloat(invoiceForm.tax_rate) || 0) / 2}% SGST</span>
                   </button>
                   <button
                     type="button"
@@ -1506,16 +1522,51 @@ export default function Invoices() {
                     aria-checked={invoiceForm.tax_type === 'igst'}
                     onClick={() => setInvoiceForm(prev => ({ ...prev, tax_type: 'igst' }))}
                     className={`flex flex-col p-2.5 rounded-lg border text-center transition-all cursor-pointer ${
-                      invoiceForm.tax_type === 'igst' 
-                        ? 'bg-teal-50 border-teal-500 ring-1 ring-teal-500 text-teal-900' 
+                      invoiceForm.tax_type === 'igst'
+                        ? 'bg-teal-50 border-teal-500 ring-1 ring-teal-500 text-teal-900'
                         : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'
                     }`}
                   >
                     <span className="text-xs font-bold text-slate-800">Inter-State</span>
-                    <span className="text-[10px] text-slate-500">18% IGST</span>
+                    <span className="text-[10px] text-slate-500">{parseFloat(invoiceForm.tax_rate) || 0}% IGST</span>
                   </button>
                 </div>
               </div>
+
+              {invoiceForm.tax_type !== 'none' && (
+                <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 space-y-2">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">GST Rate (%)</label>
+                    <input
+                      type="number" min="0" max="100" step="0.01"
+                      value={invoiceForm.tax_rate}
+                      onChange={(e) => setInvoiceForm(prev => ({ ...prev, tax_rate: e.target.value }))}
+                      className={inputCls}
+                      placeholder="e.g. 5, 12, 18, 28"
+                    />
+                  </div>
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-teal-700 font-medium select-none">Or enter the exact GST amount (₹) instead</summary>
+                    <div className={`grid ${invoiceForm.tax_type === 'cgst_sgst' ? 'grid-cols-2' : 'grid-cols-1'} gap-2 mt-2`}>
+                      {invoiceForm.tax_type === 'cgst_sgst' ? (
+                        <>
+                          <input type="number" min="0" step="0.01" value={invoiceForm.manual_cgst}
+                            onChange={(e) => setInvoiceForm(prev => ({ ...prev, manual_cgst: e.target.value }))}
+                            className={inputCls} placeholder="CGST ₹ (optional)" />
+                          <input type="number" min="0" step="0.01" value={invoiceForm.manual_sgst}
+                            onChange={(e) => setInvoiceForm(prev => ({ ...prev, manual_sgst: e.target.value }))}
+                            className={inputCls} placeholder="SGST ₹ (optional)" />
+                        </>
+                      ) : (
+                        <input type="number" min="0" step="0.01" value={invoiceForm.manual_igst}
+                          onChange={(e) => setInvoiceForm(prev => ({ ...prev, manual_igst: e.target.value }))}
+                          className={inputCls} placeholder="IGST ₹ (optional)" />
+                      )}
+                    </div>
+                    <p className="text-slate-400 mt-1">If filled in, these exact amounts are used instead of the rate above.</p>
+                  </details>
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Discount (₹)</label>
@@ -1579,9 +1630,18 @@ export default function Invoices() {
 
                 const disc = parseFloat(invoiceForm.discount_amount || 0);
                 const taxable = Math.max(0, baseAmount - disc);
+                const rate = parseFloat(invoiceForm.tax_rate) || 0;
                 let tax = 0;
-                if (invoiceForm.tax_type === 'cgst_sgst' || invoiceForm.tax_type === 'igst') {
-                  tax = taxable * 0.18;
+                let effRate = 0;
+                if (invoiceForm.tax_type === 'cgst_sgst' && (invoiceForm.manual_cgst !== '' || invoiceForm.manual_sgst !== '')) {
+                  tax = (parseFloat(invoiceForm.manual_cgst) || 0) + (parseFloat(invoiceForm.manual_sgst) || 0);
+                  effRate = taxable > 0 ? (tax / taxable) * 100 : 0;
+                } else if (invoiceForm.tax_type === 'igst' && invoiceForm.manual_igst !== '') {
+                  tax = parseFloat(invoiceForm.manual_igst) || 0;
+                  effRate = taxable > 0 ? (tax / taxable) * 100 : 0;
+                } else if (invoiceForm.tax_type === 'cgst_sgst' || invoiceForm.tax_type === 'igst') {
+                  tax = taxable * (rate / 100);
+                  effRate = rate;
                 }
                 const total = invoiceForm.is_rcm_applicable ? taxable : (taxable + tax);
                 const roundedTotal = roundOffEnabled ? Math.round(total) : parseFloat(total.toFixed(2));
@@ -1611,7 +1671,7 @@ export default function Invoices() {
                       </div>
                     )}
                     <div className="flex justify-between text-slate-600">
-                      <span>Tax ({invoiceForm.tax_type === 'cgst_sgst' ? '18% CGST+SGST' : invoiceForm.tax_type === 'igst' ? '18% IGST' : '0%'}):</span>
+                      <span>Tax ({invoiceForm.tax_type === 'cgst_sgst' ? `${effRate.toFixed(2)}% CGST+SGST` : invoiceForm.tax_type === 'igst' ? `${effRate.toFixed(2)}% IGST` : '0%'}):</span>
                       <span className="font-semibold text-slate-800">{invoiceForm.is_rcm_applicable ? '₹0 (RCM)' : `₹${tax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}</span>
                     </div>
                     {Math.abs(roundOff) > 0 && (

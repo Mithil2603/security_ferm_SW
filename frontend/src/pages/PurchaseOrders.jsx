@@ -261,7 +261,7 @@ export default function PurchaseOrders() {
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">GST Rate (%)</label>
-              <input type="number" min="0" max="28" step="0.1" value={form.tax_rate} onChange={e => setForm(f => ({ ...f, tax_rate: e.target.value }))} disabled={form.tax_type === 'none'} className={`${inputCls} disabled:opacity-50`} />
+              <input type="number" min="0" max="100" step="0.1" value={form.tax_rate} onChange={e => setForm(f => ({ ...f, tax_rate: e.target.value }))} disabled={form.tax_type === 'none'} className={`${inputCls} disabled:opacity-50`} />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1" title="Not a PO-time tax event — TDS applies when the bill is booked/paid. Captured here for planning and carried through to the bill on conversion.">Expected TDS Rate (%)</label>

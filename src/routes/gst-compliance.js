@@ -46,7 +46,7 @@ router.post('/config', requirePermission('manage_settings'), async (req, res) =>
       state_code: Joi.string().length(2).required(),
       state_name: Joi.string().required(),
       registration_type: Joi.string().valid('regular', 'composition', 'unregistered').default('regular'),
-      default_tax_rate: Joi.number().min(0).max(28).default(18),
+      default_tax_rate: Joi.number().min(0).max(100).default(18),
       financial_year: Joi.string().pattern(/^\d{4}-\d{2}$/).required(),
     });
     const { error, value } = schema.validate(req.body);
@@ -94,7 +94,7 @@ router.post('/hsn-sac', requirePermission('manage_settings'), async (req, res) =
       code: Joi.string().max(8).required(),
       type: Joi.string().valid('HSN', 'SAC').required(),
       description: Joi.string().required(),
-      gst_rate: Joi.number().min(0).max(28).required(),
+      gst_rate: Joi.number().min(0).max(100).required(),
       cgst_rate: Joi.number().min(0),
       sgst_rate: Joi.number().min(0),
       igst_rate: Joi.number().min(0),
@@ -123,7 +123,7 @@ router.put('/hsn-sac/:id', requirePermission('manage_settings'), async (req, res
       code: Joi.string().max(8).required(),
       type: Joi.string().valid('HSN', 'SAC').required(),
       description: Joi.string().required(),
-      gst_rate: Joi.number().min(0).max(28).required(),
+      gst_rate: Joi.number().min(0).max(100).required(),
       cgst_rate: Joi.number().min(0),
       sgst_rate: Joi.number().min(0),
       igst_rate: Joi.number().min(0),

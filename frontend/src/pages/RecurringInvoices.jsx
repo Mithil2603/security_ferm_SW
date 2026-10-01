@@ -37,7 +37,7 @@ export default function RecurringInvoices() {
   const [filterStatus, setFilterStatus] = useState('');
 
   const [form, setForm] = useState({
-    client_id: '', monthly_rate: '', tax_type: 'cgst_sgst', discount_amount: '0',
+    client_id: '', monthly_rate: '', tax_type: 'cgst_sgst', tax_rate: '18', discount_amount: '0',
     is_rcm_applicable: false, frequency: 'monthly', start_date: format(new Date(), 'yyyy-MM-dd'),
     end_date: '', auto_generate: true, reminder_days: '5', invoice_description: '', invoice_notes: '',
   });
@@ -175,7 +175,7 @@ export default function RecurringInvoices() {
   const openCreateModal = () => {
     fetchClients();
     setForm({
-      client_id: '', monthly_rate: '', tax_type: 'cgst_sgst', discount_amount: '0',
+      client_id: '', monthly_rate: '', tax_type: 'cgst_sgst', tax_rate: '18', discount_amount: '0',
       is_rcm_applicable: false, frequency: 'monthly', start_date: format(new Date(), 'yyyy-MM-dd'),
       end_date: '', auto_generate: true, reminder_days: '5', invoice_description: '', invoice_notes: '',
     });
@@ -387,8 +387,8 @@ export default function RecurringInvoices() {
                   <select name="tax_type" value={form.tax_type} onChange={handleInputChange}
                     className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white">
                     <option value="none">No Tax</option>
-                    <option value="cgst_sgst">CGST + SGST (18%)</option>
-                    <option value="igst">IGST (18%)</option>
+                    <option value="cgst_sgst">CGST + SGST</option>
+                    <option value="igst">IGST</option>
                   </select>
                 </div>
                 <div>
@@ -397,6 +397,14 @@ export default function RecurringInvoices() {
                     className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white" />
                 </div>
               </div>
+
+              {form.tax_type !== 'none' && (
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">GST Rate (%)</label>
+                  <input type="number" name="tax_rate" value={form.tax_rate} onChange={handleInputChange} min="0" max="100" step="0.01"
+                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="e.g. 5, 12, 18, 28" />
+                </div>
+              )}
 
               {/* Options */}
               <div className="grid grid-cols-2 gap-4">

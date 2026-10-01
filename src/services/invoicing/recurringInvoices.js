@@ -22,6 +22,7 @@ class RecurringInvoiceService {
       client_id,
       monthly_rate,
       tax_type = 'cgst_sgst',
+      tax_rate = 18,
       discount_amount = 0,
       is_rcm_applicable = false,
       frequency = 'monthly',
@@ -37,13 +38,13 @@ class RecurringInvoiceService {
     const next_invoice_date = start_date;
 
     const result = await query(
-      `INSERT INTO recurring_invoices 
-        (client_id, monthly_rate, tax_type, discount_amount, is_rcm_applicable,
+      `INSERT INTO recurring_invoices
+        (client_id, monthly_rate, tax_type, tax_rate, discount_amount, is_rcm_applicable,
          frequency, start_date, end_date, next_invoice_date, auto_generate,
          reminder_days, invoice_description, invoice_notes, status, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'active', $14)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'active', $15)`,
       [
-        client_id, monthly_rate, tax_type, discount_amount, is_rcm_applicable,
+        client_id, monthly_rate, tax_type, tax_rate, discount_amount, is_rcm_applicable,
         frequency, start_date, end_date, next_invoice_date, auto_generate,
         reminder_days, invoice_description, invoice_notes, userId,
       ]
@@ -129,7 +130,7 @@ class RecurringInvoiceService {
     let pc = 1;
 
     const allowedFields = [
-      'monthly_rate', 'tax_type', 'discount_amount', 'is_rcm_applicable',
+      'monthly_rate', 'tax_type', 'tax_rate', 'discount_amount', 'is_rcm_applicable',
       'frequency', 'end_date', 'auto_generate', 'reminder_days',
       'invoice_description', 'invoice_notes',
     ];
@@ -238,12 +239,15 @@ class RecurringInvoiceService {
     const discountDec = new Decimal(recurring.discount_amount || 0);
     const taxableAmount = Decimal.max(amountSubtotal.minus(discountDec), 0);
 
+    const effectiveTaxRate = recurring.tax_type === 'none'
+      ? 0
+      : (recurring.tax_rate === undefined || recurring.tax_rate === null ? 18 : parseFloat(recurring.tax_rate));
     let cgst = new Decimal(0), sgst = new Decimal(0), igst = new Decimal(0);
     if (recurring.tax_type === 'cgst_sgst') {
-      cgst = taxableAmount.times(0.09).toDecimalPlaces(2);
-      sgst = taxableAmount.times(0.09).toDecimalPlaces(2);
+      cgst = taxableAmount.times(effectiveTaxRate).dividedBy(200).toDecimalPlaces(2);
+      sgst = taxableAmount.times(effectiveTaxRate).dividedBy(200).toDecimalPlaces(2);
     } else if (recurring.tax_type === 'igst') {
-      igst = taxableAmount.times(0.18).toDecimalPlaces(2);
+      igst = taxableAmount.times(effectiveTaxRate).dividedBy(100).toDecimalPlaces(2);
     }
 
     let totalAmount = taxableAmount;
@@ -276,7 +280,7 @@ class RecurringInvoiceService {
         billingStart,
         billingEnd,
         parseFloat(amountSubtotal.toString()),
-        recurring.tax_type === 'none' ? 0 : 18,
+        effectiveTaxRate,
         parseFloat(cgst.plus(sgst).plus(igst).toString()),
         parseFloat(cgst.toString()),
         parseFloat(sgst.toString()),

@@ -33,6 +33,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
     particular: 'Security Guard',
     hsn_code: '998525',
     tax_type: 'none',
+    tax_rate: '18',
     is_rcm_applicable: false,
     notes: ''
   });
@@ -150,12 +151,13 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
     }
     sub = parseFloat(sub.toFixed(2));
 
+    const rate = parseFloat(form.tax_rate) || 0;
     let cgst = 0, sgst = 0, igst = 0;
     if (form.tax_type === 'cgst_sgst') {
-      cgst = parseFloat((sub * 0.09).toFixed(2));
-      sgst = parseFloat((sub * 0.09).toFixed(2));
+      cgst = parseFloat(((sub * rate) / 200).toFixed(2));
+      sgst = parseFloat(((sub * rate) / 200).toFixed(2));
     } else if (form.tax_type === 'igst') {
-      igst = parseFloat((sub * 0.18).toFixed(2));
+      igst = parseFloat(((sub * rate) / 100).toFixed(2));
     }
 
     let total = sub;
@@ -231,6 +233,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
         billing_period_end: form.billing_period_end,
         event_date: form.billing_period_start,
         tax_type: form.tax_type,
+        tax_rate: form.tax_rate,
         is_rcm_applicable: form.is_rcm_applicable,
         notes: form.notes,
         particular: form.particular || 'Security Guard',
@@ -696,8 +699,8 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                       className="text-teal-600 focus:ring-teal-500 h-4 w-4"
                     />
                     <div>
-                      <span className="block text-sm font-semibold text-slate-800">Intra-State (18%)</span>
-                      <span className="block text-xs text-slate-500">CGST (9%) + SGST (9%)</span>
+                      <span className="block text-sm font-semibold text-slate-800">Intra-State</span>
+                      <span className="block text-xs text-slate-500">CGST ({(parseFloat(form.tax_rate) || 0) / 2}%) + SGST ({(parseFloat(form.tax_rate) || 0) / 2}%)</span>
                     </div>
                   </label>
 
@@ -713,12 +716,25 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                       className="text-teal-600 focus:ring-teal-500 h-4 w-4"
                     />
                     <div>
-                      <span className="block text-sm font-semibold text-slate-800">Inter-State (18%)</span>
-                      <span className="block text-xs text-slate-500">IGST (18% Total)</span>
+                      <span className="block text-sm font-semibold text-slate-800">Inter-State</span>
+                      <span className="block text-xs text-slate-500">IGST ({parseFloat(form.tax_rate) || 0}% Total)</span>
                     </div>
                   </label>
                 </div>
               </div>
+
+              {form.tax_type !== 'none' && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">GST Rate (%)</label>
+                  <input
+                    type="number" min="0" max="100" step="0.01"
+                    value={form.tax_rate}
+                    onChange={e => setForm({ ...form, tax_rate: e.target.value })}
+                    className={inputCls}
+                    placeholder="e.g. 5, 12, 18, 28"
+                  />
+                </div>
+              )}
 
               <div className="flex items-center p-3 bg-slate-50 rounded-lg border border-slate-200">
                 <input
@@ -769,11 +785,11 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
               {form.tax_type === 'cgst_sgst' && (
                 <>
                   <div className="flex justify-between text-xs text-slate-600">
-                    <span>CGST (9%):</span>
+                    <span>CGST ({(parseFloat(form.tax_rate) || 0) / 2}%):</span>
                     <span>₹{totals.cgst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                   </div>
                   <div className="flex justify-between text-xs text-slate-600">
-                    <span>SGST (9%):</span>
+                    <span>SGST ({(parseFloat(form.tax_rate) || 0) / 2}%):</span>
                     <span>₹{totals.sgst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                   </div>
                 </>
@@ -781,7 +797,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
 
               {form.tax_type === 'igst' && (
                 <div className="flex justify-between text-xs text-slate-600">
-                  <span>IGST (18%):</span>
+                  <span>IGST ({parseFloat(form.tax_rate) || 0}%):</span>
                   <span>₹{totals.igst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                 </div>
               )}

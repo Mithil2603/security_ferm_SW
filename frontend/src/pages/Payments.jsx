@@ -425,7 +425,7 @@ export default function Payments() {
                 >
                   <option value="">-- Select Account --</option>
                   {bankAccounts.map(b => (
-                    <option key={b.id} value={b.id}>{b.account_name}{b.bank_name ? ` — ${b.bank_name}` : ''} ({b.account_type})</option>
+                    <option key={b.id} value={b.id}>{b.account_name} ({b.bank_name || (b.account_type === 'cash' ? 'Cash' : b.account_type)})</option>
                   ))}
                 </select>
               </div>
@@ -440,7 +440,7 @@ export default function Payments() {
                   >
                     <option value="">-- Select Account --</option>
                     {bankAccounts.filter(b => String(b.id) !== String(bankForm.bank_account_id)).map(b => (
-                      <option key={b.id} value={b.id}>{b.account_name}{b.bank_name ? ` — ${b.bank_name}` : ''} ({b.account_type})</option>
+                      <option key={b.id} value={b.id}>{b.account_name} ({b.bank_name || (b.account_type === 'cash' ? 'Cash' : b.account_type)})</option>
                     ))}
                   </select>
                 </div>
@@ -644,7 +644,7 @@ export default function Payments() {
                     <div>
                       <label className="block text-xs font-medium text-slate-700 mb-1">GST Rate (%)</label>
                       <input
-                        type="number" min="0" max="28" step="0.1"
+                        type="number" min="0" max="100" step="0.1"
                         value={form.tax_rate}
                         onChange={e => setForm(f => ({ ...f, tax_rate: e.target.value }))}
                         disabled={form.tax_type === 'none'}
@@ -675,7 +675,7 @@ export default function Payments() {
                 >
                   <option value="">-- Select Account --</option>
                   {bankAccounts.map(a => (
-                    <option key={a.id} value={a.id}>{a.account_name}{a.bank_name ? ` — ${a.bank_name}` : ''} ({a.account_type})</option>
+                    <option key={a.id} value={a.id}>{a.account_name} ({a.bank_name || (a.account_type === 'cash' ? 'Cash' : a.account_type)})</option>
                   ))}
                 </select>
               </div>

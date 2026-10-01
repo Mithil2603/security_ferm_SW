@@ -35,6 +35,7 @@ const createSchema = Joi.object({
   client_id: Joi.number().integer().positive().required(),
   monthly_rate: Joi.number().positive().precision(2).optional(),  // auto-fetched from client if not provided
   tax_type: Joi.string().valid('none', 'cgst_sgst', 'igst', 'GST_18').default('cgst_sgst'),
+  tax_rate: Joi.number().min(0).max(100).precision(2).default(18),
   discount_amount: Joi.number().min(0).precision(2).default(0),
   is_rcm_applicable: Joi.boolean().default(false),
   frequency: Joi.string().valid('weekly', 'biweekly', 'monthly', 'quarterly', 'yearly').required(),
@@ -50,6 +51,7 @@ const createSchema = Joi.object({
 const updateSchema = Joi.object({
   monthly_rate: Joi.number().positive().precision(2),
   tax_type: Joi.string().valid('none', 'cgst_sgst', 'igst'),
+  tax_rate: Joi.number().min(0).max(100).precision(2),
   discount_amount: Joi.number().min(0).precision(2),
   is_rcm_applicable: Joi.boolean(),
   frequency: Joi.string().valid('weekly', 'biweekly', 'monthly', 'quarterly', 'yearly'),

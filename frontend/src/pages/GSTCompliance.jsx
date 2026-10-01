@@ -341,14 +341,11 @@ export default function GSTCompliance() {
                   className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-800 focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Default GST Rate</label>
-                <select value={configForm.default_tax_rate} onChange={e => setConfigForm({...configForm, default_tax_rate: parseFloat(e.target.value)})}
-                  className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-800 focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all">
-                  <option value={5}>5%</option>
-                  <option value={12}>12%</option>
-                  <option value={18}>18%</option>
-                  <option value={28}>28%</option>
-                </select>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Default GST Rate (%)</label>
+                <input type="number" min="0" max="100" step="0.01" value={configForm.default_tax_rate}
+                  onChange={e => setConfigForm({...configForm, default_tax_rate: e.target.value})}
+                  className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-800 focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all"
+                  placeholder="e.g. 5, 12, 18, 28" />
               </div>
             </div>
             <button type="submit" className="bg-teal-600 hover:bg-teal-700 text-white px-6 py-2 rounded-lg font-medium transition-colors">Save Configuration</button>
