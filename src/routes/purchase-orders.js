@@ -16,9 +16,49 @@ const { query } = require('../database/connection');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { logError } = require('../utils/errorLogger');
 const gstService = require('../services/gst/gstComplianceService');
+const multer = require('multer');
+const path = require('path');
+const crypto = require('crypto');
+const storageConfig = require('../utils/storageConfig');
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, storageConfig.getUploadDir()),
+  filename: (req, file, cb) => cb(null, `po_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${path.extname(file.originalname)}`)
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const allowedExts = ['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.xlsx'];
+    if (allowedMimes.includes((file.mimetype || '').toLowerCase()) || allowedExts.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only PDF, JPG, PNG, WEBP, and XLSX attachments are allowed.'));
+    }
+  }
+});
 
 router.use(authMiddleware);
 router.use(requirePermission('manage_expenses'));
+
+// A rejected/oversized file would otherwise leak a raw HTML error page since
+// there's no global Express error handler for multer's own errors.
+function uploadAttachment(req, res, next) {
+  upload.single('attachment_file')(req, res, (err) => {
+    if (err) return res.status(400).json({ success: false, message: err.message || 'Failed to process attachment' });
+    next();
+  });
+}
+
+function parseItems(body) {
+  if (Array.isArray(body.items)) return body.items;
+  if (typeof body.items === 'string') {
+    try { return JSON.parse(body.items); } catch { return []; }
+  }
+  return [];
+}
 
 function getFY(dateStr) {
   const d = new Date(dateStr);
@@ -28,26 +68,144 @@ function getFY(dateStr) {
 
 async function nextPoNumber(poDate) {
   const fy = getFY(poDate || new Date());
-  const countRes = await query(`SELECT COUNT(*) as c FROM purchase_orders WHERE po_number LIKE $1`, [`PO-${fy}-%`]);
-  const next = (parseInt(countRes.rows[0].c) || 0) + 1;
+  // MAX of the numeric suffix, not COUNT(*) — a COUNT collides with an
+  // existing number as soon as any earlier PO in the year is deleted.
+  const maxRes = await query(
+    `SELECT MAX(CAST(SUBSTRING_INDEX(po_number, '-', -1) AS UNSIGNED)) as max_seq
+     FROM purchase_orders WHERE po_number LIKE $1`,
+    [`PO-${fy}-%`]
+  );
+  const next = (parseInt(maxRes.rows[0].max_seq) || 0) + 1;
   return `PO-${fy}-${String(next).padStart(4, '0')}`;
 }
 
-function computeTotals(items, tax_type, tax_rate) {
-  const subtotal = items.reduce((s, it) => s + (parseFloat(it.quantity) || 0) * (parseFloat(it.unit_price) || 0), 0);
-  let cgst_amount = 0, sgst_amount = 0, igst_amount = 0, total_amount = subtotal;
+// Self-healing migration check for Vyapar-style enhancement columns
+let columnsEnsured = false;
+async function ensureColumns() {
+  if (columnsEnsured) return;
+  columnsEnsured = true;
+  try {
+    const existing = await query(`
+      SELECT table_name, column_name
+      FROM information_schema.columns
+      WHERE table_name IN ('purchase_orders', 'purchase_order_items')
+    `);
+    const cols = new Set((existing.rows || []).map(r => `${(r.TABLE_NAME || r.table_name || '').toLowerCase()}.${(r.COLUMN_NAME || r.column_name || '').toLowerCase()}`));
+
+    const stmts = [
+      { key: 'purchase_orders.bill_number', sql: `ALTER TABLE purchase_orders ADD COLUMN bill_number VARCHAR(100)` },
+      { key: 'purchase_orders.state_of_supply', sql: `ALTER TABLE purchase_orders ADD COLUMN state_of_supply VARCHAR(100)` },
+      { key: 'purchase_orders.payment_type', sql: `ALTER TABLE purchase_orders ADD COLUMN payment_type VARCHAR(50) DEFAULT 'cash'` },
+      { key: 'purchase_orders.payment_details', sql: `ALTER TABLE purchase_orders ADD COLUMN payment_details VARCHAR(255)` },
+      { key: 'purchase_orders.terms_conditions', sql: `ALTER TABLE purchase_orders ADD COLUMN terms_conditions TEXT` },
+      { key: 'purchase_orders.round_off', sql: `ALTER TABLE purchase_orders ADD COLUMN round_off DECIMAL(10,2) DEFAULT 0` },
+      { key: 'purchase_orders.discount_amount', sql: `ALTER TABLE purchase_orders ADD COLUMN discount_amount DECIMAL(12,2) DEFAULT 0` },
+      { key: 'purchase_order_items.unit', sql: `ALTER TABLE purchase_order_items ADD COLUMN unit VARCHAR(50) DEFAULT 'NONE'` },
+      { key: 'purchase_order_items.price_type', sql: `ALTER TABLE purchase_order_items ADD COLUMN price_type VARCHAR(20) DEFAULT 'without_tax'` },
+      { key: 'purchase_order_items.item_description', sql: `ALTER TABLE purchase_order_items ADD COLUMN item_description TEXT` },
+      { key: 'purchase_order_items.discount_percent', sql: `ALTER TABLE purchase_order_items ADD COLUMN discount_percent DECIMAL(5,2) DEFAULT 0` },
+      { key: 'purchase_order_items.discount_amount', sql: `ALTER TABLE purchase_order_items ADD COLUMN discount_amount DECIMAL(12,2) DEFAULT 0` },
+      { key: 'purchase_order_items.tax_rate', sql: `ALTER TABLE purchase_order_items ADD COLUMN tax_rate DECIMAL(5,2) DEFAULT 0` },
+      { key: 'purchase_order_items.tax_amount', sql: `ALTER TABLE purchase_order_items ADD COLUMN tax_amount DECIMAL(12,2) DEFAULT 0` },
+    ];
+
+    for (const item of stmts) {
+      if (!cols.has(item.key.toLowerCase())) {
+        try { await query(item.sql); } catch (_) {}
+      }
+    }
+  } catch (_) {}
+}
+
+function computeTotals(items, tax_type, tax_rate, round_off_val = 0) {
+  let subtotal = 0;
+  let totalDiscount = 0;
+  let totalTax = 0;
+
+  const enrichedItems = items.map(it => {
+    const qty = parseFloat(it.quantity) || 0;
+    const unitPrice = parseFloat(it.unit_price) || 0;
+    const base = qty * unitPrice;
+
+    // Discount
+    let discAmt = 0;
+    const discPct = parseFloat(it.discount_percent) || 0;
+    if (discPct > 0) {
+      discAmt = (base * discPct) / 100;
+    } else if (parseFloat(it.discount_amount) > 0) {
+      discAmt = parseFloat(it.discount_amount);
+    }
+    discAmt = Math.min(base, discAmt);
+    totalDiscount += discAmt;
+
+    // Price mode & Tax
+    const priceType = it.price_type === 'with_tax' ? 'with_tax' : 'without_tax';
+    const itemTaxRate = it.tax_rate !== undefined && it.tax_rate !== '' ? (parseFloat(it.tax_rate) || 0) : (parseFloat(tax_rate) || 0);
+    let taxable = 0;
+    let lineTax = 0;
+    let lineTotal = 0;
+
+    if (priceType === 'with_tax') {
+      const gross = Math.max(0, base - discAmt);
+      if (itemTaxRate > 0) {
+        taxable = gross / (1 + itemTaxRate / 100);
+        lineTax = gross - taxable;
+      } else {
+        taxable = gross;
+        lineTax = 0;
+      }
+      lineTotal = gross;
+    } else {
+      taxable = Math.max(0, base - discAmt);
+      lineTax = itemTaxRate > 0 ? (taxable * itemTaxRate) / 100 : 0;
+      lineTotal = taxable + lineTax;
+    }
+
+    subtotal += taxable;
+    totalTax += lineTax;
+
+    return {
+      description: it.description || '',
+      hsn_code: it.hsn_code || null,
+      item_description: it.item_description || it.notes || '',
+      quantity: qty,
+      unit: it.unit || 'NONE',
+      unit_price: unitPrice,
+      price_type: priceType,
+      discount_percent: discPct,
+      discount_amount: parseFloat(discAmt.toFixed(2)),
+      tax_rate: itemTaxRate,
+      tax_amount: parseFloat(lineTax.toFixed(2)),
+      amount: parseFloat(lineTotal.toFixed(2)),
+    };
+  });
+
   const finalTaxType = tax_type && tax_type !== 'none' ? tax_type : 'none';
-  if (finalTaxType !== 'none' && tax_rate) {
-    const rate = parseFloat(tax_rate) || 0;
-    const gst = gstService.calculateGST(subtotal, rate, finalTaxType);
-    cgst_amount = gst.cgst; sgst_amount = gst.sgst; igst_amount = gst.igst;
-    total_amount = subtotal + gst.total_gst;
+  let cgst_amount = 0, sgst_amount = 0, igst_amount = 0;
+
+  if (finalTaxType === 'igst') {
+    igst_amount = parseFloat(totalTax.toFixed(2));
+  } else if (finalTaxType === 'cgst_sgst' || (finalTaxType !== 'none' && totalTax > 0)) {
+    const half = parseFloat((totalTax / 2).toFixed(2));
+    cgst_amount = half;
+    sgst_amount = parseFloat((totalTax - half).toFixed(2));
   }
+
+  const rawTotal = subtotal + totalTax;
+  const roundOff = parseFloat(round_off_val) || 0;
+  const total_amount = parseFloat((rawTotal + roundOff).toFixed(2));
+
   return {
     subtotal: parseFloat(subtotal.toFixed(2)),
-    cgst_amount, sgst_amount, igst_amount,
-    total_amount: parseFloat(total_amount.toFixed(2)),
+    totalDiscount: parseFloat(totalDiscount.toFixed(2)),
+    totalTax: parseFloat(totalTax.toFixed(2)),
+    cgst_amount,
+    sgst_amount,
+    igst_amount,
+    total_amount,
+    round_off: roundOff,
     tax_type: finalTaxType,
+    items: enrichedItems,
   };
 }
 
@@ -56,6 +214,7 @@ function computeTotals(items, tax_type, tax_rate) {
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
+    await ensureColumns();
     const { search, status, vendor_id, page = 1, limit = 20 } = req.query;
     let conditions = [];
     let params = [];
@@ -119,9 +278,15 @@ router.get('/:id', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/purchase-orders — create with multiple line items
 // ─────────────────────────────────────────────────────────────────────────────
-router.post('/', async (req, res) => {
+router.post('/', uploadAttachment, async (req, res) => {
   try {
-    const { vendor_id, po_date, items, tax_type, tax_rate, is_rcm_applicable, tds_rate, notes } = req.body;
+    await ensureColumns();
+    const {
+      vendor_id, po_date, bill_number, state_of_supply,
+      payment_type, payment_details, terms_conditions,
+      tax_type, tax_rate, is_rcm_applicable, tds_rate, notes, round_off
+    } = req.body;
+    const items = parseItems(req.body);
 
     if (!vendor_id || !po_date) {
       return res.status(400).json({ success: false, message: 'Vendor and PO date are required' });
@@ -138,27 +303,39 @@ router.post('/', async (req, res) => {
     const vendorRes = await query('SELECT id FROM vendors WHERE id = $1', [vendor_id]);
     if (vendorRes.rows.length === 0) return res.status(400).json({ success: false, message: 'Vendor not found' });
 
-    const totals = computeTotals(items, tax_type, tax_rate);
+    const totals = computeTotals(items, tax_type, tax_rate, round_off);
     const poNumber = await nextPoNumber(po_date);
+    const attachment_url = req.file ? `/uploads/${req.file.filename}` : null;
 
     const poResult = await query(
       `INSERT INTO purchase_orders
-        (po_number, vendor_id, po_date, status, subtotal, tax_type, tax_rate, cgst_amount, sgst_amount, igst_amount,
-         is_rcm_applicable, total_amount, notes, created_by, tds_rate)
-       VALUES ($1,$2,$3,'draft',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        (po_number, vendor_id, po_date, bill_number, state_of_supply, payment_type, payment_details, terms_conditions,
+         status, subtotal, tax_type, tax_rate, cgst_amount, sgst_amount, igst_amount,
+         is_rcm_applicable, round_off, discount_amount, total_amount, notes, created_by, tds_rate, attachment_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
        RETURNING *`,
-      [poNumber, vendor_id, po_date, totals.subtotal, totals.tax_type, tax_rate || 0,
-       totals.cgst_amount, totals.sgst_amount, totals.igst_amount,
-       is_rcm_applicable ? 1 : 0, totals.total_amount, notes || null, req.user.userId, tds_rate || 0]
+      [
+        poNumber, vendor_id, po_date, bill_number || null, state_of_supply || null,
+        payment_type || 'cash', payment_details || null, terms_conditions || null,
+        totals.subtotal, totals.tax_type, tax_rate || 0,
+        totals.cgst_amount, totals.sgst_amount, totals.igst_amount,
+        (is_rcm_applicable === true || is_rcm_applicable === 'true') ? 1 : 0,
+        totals.round_off, totals.totalDiscount, totals.total_amount,
+        notes || null, req.user.userId, tds_rate || 0, attachment_url
+      ]
     );
     const po = poResult.rows[0];
 
-    for (const it of items) {
-      const amount = parseFloat((parseFloat(it.quantity) * parseFloat(it.unit_price)).toFixed(2));
+    for (const it of totals.items) {
       await query(
-        `INSERT INTO purchase_order_items (purchase_order_id, description, hsn_code, quantity, unit_price, amount)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [po.id, it.description, it.hsn_code || null, it.quantity, it.unit_price, amount]
+        `INSERT INTO purchase_order_items
+          (purchase_order_id, description, hsn_code, quantity, unit, unit_price, price_type, item_description, discount_percent, discount_amount, tax_rate, tax_amount, amount)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [
+          po.id, it.description, it.hsn_code || null, it.quantity, it.unit || 'NONE',
+          it.unit_price, it.price_type, it.item_description || null,
+          it.discount_percent, it.discount_amount, it.tax_rate, it.tax_amount, it.amount
+        ]
       );
     }
 
@@ -174,15 +351,22 @@ router.post('/', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // PUT /api/purchase-orders/:id — edit (draft only)
 // ─────────────────────────────────────────────────────────────────────────────
-router.put('/:id', async (req, res) => {
+router.put('/:id', uploadAttachment, async (req, res) => {
   try {
+    await ensureColumns();
     const existing = await query('SELECT * FROM purchase_orders WHERE id = $1', [req.params.id]);
     if (existing.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase order not found' });
     if (existing.rows[0].status !== 'draft') {
       return res.status(400).json({ success: false, message: 'Only draft purchase orders can be edited — this one has already been billed or cancelled' });
     }
 
-    const { vendor_id, po_date, items, tax_type, tax_rate, is_rcm_applicable, tds_rate, notes } = req.body;
+    const {
+      vendor_id, po_date, bill_number, state_of_supply,
+      payment_type, payment_details, terms_conditions,
+      tax_type, tax_rate, is_rcm_applicable, tds_rate, notes, round_off, remove_attachment
+    } = req.body;
+    const items = parseItems(req.body);
+
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ success: false, message: 'At least one line item is required' });
     }
@@ -192,29 +376,61 @@ router.put('/:id', async (req, res) => {
       }
     }
 
-    const totals = computeTotals(items, tax_type, tax_rate);
+    const totals = computeTotals(items, tax_type, tax_rate, round_off);
+
+    let newAttachmentUrl = existing.rows[0].attachment_url;
+    if (req.file) {
+      newAttachmentUrl = `/uploads/${req.file.filename}`;
+    } else if (remove_attachment === 'true' || remove_attachment === true) {
+      newAttachmentUrl = null;
+    }
 
     await query(
-      `UPDATE purchase_orders SET vendor_id=$1, po_date=$2, subtotal=$3, tax_type=$4, tax_rate=$5,
-        cgst_amount=$6, sgst_amount=$7, igst_amount=$8, is_rcm_applicable=$9, total_amount=$10, notes=$11,
-        tds_rate=$12, updated_at=CURRENT_TIMESTAMP
-       WHERE id=$13`,
-      [vendor_id || existing.rows[0].vendor_id, po_date || existing.rows[0].po_date, totals.subtotal, totals.tax_type,
-       tax_rate || 0, totals.cgst_amount, totals.sgst_amount, totals.igst_amount, is_rcm_applicable ? 1 : 0,
-       totals.total_amount, notes || null, tds_rate || 0, req.params.id]
+      `UPDATE purchase_orders SET
+        vendor_id=$1, po_date=$2, bill_number=$3, state_of_supply=$4,
+        payment_type=$5, payment_details=$6, terms_conditions=$7,
+        subtotal=$8, tax_type=$9, tax_rate=$10,
+        cgst_amount=$11, sgst_amount=$12, igst_amount=$13,
+        is_rcm_applicable=$14, round_off=$15, discount_amount=$16,
+        total_amount=$17, notes=$18, tds_rate=$19,
+        attachment_url=$20, updated_at=CURRENT_TIMESTAMP
+       WHERE id=$21`,
+      [
+        vendor_id || existing.rows[0].vendor_id,
+        po_date || existing.rows[0].po_date,
+        bill_number !== undefined ? bill_number : existing.rows[0].bill_number,
+        state_of_supply !== undefined ? state_of_supply : existing.rows[0].state_of_supply,
+        payment_type !== undefined ? payment_type : existing.rows[0].payment_type,
+        payment_details !== undefined ? payment_details : existing.rows[0].payment_details,
+        terms_conditions !== undefined ? terms_conditions : existing.rows[0].terms_conditions,
+        totals.subtotal, totals.tax_type, tax_rate || 0,
+        totals.cgst_amount, totals.sgst_amount, totals.igst_amount,
+        (is_rcm_applicable === true || is_rcm_applicable === 'true') ? 1 : 0,
+        totals.round_off, totals.totalDiscount, totals.total_amount,
+        notes !== undefined ? notes : existing.rows[0].notes,
+        tds_rate || 0, newAttachmentUrl, req.params.id
+      ]
     );
 
     await query('DELETE FROM purchase_order_items WHERE purchase_order_id = $1', [req.params.id]);
-    for (const it of items) {
-      const amount = parseFloat((parseFloat(it.quantity) * parseFloat(it.unit_price)).toFixed(2));
+    for (const it of totals.items) {
       await query(
-        `INSERT INTO purchase_order_items (purchase_order_id, description, hsn_code, quantity, unit_price, amount)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [req.params.id, it.description, it.hsn_code || null, it.quantity, it.unit_price, amount]
+        `INSERT INTO purchase_order_items
+          (purchase_order_id, description, hsn_code, quantity, unit, unit_price, price_type, item_description, discount_percent, discount_amount, tax_rate, tax_amount, amount)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [
+          req.params.id, it.description, it.hsn_code || null, it.quantity, it.unit || 'NONE',
+          it.unit_price, it.price_type, it.item_description || null,
+          it.discount_percent, it.discount_amount, it.tax_rate, it.tax_amount, it.amount
+        ]
       );
     }
 
-    const updated = await query('SELECT * FROM purchase_orders WHERE id = $1', [req.params.id]);
+    const updated = await query(
+      `SELECT po.*, v.name as vendor_name, v.tax_id as vendor_gstin, v.contact_info as vendor_contact
+       FROM purchase_orders po JOIN vendors v ON po.vendor_id = v.id WHERE po.id = $1`,
+      [req.params.id]
+    );
     const itemsResult = await query(`SELECT * FROM purchase_order_items WHERE purchase_order_id = $1 ORDER BY id`, [req.params.id]);
     res.json({ success: true, data: { ...updated.rows[0], items: itemsResult.rows }, message: 'Purchase order updated successfully' });
   } catch (error) {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -113,10 +113,89 @@ const navGroups = [
   },
 ];
 
-export default function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
+export default function Sidebar({ sidebarOpen, setSidebarOpen, mobileMenuOpen, setMobileMenuOpen }) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+
+  const isDrawerOpen = Boolean(sidebarOpen ?? mobileMenuOpen);
+  const drawerRef = useRef(null);
+  const openTimerRef = useRef(null);
+  const closeTimerRef = useRef(null);
+
+  const closeSidebar = () => {
+    if (openTimerRef.current) {
+      clearTimeout(openTimerRef.current);
+      openTimerRef.current = null;
+    }
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+    if (setSidebarOpen) setSidebarOpen(false);
+    if (setMobileMenuOpen) setMobileMenuOpen(false);
+  };
+
+  const handleMouseEnter = () => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+    if (!isDrawerOpen) {
+      if (openTimerRef.current) clearTimeout(openTimerRef.current);
+      openTimerRef.current = setTimeout(() => {
+        if (setSidebarOpen) setSidebarOpen(true);
+        if (setMobileMenuOpen) setMobileMenuOpen(true);
+      }, 70);
+    }
+  };
+
+  const handleMouseLeave = () => {
+    if (openTimerRef.current) {
+      clearTimeout(openTimerRef.current);
+      openTimerRef.current = null;
+    }
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = setTimeout(() => {
+      closeSidebar();
+    }, 200);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (openTimerRef.current) clearTimeout(openTimerRef.current);
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    };
+  }, []);
+
+  const openGroupDrawer = (groupKey) => {
+    setOpenGroup(groupKey);
+    if (setSidebarOpen) setSidebarOpen(true);
+    if (setMobileMenuOpen) setMobileMenuOpen(true);
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && isDrawerOpen) {
+        closeSidebar();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isDrawerOpen]);
+
+  // Close when clicking outside drawer on desktop
+  useEffect(() => {
+    if (!isDrawerOpen) return;
+    const handleOutsideClick = (e) => {
+      if (drawerRef.current && !drawerRef.current.contains(e.target)) {
+        if (e.target.closest('button[title*="Navigation"]')) return;
+        closeSidebar();
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [isDrawerOpen]);
 
   const userPerms = Array.isArray(user?.permissions)
     ? user.permissions
@@ -172,111 +251,181 @@ export default function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
     }
   }, []);
 
-  const renderLink = (item) => {
-    const Icon = item.icon;
-    return (
-      <NavLink
-        key={item.name}
-        to={item.path}
-        onClick={() => setMobileMenuOpen(false)}
-        className={({ isActive }) => classNames(
-          isActive ? 'bg-teal-500/10 text-teal-400 border-r-2 border-teal-500' : 'text-slate-300 hover:bg-slate-800 hover:text-white',
-          'group flex items-center px-3 py-2.5 text-sm font-medium rounded-l-lg transition-all duration-200 ease-in-out'
-        )}
-      >
-        <Icon className="mr-3 flex-shrink-0 h-5 w-5 transition-colors" aria-hidden="true" />
-        {item.name}
-      </NavLink>
-    );
-  };
-
   return (
     <>
-      {/* Mobile overlay */}
-      {mobileMenuOpen && (
+      {/* Overlay Backdrop - on mobile only */}
+      {isDrawerOpen && (
         <div
-          className="fixed inset-0 z-40 bg-slate-900/80 backdrop-blur-sm md:hidden animate-fade-in"
-          onClick={() => setMobileMenuOpen(false)}
+          className="fixed top-16 inset-x-0 bottom-0 z-40 bg-slate-950/50 backdrop-blur-xs animate-fade-in transition-opacity cursor-pointer md:hidden"
+          onClick={closeSidebar}
         />
       )}
 
-      {/* Sidebar container */}
-      <div className={classNames(
-        "fixed inset-y-0 left-0 z-50 w-64 h-full bg-slate-900 border-r border-slate-800 flex flex-col transition-transform duration-300 ease-in-out md:relative md:translate-x-0",
-        mobileMenuOpen ? "translate-x-0" : "-translate-x-full"
-      )}>
-        <div className="flex items-center justify-between h-16 bg-slate-950 px-4 shadow-sm">
-          <div className="flex items-center space-x-3">
-            <div
-              className="w-8 h-8 bg-teal-500 rounded-lg flex items-center justify-center shadow-lg shadow-teal-500/20 cursor-pointer"
-              onDoubleClick={() => {
-                setMobileMenuOpen(false);
-                navigate('/developer');
-              }}
-              title="SecurManage"
-            >
-              <span className="text-white font-bold text-xl leading-none select-none">S</span>
-            </div>
-            <span className="text-white font-bold text-lg tracking-wide uppercase">SecurManage</span>
-          </div>
-          <button
-            className="md:hidden text-slate-400 hover:text-white"
-            onClick={() => setMobileMenuOpen(false)}
-          >
-            <X className="w-6 h-6" />
-          </button>
-        </div>
+      {/* Unified Expanding/Collapsing Sidebar */}
+      <aside 
+        ref={drawerRef}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        className={classNames(
+          "fixed top-16 left-0 bottom-0 z-50 bg-slate-900 border-r border-slate-800 flex flex-col justify-between transition-all duration-300 ease-in-out select-none overflow-x-hidden",
+          isDrawerOpen 
+            ? "w-72 shadow-2xl shadow-black/50 pointer-events-auto" 
+            : "w-0 md:w-16 shadow-none md:shadow-xs pointer-events-none md:pointer-events-auto"
+        )}
+      >
         <div className="flex flex-col flex-1 min-h-0">
-          <nav className="flex-1 min-h-0 overflow-y-auto sidebar-scroll px-3 py-6 space-y-1">
-            {filteredTop.map(renderLink)}
-
-            {filteredGroups.length > 0 && <hr className="my-3 border-slate-700/50" />}
-
-            {filteredGroups.map(group => {
-              const GroupIcon = group.icon;
-              const hasActiveChild = group.children.some(c => c.path === location.pathname);
-              const isOpen = openGroup === group.key;
+          <nav className={classNames(
+            "flex-1 min-h-0 py-3 space-y-1.5 px-3",
+            isDrawerOpen ? "overflow-y-auto sidebar-scroll" : "overflow-hidden"
+          )}>
+            {/* Top standalone items (Dashboard) */}
+            {filteredTop.map((item) => {
+              const Icon = item.icon;
+              const isActive = location.pathname === item.path;
               return (
-                <div key={group.key}>
-                  <button
-                    type="button"
-                    onClick={() => toggleGroup(group.key)}
-                    className={classNames(
-                      'w-full flex items-center justify-between px-3 py-2.5 text-xs font-bold uppercase tracking-wide rounded-lg transition-colors duration-200',
-                      hasActiveChild ? 'text-teal-400' : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                    )}
-                  >
-                    <span className="flex items-center">
-                      <GroupIcon className="mr-3 flex-shrink-0 h-5 w-5" aria-hidden="true" />
-                      {group.label}
-                    </span>
-                    <ChevronDown className={classNames('h-4 w-4 transition-transform duration-200', isOpen ? 'rotate-180' : '')} />
-                  </button>
-                  {isOpen && (
-                    <div className="mt-1 ml-3 pl-2 border-l border-slate-700/50 space-y-1">
-                      {group.children.map(renderLink)}
-                    </div>
+                <NavLink
+                  key={item.name}
+                  to={item.path}
+                  onClick={closeSidebar}
+                  title={!isDrawerOpen ? item.name : undefined}
+                  className={classNames(
+                    'flex items-center h-10 w-full rounded-xl transition-colors duration-200 select-none group cursor-pointer',
+                    isActive 
+                      ? 'bg-teal-500/15 text-teal-400 font-semibold' 
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
                   )}
-                </div>
+                >
+                  <div className="w-10 h-10 flex items-center justify-center shrink-0">
+                    <Icon className="h-4.5 w-4.5 transition-colors" />
+                  </div>
+                  <span className={classNames(
+                    "ml-1 text-sm font-medium truncate whitespace-nowrap transition-opacity duration-200",
+                    isDrawerOpen ? "opacity-100" : "opacity-0 pointer-events-none"
+                  )}>
+                    {item.name}
+                  </span>
+                </NavLink>
               );
             })}
 
+            {/* Divider */}
+            {filteredGroups.length > 0 && (
+              <div className="w-full border-t border-slate-800/80 my-2" />
+            )}
+
+            {/* Nav Groups */}
+            {filteredGroups.map(group => {
+              const GroupIcon = group.icon;
+              const hasActiveChild = group.children.some(c => c.path === location.pathname);
+              const isGroupOpen = openGroup === group.key;
+
+              return (
+                <div key={group.key} className="space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!isDrawerOpen) {
+                        openGroupDrawer(group.key);
+                      } else {
+                        toggleGroup(group.key);
+                      }
+                    }}
+                    title={!isDrawerOpen ? group.label : undefined}
+                    className={classNames(
+                      'flex items-center h-10 w-full rounded-xl transition-colors duration-200 select-none group cursor-pointer',
+                      hasActiveChild || (isDrawerOpen && isGroupOpen)
+                        ? 'bg-teal-500/15 text-teal-400 font-semibold'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    )}
+                  >
+                    <div className="w-10 h-10 flex items-center justify-center shrink-0">
+                      <GroupIcon className="h-4.5 w-4.5 transition-colors" />
+                    </div>
+                    <span className={classNames(
+                      "ml-1 text-xs font-bold uppercase tracking-wider truncate whitespace-nowrap transition-opacity duration-200",
+                      isDrawerOpen ? "opacity-100" : "opacity-0 pointer-events-none"
+                    )}>
+                      {group.label}
+                    </span>
+                    <ChevronDown className={classNames(
+                      "ml-auto mr-1 h-4 w-4 shrink-0 transition-all duration-200",
+                      isDrawerOpen ? "opacity-100" : "opacity-0 pointer-events-none",
+                      isGroupOpen ? "rotate-180" : ""
+                    )} />
+                  </button>
+
+                  {/* Accordion Sub-items */}
+                  <div className={classNames(
+                    "overflow-hidden transition-all duration-200 space-y-1",
+                    isDrawerOpen && isGroupOpen ? "max-h-96 opacity-100 my-1" : "max-h-0 opacity-0 pointer-events-none"
+                  )}>
+                    {group.children.map(child => {
+                      const ChildIcon = child.icon;
+                      const isChildActive = location.pathname === child.path;
+                      return (
+                        <NavLink
+                          key={child.name}
+                          to={child.path}
+                          onClick={closeSidebar}
+                          className={classNames(
+                            'flex items-center h-8 pl-9 pr-2.5 rounded-lg text-xs font-medium transition-colors select-none whitespace-nowrap group',
+                            isChildActive
+                              ? 'bg-teal-500/15 text-teal-400 font-semibold border-r-2 border-teal-500'
+                              : 'text-slate-400 hover:text-white hover:bg-slate-800/80'
+                          )}
+                        >
+                          <ChildIcon className="h-4 w-4 shrink-0 mr-2.5 transition-colors" />
+                          <span className="truncate">{child.name}</span>
+                        </NavLink>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
           </nav>
 
-          {/* Pinned to the bottom, outside the scroll area, so Help never
-              scrolls out of view no matter how many groups are expanded. */}
-          {filteredBottom.length > 0 && (
-            <div className="shrink-0 px-3 py-3 border-t border-slate-800 space-y-1">
-              {filteredBottom.map(renderLink)}
-            </div>
-          )}
-          {appVersion && (
-            <div className="shrink-0 px-4 py-3 border-t border-slate-800">
-              <p className="text-xs text-slate-500 text-center">v{appVersion}</p>
-            </div>
-          )}
+          {/* Bottom links (Help) */}
+          <div className="shrink-0 px-3 py-3 border-t border-slate-800/80 space-y-1.5">
+            {filteredBottom.map((item) => {
+              const Icon = item.icon;
+              const isActive = location.pathname === item.path;
+              return (
+                <NavLink
+                  key={item.name}
+                  to={item.path}
+                  onClick={closeSidebar}
+                  title={!isDrawerOpen ? item.name : undefined}
+                  className={classNames(
+                    'flex items-center h-10 w-full rounded-xl transition-colors duration-200 select-none group cursor-pointer',
+                    isActive 
+                      ? 'bg-teal-500/15 text-teal-400 font-semibold' 
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                  )}
+                >
+                  <div className="w-10 h-10 flex items-center justify-center shrink-0">
+                    <Icon className="h-4.5 w-4.5 transition-colors" />
+                  </div>
+                  <span className={classNames(
+                    "ml-1 text-sm font-medium truncate whitespace-nowrap transition-opacity duration-200",
+                    isDrawerOpen ? "opacity-100" : "opacity-0 pointer-events-none"
+                  )}>
+                    {item.name}
+                  </span>
+                </NavLink>
+              );
+            })}
+
+            {appVersion && (
+              <div className="pt-1.5 text-center overflow-hidden">
+                <p className="text-[10px] text-slate-500 font-mono whitespace-nowrap">
+                  {isDrawerOpen ? `SecurManage v${appVersion}` : `v${appVersion}`}
+                </p>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      </aside>
     </>
   );
 }

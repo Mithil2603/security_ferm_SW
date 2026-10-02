@@ -35,6 +35,13 @@ if (typeof window !== 'undefined') {
       } catch (_) {}
     }
   });
+
+  // Globally prevent mouse wheel scroll from changing number/stepper input values
+  window.addEventListener('wheel', () => {
+    if (document.activeElement && document.activeElement.tagName === 'INPUT' && document.activeElement.type === 'number') {
+      document.activeElement.blur();
+    }
+  }, { passive: true });
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(

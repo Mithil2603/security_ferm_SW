@@ -13,6 +13,7 @@ const {
   recordVendorPayment,
   recordSalaryPayment,
   recordBankEntry,
+  deleteClientReceipt,
 } = require('../services/payments/paymentTransactionService');
 
 router.use(authMiddleware);
@@ -433,6 +434,36 @@ router.post('/', uploadAttachment, async (req, res) => {
     logError(error, req, { feature: 'payments' });
     logger.error('Record payment error:', error);
     res.status(400).json({ success: false, message: error.message || 'Failed to record payment' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE /api/payments/:id — reverse a client receipt (invoice balance, legacy
+// payments row, tax detail, and the linked voucher) and remove the transaction.
+// Scoped to client_receipt only for now — vendor/salary reversal touch more
+// interdependent state (vendor_payments/expenses, payroll/salary_slips) and
+// weren't asked for here. The frontend handles the confirm + 5s undo window;
+// by the time this fires, the user has already confirmed and let it stand.
+// ─────────────────────────────────────────────────────────────────────────────
+router.delete('/:id', async (req, res) => {
+  try {
+    const txRes = await query('SELECT transaction_type FROM payment_transactions WHERE id = $1', [req.params.id]);
+    if (txRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Payment not found' });
+    if (txRes.rows[0].transaction_type !== 'client_receipt') {
+      return res.status(400).json({ success: false, message: 'Only client receipts can be deleted from here' });
+    }
+
+    const effectivePerms = getEffectivePermissions(req.user.role, req.user.permissions);
+    if (!effectivePerms.includes('*') && !effectivePerms.includes('manage_invoices')) {
+      return res.status(403).json({ success: false, message: 'You do not have permission to delete this payment' });
+    }
+
+    const result = await deleteClientReceipt(req.params.id, req.user.userId);
+    res.json({ success: true, data: result, message: 'Client receipt deleted' });
+  } catch (error) {
+    logError(error, req, { feature: 'payments' });
+    logger.error('Delete client receipt error:', error);
+    res.status(400).json({ success: false, message: error.message || 'Failed to delete payment' });
   }
 });
 

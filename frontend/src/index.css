@@ -21,6 +21,18 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator {
   cursor: pointer;
 }
 
+/* Remove up and down spinner arrows from all number and text fields */
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none !important;
+  margin: 0 !important;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield !important;
+  appearance: textfield !important;
+}
+
 /* Thin, dark-themed scrollbar for the sidebar nav — replaces the bulky
    default OS scrollbar with one that matches the slate/teal palette. */
 .sidebar-scroll {

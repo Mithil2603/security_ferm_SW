@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
-import { CreditCard, Users, Truck, UserSquare2, Landmark, Plus, Paperclip, X, ExternalLink, Download, Search } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { CreditCard, Users, Truck, UserSquare2, Landmark, Plus, Paperclip, X, ExternalLink, Download, Search, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
-import { toast } from '../context/ToastContext';
+import { toast, confirmDialog } from '../context/ToastContext';
 import { getServerBaseUrl, getApiBaseUrl } from '../utils/apiUrl';
 import Pagination from '../components/Pagination';
 
@@ -61,6 +61,8 @@ export default function Payments() {
   const [debouncedRegisterSearch, setDebouncedRegisterSearch] = useState('');
   const [registerPage, setRegisterPage] = useState(1);
   const [registerPagination, setRegisterPagination] = useState(null);
+  const [pendingDeletes, setPendingDeletes] = useState([]);
+  const pendingDeletesRef = useRef([]);
 
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -163,6 +165,57 @@ export default function Payments() {
   };
 
   const directionFor = (transactionType) => REGISTER_TYPES.find(t => t.value === transactionType)?.direction || 'debit';
+
+  // Client-receipt delete: confirm, then optimistically hide the row for 5
+  // seconds before the DELETE actually fires — clicking "Undo" within that
+  // window just clears the timer and restores the row, no API call ever made.
+  useEffect(() => {
+    pendingDeletesRef.current = pendingDeletes;
+  }, [pendingDeletes]);
+
+  useEffect(() => () => {
+    pendingDeletesRef.current.forEach(p => { clearTimeout(p.timeoutId); clearInterval(p.intervalId); });
+  }, []);
+
+  const finalizeDeleteReceipt = async (id) => {
+    const entry = pendingDeletesRef.current.find(p => p.id === id);
+    setPendingDeletes(prev => prev.filter(p => p.id !== id));
+    if (!entry) return;
+    clearInterval(entry.intervalId);
+    try {
+      await api.delete(`/payments/${id}`);
+      toast.success('Client receipt deleted');
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to delete receipt — restoring it');
+      setRegister(prev => [entry.row, ...prev]);
+    }
+  };
+
+  const handleDeleteReceipt = async (row) => {
+    const confirmed = await confirmDialog({
+      title: 'Delete Client Receipt',
+      message: `Delete the ₹${parseFloat(row.amount).toLocaleString()} receipt from ${row.party_name || 'this client'} (${row.invoice_number || 'invoice'})? This reverses the invoice's payment status. You'll have 5 seconds to undo.`,
+      confirmText: 'Delete',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+
+    setRegister(prev => prev.filter(r => r.id !== row.id));
+    const intervalId = setInterval(() => {
+      setPendingDeletes(prev => prev.map(p => (p.id === row.id ? { ...p, secondsLeft: p.secondsLeft - 1 } : p)));
+    }, 1000);
+    const timeoutId = setTimeout(() => finalizeDeleteReceipt(row.id), 5000);
+    setPendingDeletes(prev => [...prev, { id: row.id, row, secondsLeft: 5, timeoutId, intervalId }]);
+  };
+
+  const handleUndoDeleteReceipt = (id) => {
+    const entry = pendingDeletesRef.current.find(p => p.id === id);
+    if (!entry) return;
+    clearTimeout(entry.timeoutId);
+    clearInterval(entry.intervalId);
+    setPendingDeletes(prev => prev.filter(p => p.id !== id));
+    setRegister(prev => [entry.row, ...prev].sort((a, b) => (a.payment_date < b.payment_date ? 1 : a.payment_date > b.payment_date ? -1 : b.id - a.id)));
+  };
 
   const resetForm = () => {
     setForm(emptyForm);
@@ -799,13 +852,14 @@ export default function Payments() {
                 <th className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase">Account</th>
                 <th className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase">Employee Bank</th>
                 <th className="px-4 py-3 text-center text-xs font-bold text-slate-500 uppercase">Attachment</th>
+                <th className="px-4 py-3 text-center text-xs font-bold text-slate-500 uppercase">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loadingRegister ? (
-                <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-500">Loading...</td></tr>
+                <tr><td colSpan={13} className="px-4 py-8 text-center text-slate-500">Loading...</td></tr>
               ) : register.length === 0 ? (
-                <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-500">No payments match this filter</td></tr>
+                <tr><td colSpan={13} className="px-4 py-8 text-center text-slate-500">No payments match this filter</td></tr>
               ) : register.map(row => {
                 const isCredit = directionFor(row.transaction_type) === 'credit';
                 const typeLabel = REGISTER_TYPES.find(t => t.value === row.transaction_type)?.label || row.transaction_type;
@@ -829,6 +883,13 @@ export default function Payments() {
                         </a>
                       ) : '—'}
                     </td>
+                    <td className="px-4 py-3 text-center">
+                      {row.transaction_type === 'client_receipt' ? (
+                        <button onClick={() => handleDeleteReceipt(row)} title="Delete receipt" className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      ) : '—'}
+                    </td>
                   </tr>
                 );
               })}
@@ -849,7 +910,7 @@ export default function Payments() {
                   <td className="px-4 py-3 text-sm text-indigo-700 text-right">
                     ₹{register.reduce((s, r) => s + (parseFloat(r.tds_amount) || 0), 0).toLocaleString()}
                   </td>
-                  <td colSpan={4}></td>
+                  <td colSpan={5}></td>
                 </tr>
               </tfoot>
             )}
@@ -898,6 +959,19 @@ export default function Payments() {
           </div>
         )}
       </div>
+
+      {pendingDeletes.length > 0 && (
+        <div className="fixed bottom-6 right-6 z-50 space-y-2">
+          {pendingDeletes.map(p => (
+            <div key={p.id} className="flex items-center gap-3 bg-slate-900 text-white pl-4 pr-3 py-3 rounded-xl shadow-xl text-sm animate-fade-in">
+              <span>Receipt from {p.row.party_name || 'client'} deleted ({p.secondsLeft}s)</span>
+              <button onClick={() => handleUndoDeleteReceipt(p.id)} className="font-semibold text-teal-300 hover:text-teal-200 px-2 py-1 rounded-lg hover:bg-white/10">
+                Undo
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

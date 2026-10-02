@@ -246,9 +246,11 @@ async function recordClientReceipt(params, userId) {
 
   // 3. legacy payments table — still the source read by the TDS/collections
   // reports and the invoice's payment-history list; keep it in lockstep.
+  // Stamped with the payment_transaction_id so a later delete/undo can find
+  // this exact row instead of guessing by invoice_id+date+amount.
   await query(
-    'INSERT INTO payments (invoice_id, payment_date, amount_paid, tds_deducted, payment_method, transaction_reference, notes, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-    [invoice_id, payDate, parseFloat(amount_paid || 0), parseFloat(tds_deducted || 0), payment_method, transaction_reference || null, notes || null, userId]
+    'INSERT INTO payments (invoice_id, payment_date, amount_paid, tds_deducted, payment_method, transaction_reference, notes, created_by, payment_transaction_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+    [invoice_id, payDate, parseFloat(amount_paid || 0), parseFloat(tds_deducted || 0), payment_method, transaction_reference || null, notes || null, userId, paymentTx.id]
   );
 
   // 4. update invoice
@@ -278,6 +280,68 @@ async function recordClientReceipt(params, userId) {
     [invoice_id]
   );
   return { payment_transaction: { ...paymentTx, voucher_id: voucherId }, invoice: updatedInvoice.rows[0] };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE CLIENT RECEIPT — reverses everything recordClientReceipt did: rolls
+// back the invoice's payment_received/tds_deducted/payment_due/status, removes
+// the payment_tax_details row (there's no real FK cascade here — MySQL parses
+// but ignores the inline REFERENCES in migration 038), deletes the matching
+// legacy payments row, and soft-cancels the linked voucher — matching the
+// existing cancel convention in src/routes/vouchers.js rather than erasing
+// ledger history outright.
+// ─────────────────────────────────────────────────────────────────────────────
+async function deleteClientReceipt(paymentTransactionId, userId) {
+  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+  if (txRes.rows.length === 0) throw new Error('Payment not found');
+  const tx = txRes.rows[0];
+  if (tx.transaction_type !== 'client_receipt') throw new Error('Only client receipts can be deleted here');
+
+  const invRes = await query('SELECT * FROM invoices WHERE id = $1', [tx.reference_id]);
+  if (invRes.rows.length === 0) throw new Error('The linked invoice could not be found');
+  const invoice = invRes.rows[0];
+
+  const taxRes = await query(
+    'SELECT COALESCE(SUM(tds_amount),0) as tds_amount FROM payment_tax_details WHERE payment_transaction_id = $1',
+    [paymentTransactionId]
+  );
+  const tdsFromTx = parseFloat(taxRes.rows[0]?.tds_amount) || 0;
+
+  const newReceived = Math.max(0, parseFloat(invoice.payment_received || 0) - parseFloat(tx.amount || 0));
+  const newTds = Math.max(0, parseFloat(invoice.tds_deducted || 0) - tdsFromTx);
+  const newDue = parseFloat(invoice.final_amount) - newReceived - newTds;
+  const newStatus = invoice.status === 'cancelled'
+    ? 'cancelled'
+    : newDue <= 0.5 ? 'paid' : (newReceived > 0.5 || newTds > 0.5 ? 'partially_paid' : 'sent');
+
+  await query(
+    'UPDATE invoices SET payment_received=$1, tds_deducted=$2, payment_due=$3, status=$4, updated_at=CURRENT_TIMESTAMP WHERE id=$5',
+    [newReceived.toFixed(2), newTds.toFixed(2), Math.max(0, newDue).toFixed(2), newStatus, invoice.id]
+  );
+
+  await query('DELETE FROM payment_tax_details WHERE payment_transaction_id = $1', [paymentTransactionId]);
+
+  // Prefer the precise link; fall back to matching for receipts recorded
+  // before payment_transaction_id existed on `payments` (migration 044).
+  const linkedDelete = await query('DELETE FROM payments WHERE payment_transaction_id = $1', [paymentTransactionId]);
+  if (!linkedDelete.rowCount) {
+    await query(
+      `DELETE FROM payments WHERE invoice_id=$1 AND payment_date=$2 AND amount_paid=$3 AND COALESCE(tds_deducted,0)=$4 LIMIT 1`,
+      [tx.reference_id, tx.payment_date, parseFloat(tx.amount || 0), tdsFromTx]
+    );
+  }
+
+  if (tx.voucher_id) {
+    await query(
+      `UPDATE vouchers SET status='cancelled', cancelled_by=$1, cancellation_date=CURRENT_TIMESTAMP, cancellation_reason=$2 WHERE id=$3 AND status != 'cancelled'`,
+      [userId, 'Client receipt deleted', tx.voucher_id]
+    );
+  }
+
+  await query('DELETE FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+
+  const updatedInvoice = await query('SELECT * FROM invoices WHERE id = $1', [invoice.id]);
+  return { invoice: updatedInvoice.rows[0] };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -490,4 +554,4 @@ async function recordSalaryPayment(params, userId) {
   return { payment_transaction: { ...paymentTx, voucher_id: voucherId }, employee_id: employeeId, payroll_id: payrollId };
 }
 
-module.exports = { recordClientReceipt, recordVendorPayment, recordSalaryPayment, recordBankEntry, resolveDefaultBankAccountId };
+module.exports = { recordClientReceipt, recordVendorPayment, recordSalaryPayment, recordBankEntry, resolveDefaultBankAccountId, deleteClientReceipt };
