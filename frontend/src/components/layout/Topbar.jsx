@@ -105,12 +105,14 @@ export default function Topbar({ sidebarOpen, setSidebarOpen, setMobileMenuOpen 
           title={`${agencySettings.agency_name || 'SecurManage'} Dashboard`}
         >
           {agencySettings.agency_logo_url && !logoError ? (
-            <img
-              src={`${getServerBaseUrl()}${agencySettings.agency_logo_url}`}
-              alt={agencySettings.agency_name || "Agency Logo"}
-              onError={() => setLogoError(true)}
-              className="h-9 w-auto max-h-9 max-w-[120px] object-contain shrink-0 group-hover:scale-105 transition-transform"
-            />
+            <div className="h-9 max-w-[120px] px-1 rounded-lg bg-white shrink-0 flex items-center justify-center group-hover:scale-105 transition-transform">
+              <img
+                src={`${getServerBaseUrl()}${agencySettings.agency_logo_url}`}
+                alt={agencySettings.agency_name || "Agency Logo"}
+                onError={() => setLogoError(true)}
+                className="h-full w-auto max-h-9 max-w-[112px] object-contain"
+              />
+            </div>
           ) : (
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center text-white font-extrabold text-xs tracking-wider shadow-sm shrink-0 group-hover:scale-105 transition-transform">
               {getAgencyInitials(agencySettings.agency_name)}
