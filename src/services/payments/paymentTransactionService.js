@@ -377,7 +377,7 @@ async function recordVendorPayment(params, userId) {
 
   // 1. payment_transactions
   const paymentTx = await insertPaymentTransaction({
-    transaction_type: 'vendor_payment', party_type: 'vendor', party_id: expense.vendor_id,
+    transaction_type: 'vendor_payment', party_type: 'vendor', party_id: expense.vendor_id || 0,
     reference_type: 'expense', reference_id: expense_id, amount: paymentAmount,
     payment_method: payment_method || 'bank_transfer', bank_account_id: resolvedBankAccountId, payment_date: payDate,
     transaction_reference: reference_number, attachment_url, notes, created_by: userId
@@ -406,7 +406,7 @@ async function recordVendorPayment(params, userId) {
     taxDetail = { taxable_value: totalSettlement, cgst_amount: 0, sgst_amount: 0, igst_amount: 0, tax_type: 'none', tax_rate: 0, is_rcm_applicable: false };
   }
   await insertTaxDetail({
-    payment_transaction_id: paymentTx.id, party_type: 'vendor', party_id: expense.vendor_id,
+    payment_transaction_id: paymentTx.id, party_type: 'vendor', party_id: expense.vendor_id || 0,
     taxable_value: taxDetail.taxable_value, tax_type: taxDetail.tax_type, tax_rate: taxDetail.tax_rate,
     cgst_amount: taxDetail.cgst_amount, sgst_amount: taxDetail.sgst_amount, igst_amount: taxDetail.igst_amount,
     is_rcm_applicable: taxDetail.is_rcm_applicable, tds_amount: parseFloat(tds_amount || 0), payment_date: payDate
@@ -416,7 +416,7 @@ async function recordVendorPayment(params, userId) {
   await query(
     `INSERT INTO vendor_payments (vendor_id, expense_id, payment_date, amount, payment_method, reference_number, notes, created_by)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [expense.vendor_id, expense.id, payDate, paymentAmount, payment_method || 'bank_transfer', reference_number, notes, userId]
+    [expense.vendor_id || 0, expense.id, payDate, paymentAmount, payment_method || 'bank_transfer', reference_number, notes, userId]
   );
   const newSettled = currentSettled + totalSettlement;
   const newStatus = newSettled >= parseFloat(expense.amount) ? 'paid' : expense.status;
@@ -554,4 +554,473 @@ async function recordSalaryPayment(params, userId) {
   return { payment_transaction: { ...paymentTx, voucher_id: voucherId }, employee_id: employeeId, payroll_id: payrollId };
 }
 
-module.exports = { recordClientReceipt, recordVendorPayment, recordSalaryPayment, recordBankEntry, resolveDefaultBankAccountId, deleteClientReceipt };
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE VENDOR PAYMENT — reverses vendor payment on expense and cancels voucher
+// ─────────────────────────────────────────────────────────────────────────────
+async function deleteVendorPayment(paymentTransactionId, userId) {
+  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+  if (txRes.rows.length === 0) throw new Error('Payment not found');
+  const tx = txRes.rows[0];
+  if (tx.transaction_type !== 'vendor_payment') throw new Error('Only vendor payments can be deleted here');
+
+  let updatedExpense = null;
+  if (tx.reference_id) {
+    const expRes = await query('SELECT * FROM expenses WHERE id = $1', [tx.reference_id]);
+    if (expRes.rows.length > 0) {
+      const expense = expRes.rows[0];
+      const taxRes = await query(
+        'SELECT COALESCE(SUM(tds_amount),0) as tds_amount FROM payment_tax_details WHERE payment_transaction_id = $1',
+        [paymentTransactionId]
+      );
+      const tdsFromTx = parseFloat(taxRes.rows[0]?.tds_amount) || 0;
+      const totalSettlement = parseFloat(tx.amount || 0) + tdsFromTx;
+
+      const newSettled = Math.max(0, parseFloat(expense.amount_paid || 0) - totalSettlement);
+      let newStatus = expense.status;
+      if (newSettled >= parseFloat(expense.amount) - 0.01) {
+        newStatus = 'paid';
+      } else if (expense.approver_id) {
+        newStatus = 'approved';
+      } else {
+        newStatus = 'pending';
+      }
+
+      await query(
+        'UPDATE expenses SET amount_paid=$1, status=$2 WHERE id=$3',
+        [newSettled, newStatus, expense.id]
+      );
+
+      await query(
+        'DELETE FROM vendor_payments WHERE expense_id = $1 AND payment_date = $2 AND amount = $3 LIMIT 1',
+        [tx.reference_id, tx.payment_date, parseFloat(tx.amount || 0)]
+      );
+
+      const expUpdated = await query('SELECT * FROM expenses WHERE id = $1', [expense.id]);
+      updatedExpense = expUpdated.rows[0];
+    }
+  }
+
+  await query('DELETE FROM payment_tax_details WHERE payment_transaction_id = $1', [paymentTransactionId]);
+
+  if (tx.voucher_id) {
+    await query(
+      `UPDATE vouchers SET status='cancelled', cancelled_by=$1, cancellation_date=CURRENT_TIMESTAMP, cancellation_reason=$2 WHERE id=$3 AND status != 'cancelled'`,
+      [userId, 'Vendor payment deleted', tx.voucher_id]
+    );
+  }
+
+  await query('DELETE FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+
+  return { expense: updatedExpense };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE SALARY PAYMENT — reverses salary payment on payroll/slips and cancels voucher
+// ─────────────────────────────────────────────────────────────────────────────
+async function deleteSalaryPayment(paymentTransactionId, userId) {
+  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+  if (txRes.rows.length === 0) throw new Error('Payment not found');
+  const tx = txRes.rows[0];
+  if (tx.transaction_type !== 'salary_payment') throw new Error('Only salary payments can be deleted here');
+
+  if (tx.reference_id) {
+    if (tx.reference_type === 'salary_slip') {
+      await query(
+        `UPDATE salary_slips SET status='approved', paid_at=NULL, payment_method=NULL, transaction_reference=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=$1`,
+        [tx.reference_id]
+      );
+      const slipRes = await query('SELECT payroll_id FROM salary_slips WHERE id = $1', [tx.reference_id]);
+      const payrollId = slipRes.rows[0]?.payroll_id;
+      if (payrollId) {
+        await query(
+          `UPDATE payroll SET payment_status='pending', payment_date=NULL, payment_method=NULL, transaction_reference=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=$1`,
+          [payrollId]
+        );
+      }
+    } else if (tx.reference_type === 'payroll') {
+      await query(
+        `UPDATE payroll SET payment_status='pending', payment_date=NULL, payment_method=NULL, transaction_reference=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=$1`,
+        [tx.reference_id]
+      );
+      await query(
+        `UPDATE salary_slips SET status='approved', paid_at=NULL, payment_method=NULL, transaction_reference=NULL, updated_at=CURRENT_TIMESTAMP WHERE payroll_id=$1`,
+        [tx.reference_id]
+      );
+    }
+  }
+
+  if (tx.voucher_id) {
+    await query(
+      `UPDATE vouchers SET status='cancelled', cancelled_by=$1, cancellation_date=CURRENT_TIMESTAMP, cancellation_reason=$2 WHERE id=$3 AND status != 'cancelled'`,
+      [userId, 'Salary payment deleted', tx.voucher_id]
+    );
+  }
+
+  await query('DELETE FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+  return { success: true };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UPDATE CLIENT RECEIPT
+// ─────────────────────────────────────────────────────────────────────────────
+async function updateClientReceipt(paymentTransactionId, params, userId) {
+  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+  if (txRes.rows.length === 0) throw new Error('Payment not found');
+  const tx = txRes.rows[0];
+  if (tx.transaction_type !== 'client_receipt') throw new Error('Only client receipts can be updated here');
+
+  const invRes = await query('SELECT i.*, c.name as client_name FROM invoices i JOIN clients c ON i.client_id = c.id WHERE i.id = $1', [tx.reference_id]);
+  if (invRes.rows.length === 0) throw new Error('Linked invoice not found');
+  const invoice = invRes.rows[0];
+
+  const oldTaxRes = await query('SELECT COALESCE(SUM(tds_amount),0) as tds_amount FROM payment_tax_details WHERE payment_transaction_id = $1', [paymentTransactionId]);
+  const oldTds = parseFloat(oldTaxRes.rows[0]?.tds_amount) || 0;
+  const oldAmount = parseFloat(tx.amount || 0);
+
+  const baseReceived = Math.max(0, parseFloat(invoice.payment_received || 0) - oldAmount);
+  const baseTds = Math.max(0, parseFloat(invoice.tds_deducted || 0) - oldTds);
+  const maxAllowed = parseFloat(invoice.final_amount) - baseReceived - baseTds;
+
+  const newAmount = params.amount !== undefined ? parseFloat(params.amount) : (params.amount_paid !== undefined ? parseFloat(params.amount_paid) : oldAmount);
+  const newTds = params.tds_deducted !== undefined ? parseFloat(params.tds_deducted) : (params.tds_amount !== undefined ? parseFloat(params.tds_amount) : oldTds);
+
+  if (isNaN(newAmount) || newAmount <= 0) throw new Error('A valid amount is required');
+  if (newAmount + newTds > maxAllowed + 0.5) {
+    throw new Error(`Amount + TDS exceeds remaining invoice balance of ₹${maxAllowed.toFixed(2)}`);
+  }
+
+  const payDate = params.payment_date || tx.payment_date;
+  const payMethod = params.payment_method || tx.payment_method;
+  const bankAccId = params.bank_account_id !== undefined ? (params.bank_account_id ? parseInt(params.bank_account_id) : null) : tx.bank_account_id;
+  const txRef = params.transaction_reference !== undefined ? params.transaction_reference : tx.transaction_reference;
+  const notes = params.notes !== undefined ? params.notes : tx.notes;
+  const attachUrl = params.attachment_url !== undefined ? params.attachment_url : tx.attachment_url;
+
+  // 1. Update payment_transactions
+  await query(
+    `UPDATE payment_transactions SET
+      amount = $1, payment_date = $2, payment_method = $3, bank_account_id = $4,
+      transaction_reference = $5, notes = $6, attachment_url = $7
+     WHERE id = $8`,
+    [newAmount, payDate, payMethod, bankAccId, txRef, notes, attachUrl, paymentTransactionId]
+  );
+
+  // 2. Update payment_tax_details
+  await query('DELETE FROM payment_tax_details WHERE payment_transaction_id = $1', [paymentTransactionId]);
+  const priorTax = await sumPriorTaxDetail('invoice', invoice.id);
+  const remainingTaxable = parseFloat(invoice.amount_subtotal || 0) - priorTax.taxable_value;
+  const remainingCgst = parseFloat(invoice.cgst_amount || 0) - priorTax.cgst_amount;
+  const remainingSgst = parseFloat(invoice.sgst_amount || 0) - priorTax.sgst_amount;
+  const remainingIgst = parseFloat(invoice.igst_amount || 0) - priorTax.igst_amount;
+  const prorated = prorateTax(newAmount + newTds, maxAllowed, remainingTaxable, remainingCgst, remainingSgst, remainingIgst);
+  await insertTaxDetail({
+    payment_transaction_id: paymentTransactionId, party_type: 'client', party_id: invoice.client_id,
+    taxable_value: prorated.taxable_value, tax_type: invoice.tax_type, tax_rate: invoice.tax_rate,
+    cgst_amount: prorated.cgst_amount, sgst_amount: prorated.sgst_amount, igst_amount: prorated.igst_amount,
+    is_rcm_applicable: invoice.is_rcm_applicable, tds_amount: newTds, payment_date: payDate
+  });
+
+  // 3. Update legacy payments table
+  const legacyUpdate = await query(
+    `UPDATE payments SET
+      payment_date = $1, amount_paid = $2, tds_deducted = $3, payment_method = $4,
+      transaction_reference = $5, notes = $6
+     WHERE payment_transaction_id = $7`,
+    [payDate, newAmount, newTds, payMethod, txRef, notes, paymentTransactionId]
+  );
+  if (!legacyUpdate.rowCount) {
+    await query(
+      `UPDATE payments SET
+        payment_date = $1, amount_paid = $2, tds_deducted = $3, payment_method = $4,
+        transaction_reference = $5, notes = $6, payment_transaction_id = $7
+       WHERE invoice_id = $8 AND amount_paid = $9 LIMIT 1`,
+      [payDate, newAmount, newTds, payMethod, txRef, notes, paymentTransactionId, invoice.id, oldAmount]
+    );
+  }
+
+  // 4. Update invoice
+  const newReceived = baseReceived + newAmount;
+  const newTotalTds = baseTds + newTds;
+  const newDue = parseFloat(invoice.final_amount) - newReceived - newTotalTds;
+  const isPaid = newDue <= 0.5;
+  const newStatus = isPaid ? 'paid' : 'partially_paid';
+  await query(
+    'UPDATE invoices SET payment_received=$1, tds_deducted=$2, payment_due=$3, status=$4, updated_at=CURRENT_TIMESTAMP WHERE id=$5',
+    [newReceived.toFixed(2), newTotalTds.toFixed(2), (isPaid ? 0 : Math.max(0, newDue)).toFixed(2), newStatus, invoice.id]
+  );
+
+  // 5. Update or recreate Voucher
+  if (tx.voucher_id) {
+    const accountRes = bankAccId ? await query('SELECT account_type FROM bank_accounts WHERE id = $1', [bankAccId]) : { rows: [] };
+    const isCash = accountRes.rows[0]?.account_type === 'cash';
+    const voucherType = isCash ? 'cash_receipt' : 'bank_receipt';
+    await query(
+      `UPDATE vouchers SET
+        voucher_date = $1, amount = $2, debit_account_id = $3, voucher_type = $4,
+        narration = $5, transaction_ref = $6, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $7`,
+      [payDate, newAmount, bankAccId, voucherType, `Payment received - Invoice ${invoice.invoice_number}`, txRef, tx.voucher_id]
+    );
+  } else if (newAmount > 0 && bankAccId) {
+    const voucherId = await createPostedVoucher({
+      direction: 'receipt', amount: newAmount, bankAccountId: bankAccId,
+      partyType: 'client', partyId: invoice.client_id, partyName: invoice.client_name,
+      referenceType: 'invoice', referenceId: invoice.id, voucherDate: payDate,
+      narration: `Payment received - Invoice ${invoice.invoice_number}`, createdBy: userId
+    });
+    if (voucherId) {
+      await query('UPDATE payment_transactions SET voucher_id = $1 WHERE id = $2', [voucherId, paymentTransactionId]);
+    }
+  }
+
+  const updatedTx = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+  return updatedTx.rows[0];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UPDATE VENDOR PAYMENT
+// ─────────────────────────────────────────────────────────────────────────────
+async function updateVendorPayment(paymentTransactionId, params, userId) {
+  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+  if (txRes.rows.length === 0) throw new Error('Payment not found');
+  const tx = txRes.rows[0];
+  if (tx.transaction_type !== 'vendor_payment') throw new Error('Only vendor payments can be updated here');
+
+  const expRes = await query('SELECT * FROM expenses WHERE id = $1', [tx.reference_id]);
+  if (expRes.rows.length === 0) throw new Error('Expense not found');
+  const expense = expRes.rows[0];
+
+  const oldTaxRes = await query('SELECT COALESCE(SUM(tds_amount),0) as tds_amount FROM payment_tax_details WHERE payment_transaction_id = $1', [paymentTransactionId]);
+  const oldTds = parseFloat(oldTaxRes.rows[0]?.tds_amount) || 0;
+  const oldAmount = parseFloat(tx.amount || 0);
+  const oldTotalSettlement = oldAmount + oldTds;
+
+  const baseSettled = Math.max(0, (parseFloat(expense.amount_paid) || 0) - oldTotalSettlement);
+  const remainingBefore = parseFloat(expense.amount) - baseSettled;
+
+  const newAmount = params.amount !== undefined ? parseFloat(params.amount) : oldAmount;
+  const newTds = params.tds_amount !== undefined ? parseFloat(params.tds_amount) : oldTds;
+  const newTotalSettlement = newAmount + newTds;
+
+  if (isNaN(newAmount) || newAmount <= 0) throw new Error('A valid amount is required');
+  if (newTotalSettlement > remainingBefore + 0.5) {
+    throw new Error(`Amount + TDS exceeds remaining bill balance of ₹${remainingBefore.toFixed(2)}`);
+  }
+
+  const payDate = params.payment_date || tx.payment_date;
+  const payMethod = params.payment_method || tx.payment_method;
+  const bankAccId = params.bank_account_id !== undefined ? (params.bank_account_id ? parseInt(params.bank_account_id) : null) : tx.bank_account_id;
+  const txRef = params.transaction_reference !== undefined ? params.transaction_reference : (params.reference_number || tx.transaction_reference);
+  const notes = params.notes !== undefined ? params.notes : tx.notes;
+  const attachUrl = params.attachment_url !== undefined ? params.attachment_url : tx.attachment_url;
+
+  // 1. Update payment_transactions
+  await query(
+    `UPDATE payment_transactions SET
+      amount = $1, payment_date = $2, payment_method = $3, bank_account_id = $4,
+      transaction_reference = $5, notes = $6, attachment_url = $7
+     WHERE id = $8`,
+    [newAmount, payDate, payMethod, bankAccId, txRef, notes, attachUrl, paymentTransactionId]
+  );
+
+  // 2. Update payment_tax_details
+  await query('DELETE FROM payment_tax_details WHERE payment_transaction_id = $1', [paymentTransactionId]);
+  const hasBillTax = expense.tax_type && expense.tax_type !== 'none';
+  let taxDetail;
+  if (hasBillTax) {
+    const billTaxableTotal = parseFloat(expense.amount) - parseFloat(expense.cgst_amount || 0) - parseFloat(expense.sgst_amount || 0) - parseFloat(expense.igst_amount || 0);
+    const priorTax = await sumPriorTaxDetail('expense', expense.id);
+    const remainingTaxable = billTaxableTotal - priorTax.taxable_value;
+    const remainingCgst = parseFloat(expense.cgst_amount || 0) - priorTax.cgst_amount;
+    const remainingSgst = parseFloat(expense.sgst_amount || 0) - priorTax.sgst_amount;
+    const remainingIgst = parseFloat(expense.igst_amount || 0) - priorTax.igst_amount;
+    const prorated = prorateTax(newTotalSettlement, remainingBefore, remainingTaxable, remainingCgst, remainingSgst, remainingIgst);
+    taxDetail = { ...prorated, tax_type: expense.tax_type, tax_rate: expense.tax_rate, is_rcm_applicable: expense.is_rcm_applicable };
+  } else {
+    taxDetail = { taxable_value: newTotalSettlement, cgst_amount: 0, sgst_amount: 0, igst_amount: 0, tax_type: 'none', tax_rate: 0, is_rcm_applicable: false };
+  }
+  await insertTaxDetail({
+    payment_transaction_id: paymentTransactionId, party_type: 'vendor', party_id: expense.vendor_id || 0,
+    taxable_value: taxDetail.taxable_value, tax_type: taxDetail.tax_type, tax_rate: taxDetail.tax_rate,
+    cgst_amount: taxDetail.cgst_amount, sgst_amount: taxDetail.sgst_amount, igst_amount: taxDetail.igst_amount,
+    is_rcm_applicable: taxDetail.is_rcm_applicable, tds_amount: newTds, payment_date: payDate
+  });
+
+  // 3. Update vendor_payments
+  await query(
+    `UPDATE vendor_payments SET
+      payment_date = $1, amount = $2, payment_method = $3, reference_number = $4, notes = $5
+     WHERE expense_id = $6 AND payment_date = $7 AND amount = $8 LIMIT 1`,
+    [payDate, newAmount, payMethod, txRef, notes, expense.id, tx.payment_date, oldAmount]
+  );
+
+  // 4. Update expenses
+  const newSettled = baseSettled + newTotalSettlement;
+  const newStatus = newSettled >= parseFloat(expense.amount) - 0.01 ? 'paid' : (expense.approver_id ? 'approved' : 'pending');
+  await query('UPDATE expenses SET amount_paid = $1, status = $2 WHERE id = $3', [newSettled, newStatus, expense.id]);
+
+  // 5. Update voucher
+  if (tx.voucher_id) {
+    const accountRes = bankAccId ? await query('SELECT account_type FROM bank_accounts WHERE id = $1', [bankAccId]) : { rows: [] };
+    const isCash = accountRes.rows[0]?.account_type === 'cash';
+    const voucherType = isCash ? 'cash_payment' : 'bank_payment';
+    await query(
+      `UPDATE vouchers SET
+        voucher_date = $1, amount = $2, credit_account_id = $3, voucher_type = $4,
+        narration = $5, transaction_ref = $6, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $7`,
+      [payDate, newAmount, bankAccId, voucherType, `Payment to vendor - ${expense.description}`, txRef, tx.voucher_id]
+    );
+  }
+
+  const updatedTx = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+  return updatedTx.rows[0];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UPDATE SALARY PAYMENT
+// ─────────────────────────────────────────────────────────────────────────────
+async function updateSalaryPayment(paymentTransactionId, params, userId) {
+  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+  if (txRes.rows.length === 0) throw new Error('Payment not found');
+  const tx = txRes.rows[0];
+  if (tx.transaction_type !== 'salary_payment') throw new Error('Only salary payments can be updated here');
+
+  const newAmount = params.amount !== undefined ? parseFloat(params.amount) : parseFloat(tx.amount);
+  if (isNaN(newAmount) || newAmount <= 0) throw new Error('A valid amount is required');
+
+  const payDate = params.payment_date || tx.payment_date;
+  const payMethod = params.payment_method || tx.payment_method;
+  const bankAccId = params.bank_account_id !== undefined ? (params.bank_account_id ? parseInt(params.bank_account_id) : null) : tx.bank_account_id;
+  const txRef = params.transaction_reference !== undefined ? params.transaction_reference : tx.transaction_reference;
+  const notes = params.notes !== undefined ? params.notes : tx.notes;
+  const attachUrl = params.attachment_url !== undefined ? params.attachment_url : tx.attachment_url;
+  const empBankSnap = params.employee_bank_snapshot !== undefined ? params.employee_bank_snapshot : tx.employee_bank_snapshot;
+
+  await query(
+    `UPDATE payment_transactions SET
+      amount = $1, payment_date = $2, payment_method = $3, bank_account_id = $4,
+      transaction_reference = $5, notes = $6, attachment_url = $7, employee_bank_snapshot = $8
+     WHERE id = $9`,
+    [newAmount, payDate, payMethod, bankAccId, txRef, notes, attachUrl, empBankSnap, paymentTransactionId]
+  );
+
+  // Update voucher
+  if (tx.voucher_id) {
+    const accountRes = bankAccId ? await query('SELECT account_type FROM bank_accounts WHERE id = $1', [bankAccId]) : { rows: [] };
+    const isCash = accountRes.rows[0]?.account_type === 'cash';
+    const voucherType = isCash ? 'cash_payment' : 'bank_payment';
+    await query(
+      `UPDATE vouchers SET
+        voucher_date = $1, amount = $2, credit_account_id = $3, voucher_type = $4,
+        transaction_ref = $5, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $6`,
+      [payDate, newAmount, bankAccId, voucherType, txRef, tx.voucher_id]
+    );
+  }
+
+  // Update payroll / salary_slip if linked
+  if (tx.reference_id) {
+    if (tx.reference_type === 'payroll') {
+      await query(
+        `UPDATE payroll SET payment_date=$1, payment_method=$2, transaction_reference=$3, updated_at=CURRENT_TIMESTAMP WHERE id=$4`,
+        [payDate, payMethod, txRef, tx.reference_id]
+      );
+    } else if (tx.reference_type === 'salary_slip') {
+      await query(
+        `UPDATE salary_slips SET paid_at=$1, payment_method=$2, transaction_reference=$3, updated_at=CURRENT_TIMESTAMP WHERE id=$4`,
+        [payDate, payMethod, txRef, tx.reference_id]
+      );
+    }
+  }
+
+  const updatedTx = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+  return updatedTx.rows[0];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UPDATE BANK ENTRY (voucher)
+// ─────────────────────────────────────────────────────────────────────────────
+async function updateBankEntry(voucherId, params, userId) {
+  const existingRes = await query('SELECT * FROM vouchers WHERE id = $1', [voucherId]);
+  if (existingRes.rows.length === 0) throw new Error('Bank entry not found');
+  const existing = existingRes.rows[0];
+  if (!['journal', 'contra'].includes(existing.voucher_type)) {
+    throw new Error('This voucher is not a bank entry');
+  }
+
+  const { kind, bank_account_id, to_account_id, amount, entry_date, narration, transaction_ref } = params;
+  const finalAmount = parseFloat(amount);
+  if (isNaN(finalAmount) || finalAmount <= 0) throw new Error('A valid amount is required');
+  const entryDate = entry_date || existing.voucher_date;
+
+  let voucherType, debitAccountId, creditAccountId, finalNarration;
+
+  if (kind === 'transfer') {
+    if (!bank_account_id || !to_account_id) throw new Error('Both a from-account and a to-account are required for a transfer');
+    if (String(bank_account_id) === String(to_account_id)) throw new Error('From and To accounts must be different');
+    voucherType = 'contra';
+    creditAccountId = bank_account_id;
+    debitAccountId = to_account_id;
+    finalNarration = narration || 'Transfer between accounts';
+  } else {
+    if (!bank_account_id) throw new Error('A bank/cash account is required');
+    voucherType = 'journal';
+    const isDebit = kind === 'bank_charge' || kind === 'other_debit';
+    debitAccountId = isDebit ? bank_account_id : null;
+    creditAccountId = isDebit ? null : bank_account_id;
+    finalNarration = narration || (
+      kind === 'bank_charge' ? 'Bank charges'
+      : kind === 'interest_credited' ? 'Interest credited'
+      : kind === 'other_credit' ? 'Other credit'
+      : 'Other charge'
+    );
+  }
+
+  const result = await query(
+    `UPDATE vouchers SET
+      voucher_type = $1, voucher_date = $2, amount = $3, debit_account_id = $4,
+      credit_account_id = $5, narration = $6, transaction_ref = $7, updated_at = CURRENT_TIMESTAMP
+     WHERE id = $8
+     RETURNING *`,
+    [voucherType, entryDate, finalAmount, debitAccountId || null, creditAccountId || null,
+     finalNarration, transaction_ref || null, voucherId]
+  );
+  return result.rows[0];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE BANK ENTRY (voucher)
+// ─────────────────────────────────────────────────────────────────────────────
+async function deleteBankEntry(voucherId, userId) {
+  const existing = await query('SELECT * FROM vouchers WHERE id = $1', [voucherId]);
+  if (existing.rows.length === 0) throw new Error('Bank entry not found');
+  if (!['journal', 'contra'].includes(existing.rows[0].voucher_type)) {
+    throw new Error('This voucher is not a bank entry');
+  }
+  if (existing.rows[0].status === 'cancelled') {
+    throw new Error('Bank entry is already cancelled');
+  }
+
+  await query(
+    `UPDATE vouchers SET status='cancelled', cancelled_by=$1, cancellation_date=CURRENT_TIMESTAMP, cancellation_reason=$2, updated_at=CURRENT_TIMESTAMP WHERE id=$3`,
+    [userId, 'Bank entry deleted', voucherId]
+  );
+  return { success: true };
+}
+
+module.exports = {
+  recordClientReceipt,
+  recordVendorPayment,
+  recordSalaryPayment,
+  recordBankEntry,
+  resolveDefaultBankAccountId,
+  deleteClientReceipt,
+  deleteVendorPayment,
+  deleteSalaryPayment,
+  updateClientReceipt,
+  updateVendorPayment,
+  updateSalaryPayment,
+  updateBankEntry,
+  deleteBankEntry,
+};

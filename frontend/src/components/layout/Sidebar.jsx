@@ -71,7 +71,7 @@ const navGroups = [
     icon: Building2,
     children: [
       { name: 'Vendors', path: '/vendors', icon: Building2, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },
-      { name: 'Purchase Orders', path: '/purchase-orders', icon: ClipboardList, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },
+      { name: 'Purchase Bills', path: '/purchase-orders', icon: ClipboardList, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },
       { name: 'Vendor Ledger', path: '/vendor-ledger', icon: Truck, roles: ['admin', 'accountant', 'manager'], permission: ['manage_expenses', 'view_reports'] },
       { name: 'Expenses', path: '/expenses', icon: Receipt, roles: ['admin', 'accountant', 'manager'], permission: 'manage_expenses' },
     ],

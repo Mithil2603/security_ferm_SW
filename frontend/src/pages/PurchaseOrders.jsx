@@ -391,15 +391,15 @@ export default function PurchaseOrders() {
     try {
       const res = await api.get(`/purchase-orders/${po.id}`);
       const data = res.data;
-      if (!data) throw new Error('Could not load PO details');
+      if (!data) throw new Error('Could not load bill details');
 
       if (data.status !== 'draft') {
-        toast.warning(`This purchase order is ${data.status} and cannot be edited`);
+        toast.warning(`This purchase bill is ${data.status} and cannot be edited`);
         return;
       }
 
       setEditingPoId(data.id);
-      setEditingPoNumber(data.po_number);
+      setEditingPoNumber(data.bill_number || data.po_number);
       setEditorMode('edit');
 
       setVendorSearch(data.vendor_name || '');
@@ -427,7 +427,7 @@ export default function PurchaseOrders() {
         vendor_id: data.vendor_id,
         vendor_name: data.vendor_name || '',
         phone_no: sanitizePhone(data.vendor_contact || ''),
-        bill_number: data.bill_number || '',
+        bill_number: data.bill_number || data.po_number || '',
         po_date: data.po_date || new Date().toISOString().split('T')[0],
         state_of_supply: data.state_of_supply || 'Gujarat',
         payment_type: data.payment_type || 'cash',
@@ -445,7 +445,7 @@ export default function PurchaseOrders() {
 
       setActiveTab('editor');
     } catch (err) {
-      toast.error('Failed to load purchase order for editing');
+      toast.error('Failed to load purchase bill for editing');
     }
   };
 
@@ -512,17 +512,18 @@ export default function PurchaseOrders() {
       }
 
       if (editorMode === 'edit' && editingPoId) {
-        await api.put(`/purchase-orders/${editingPoId}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-        toast.success(`Purchase order ${editingPoNumber || ''} updated successfully`);
+        await api.put(`/purchase-orders/${editingPoId}`, fd);
+        toast.success(`Purchase bill ${editingPoNumber || ''} updated successfully`);
       } else {
-        const res = await api.post('/purchase-orders', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-        toast.success(`Purchase order ${res.data?.po_number || ''} created successfully`);
+        const res = await api.post('/purchase-orders', fd);
+        const createdNum = res.data?.bill_number || res.data?.po_number || '';
+        toast.success(`Purchase bill ${createdNum} created successfully`);
       }
 
       backToList();
       fetchPOs();
     } catch (err) {
-      toast.error(err.response?.data?.message || err.message || 'Failed to save purchase order');
+      toast.error(err.response?.data?.message || err.message || 'Failed to save purchase bill');
     } finally {
       setSubmitting(false);
     }
@@ -531,10 +532,10 @@ export default function PurchaseOrders() {
   // Delete Handler (usable from List, Modal, and Editor!)
   const handleDelete = async (poOrId, poNumberParam) => {
     const id = typeof poOrId === 'object' ? poOrId.id : poOrId;
-    const num = typeof poOrId === 'object' ? poOrId.po_number : (poNumberParam || 'this Purchase Order');
+    const num = typeof poOrId === 'object' ? (poOrId.bill_number || poOrId.po_number) : (poNumberParam || 'this Purchase Bill');
 
     const confirmed = await confirmDialog({
-      title: 'Delete Purchase Order',
+      title: 'Delete Purchase Bill',
       message: `Are you sure you want to permanently delete ${num}? This cannot be undone.`,
       confirmText: 'Delete Permanently',
       variant: 'danger',
@@ -543,7 +544,7 @@ export default function PurchaseOrders() {
 
     try {
       await api.delete(`/purchase-orders/${id}`);
-      toast.success(`Purchase order ${num} deleted`);
+      toast.success(`Purchase bill ${num} deleted`);
       if (activeTab === 'editor' && editingPoId === id) {
         backToList();
       }
@@ -552,22 +553,23 @@ export default function PurchaseOrders() {
       }
       fetchPOs();
     } catch (err) {
-      toast.error(err.response?.data?.message || err.message || 'Failed to delete purchase order');
+      toast.error(err.response?.data?.message || err.message || 'Failed to delete purchase bill');
     }
   };
 
   // Cancel PO Handler
   const handleCancel = async (po) => {
+    const num = po.bill_number || po.po_number;
     const confirmed = await confirmDialog({
-      title: 'Cancel Purchase Order',
-      message: `Cancel ${po.po_number}? This cannot be undone.`,
-      confirmText: 'Cancel PO',
+      title: 'Cancel Purchase Bill',
+      message: `Cancel ${num}? This cannot be undone.`,
+      confirmText: 'Cancel Bill',
       variant: 'danger',
     });
     if (!confirmed) return;
     try {
       await api.post(`/purchase-orders/${po.id}/cancel`);
-      toast.success('Purchase order cancelled');
+      toast.success('Purchase bill cancelled');
       fetchPOs();
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Failed to cancel');
@@ -580,7 +582,7 @@ export default function PurchaseOrders() {
       const res = await api.get(`/purchase-orders/${po.id}`);
       setViewPo(res.data);
     } catch {
-      toast.error('Failed to load purchase order details');
+      toast.error('Failed to load purchase bill details');
     }
   };
 
@@ -620,10 +622,10 @@ export default function PurchaseOrders() {
 
   return (
     <div className="space-y-4 animate-fade-in pb-10">
-      {/* ─── Top Tabs Strip (Mimicking the screenshot's Purchase #1 tab bar) ─── */}
+      {/* ─── Top Tabs Strip (Mimicking the screenshot's Purchase Bill tab bar) ─── */}
       <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-2 rounded-t-2xl shadow-sm">
         <div className="flex items-center space-x-1.5 overflow-x-auto">
-          {/* Tab 1: All Orders */}
+          {/* Tab 1: All Bills */}
           <button
             onClick={() => setActiveTab('list')}
             className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
@@ -633,16 +635,16 @@ export default function PurchaseOrders() {
             }`}
           >
             <ClipboardList className="w-4 h-4 text-teal-600" />
-            <span>All Purchase Orders</span>
+            <span>All Purchase Bills</span>
             <span className="px-1.5 py-0.2 bg-slate-200/70 text-slate-700 rounded-full text-[10px]">
               {pagination?.total ?? pos.length}
             </span>
           </button>
 
-          {/* Tab 2: Active Purchase Order Editor */}
+          {/* Tab 2: Active Purchase Bill Editor */}
           {activeTab === 'editor' && (
             <div className="flex items-center gap-1.5 px-3.5 py-1.5 bg-teal-600 text-white rounded-lg text-xs font-medium shadow-xs">
-              <span>{editorMode === 'edit' ? `Edit ${editingPoNumber || 'PO'}` : 'Purchase #1'}</span>
+              <span>{editorMode === 'edit' ? `Edit ${editingPoNumber || 'Bill'}` : 'Bill #1'}</span>
               <button
                 type="button"
                 onClick={backToList}
@@ -654,11 +656,11 @@ export default function PurchaseOrders() {
             </div>
           )}
 
-          {/* New Purchase + Button */}
+          {/* New Purchase Bill + Button */}
           <button
             type="button"
             onClick={startNewPO}
-            title="Create New Purchase Order"
+            title="Create New Purchase Bill"
             className="w-7 h-7 flex items-center justify-center rounded-full bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 transition-colors ml-1"
           >
             <Plus className="w-4 h-4" />
@@ -672,7 +674,7 @@ export default function PurchaseOrders() {
             className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>New Purchase Order</span>
+            <span>New Purchase Bill</span>
           </button>
         ) : (
           <div className="flex items-center gap-2">
@@ -701,7 +703,7 @@ export default function PurchaseOrders() {
               <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
-                placeholder="Search by PO number, vendor, or phone..."
+                placeholder="Search by Bill number, vendor, or phone..."
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 className="w-full pl-9 pr-4 py-2 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 text-sm bg-white text-slate-800"
@@ -726,7 +728,7 @@ export default function PurchaseOrders() {
             <table className="min-w-full divide-y divide-slate-200 text-left">
               <thead className="bg-slate-50 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
                 <tr>
-                  <th className="px-4 py-3">PO Number</th>
+                  <th className="px-4 py-3">Bill Number</th>
                   <th className="px-4 py-3">Vendor / Party</th>
                   <th className="px-4 py-3">Date</th>
                   <th className="px-4 py-3 text-center">Items</th>
@@ -740,20 +742,20 @@ export default function PurchaseOrders() {
                   <tr>
                     <td colSpan={7} className="px-4 py-12 text-center text-slate-500">
                       <div className="inline-block animate-spin rounded-full h-6 w-6 border-2 border-teal-500 border-t-transparent mb-2"></div>
-                      <p className="text-xs">Loading purchase orders...</p>
+                      <p className="text-xs">Loading purchase bills...</p>
                     </td>
                   </tr>
                 ) : pos.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="px-4 py-12 text-center text-slate-500">
                       <ClipboardList className="w-10 h-10 text-slate-300 mx-auto mb-2" />
-                      <p className="font-medium text-slate-700">No purchase orders found</p>
-                      <p className="text-xs text-slate-400 mt-0.5">Click "New Purchase Order" to itemize and generate a new order.</p>
+                      <p className="font-medium text-slate-700">No purchase bills found</p>
+                      <p className="text-xs text-slate-400 mt-0.5">Click "New Purchase Bill" to itemize and generate a new purchase bill.</p>
                       <button
                         onClick={startNewPO}
                         className="mt-3 inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-semibold"
                       >
-                        <Plus className="w-3.5 h-3.5" /> Create Purchase Order
+                        <Plus className="w-3.5 h-3.5" /> Create Purchase Bill
                       </button>
                     </td>
                   </tr>
@@ -761,7 +763,10 @@ export default function PurchaseOrders() {
                   pos.map(po => (
                     <tr key={po.id} className="hover:bg-teal-50/20 transition-colors">
                       <td className="px-4 py-3.5 font-mono text-xs font-semibold text-teal-700">
-                        {po.po_number}
+                        <div>{po.bill_number || po.po_number}</div>
+                        {po.bill_number && po.po_number && po.bill_number !== po.po_number && (
+                          <div className="text-[10px] text-slate-400 font-mono font-normal">Ref: {po.po_number}</div>
+                        )}
                       </td>
                       <td className="px-4 py-3.5">
                         <div className="font-medium text-slate-800">{po.vendor_name}</div>
@@ -788,17 +793,17 @@ export default function PurchaseOrders() {
                           {/* View Button */}
                           <button
                             onClick={() => openView(po)}
-                            title="View PO Details & Print"
+                            title="View Purchase Bill & Print"
                             className="p-1.5 text-slate-400 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors"
                           >
                             <Eye className="w-4 h-4" />
                           </button>
 
-                          {/* Edit Button (Requested by user) */}
+                          {/* Edit Button */}
                           {po.status === 'draft' && (
                             <button
                               onClick={() => startEditPO(po)}
-                              title="Edit Purchase Order"
+                              title="Edit Purchase Bill"
                               className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
                             >
                               <Edit className="w-4 h-4" />
@@ -809,7 +814,7 @@ export default function PurchaseOrders() {
                           {po.status === 'draft' && (
                             <button
                               onClick={() => openConvert(po)}
-                              title="Convert to Bill"
+                              title="Book to Expenses"
                               className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
                             >
                               <ArrowRightCircle className="w-4 h-4" />
@@ -820,18 +825,18 @@ export default function PurchaseOrders() {
                           {po.status === 'draft' && (
                             <button
                               onClick={() => handleCancel(po)}
-                              title="Cancel PO"
+                              title="Cancel Purchase Bill"
                               className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
                             >
                               <Ban className="w-4 h-4" />
                             </button>
                           )}
 
-                          {/* Delete Button (Requested by user) */}
+                          {/* Delete Button */}
                           {po.status !== 'billed' && (
                             <button
                               onClick={() => handleDelete(po)}
-                              title="Delete Purchase Order"
+                              title="Delete Purchase Bill"
                               className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -860,7 +865,7 @@ export default function PurchaseOrders() {
       )}
 
       {/* ──────────────────────────────────────────────────────────────────────── */}
-      {/* ─── TAB CONTENT: PURCHASE ORDER EDITOR (Mimicking Vyapar Screen) ───── */}
+      {/* ─── TAB CONTENT: PURCHASE BILL EDITOR (Mimicking Vyapar Screen) ───── */}
       {/* ──────────────────────────────────────────────────────────────────────── */}
       {activeTab === 'editor' && (
         <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden space-y-0">
@@ -868,7 +873,7 @@ export default function PurchaseOrders() {
           <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-white">
             <div className="flex items-center gap-3">
               <h2 className="text-xl font-bold text-slate-900 tracking-tight">
-                {editorMode === 'edit' ? `Edit Purchase — ${editingPoNumber}` : 'Purchase'}
+                {editorMode === 'edit' ? `Edit Purchase Bill — ${editingPoNumber}` : 'New Purchase Bill'}
               </h2>
               {editorMode === 'edit' && (
                 <span className="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-amber-50 text-amber-700 border border-amber-200">
@@ -968,7 +973,7 @@ export default function PurchaseOrders() {
                   </label>
                   <input
                     type="text"
-                    placeholder="e.g. INV-1042"
+                    placeholder="Auto if empty (e.g. PB-...) or type vendor invoice #"
                     value={form.bill_number}
                     onChange={e => setForm(f => ({ ...f, bill_number: e.target.value }))}
                     className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-teal-500 focus:outline-none bg-white text-slate-800"
@@ -1327,13 +1332,13 @@ export default function PurchaseOrders() {
                 </div>
               </div>
 
-              {/* Card 3: Comprehensive Purchase Order Summary */}
+              {/* Card 3: Comprehensive Purchase Bill Summary */}
               <div className="lg:col-span-4 bg-slate-50/70 border border-slate-200 rounded-2xl p-4 flex flex-col justify-between space-y-3 shadow-2xs">
                 <div>
                   <div className="flex items-center justify-between border-b border-slate-200 pb-2 mb-2.5">
                     <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800 uppercase tracking-wide">
                       <Receipt className="w-3.5 h-3.5 text-teal-600" />
-                      <span>Order Summary</span>
+                      <span>Bill Summary</span>
                     </div>
                     <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
                       {totals.totalQty} {totals.totalQty === 1 ? 'Qty' : 'Qty'}
@@ -1516,7 +1521,7 @@ export default function PurchaseOrders() {
                 <span>Print / Share</span>
               </button>
 
-              {/* DELETE BUTTON when editing existing PO */}
+              {/* DELETE BUTTON when editing existing Purchase Bill */}
               {editorMode === 'edit' && editingPoId && (
                 <button
                   type="button"
@@ -1524,7 +1529,7 @@ export default function PurchaseOrders() {
                   className="inline-flex items-center gap-1.5 px-4 py-2 bg-rose-50 border border-rose-200 hover:bg-rose-100 text-rose-700 text-xs font-semibold rounded-xl transition-colors shadow-2xs"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>Delete PO</span>
+                  <span>Delete Purchase Bill</span>
                 </button>
               )}
 
@@ -1540,7 +1545,7 @@ export default function PurchaseOrders() {
                     <span>Saving...</span>
                   </>
                 ) : (
-                  <span>{editorMode === 'edit' ? 'Update Purchase Order' : 'Save'}</span>
+                  <span>{editorMode === 'edit' ? 'Update Purchase Bill' : 'Save Purchase Bill'}</span>
                 )}
               </button>
             </div>
@@ -1560,16 +1565,21 @@ export default function PurchaseOrders() {
                 <ClipboardList className="w-6 h-6 text-teal-600" />
                 <div>
                   <h3 className="text-base font-bold text-slate-800">
-                    {viewPo.po_number}
+                    {viewPo.bill_number || viewPo.po_number}
                   </h3>
-                  <p className="text-xs text-slate-500">{viewPo.vendor_name}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs text-slate-500">{viewPo.vendor_name}</p>
+                    {viewPo.bill_number && viewPo.po_number && viewPo.bill_number !== viewPo.po_number && (
+                      <span className="text-[10px] text-slate-400 font-mono">Ref: {viewPo.po_number}</span>
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={handlePrint}
-                  title="Print Purchase Order"
+                  title="Print Purchase Bill"
                   className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-200/60"
                 >
                   <Printer className="w-4 h-4" />
@@ -1589,7 +1599,7 @@ export default function PurchaseOrders() {
               {/* Meta Grid */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
                 <div>
-                  <span className="text-slate-400 block text-[10px] uppercase font-bold">PO Date</span>
+                  <span className="text-slate-400 block text-[10px] uppercase font-bold">Bill Date</span>
                   <span className="font-semibold text-slate-800">{viewPo.po_date}</span>
                 </div>
                 <div>
@@ -1606,12 +1616,10 @@ export default function PurchaseOrders() {
                   <span className="text-slate-400 block text-[10px] uppercase font-bold">State of Supply</span>
                   <span className="font-medium text-slate-700">{viewPo.state_of_supply || 'Gujarat'}</span>
                 </div>
-                {viewPo.bill_number && (
-                  <div>
-                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Bill Number</span>
-                    <span className="font-mono text-slate-700">{viewPo.bill_number}</span>
-                  </div>
-                )}
+                <div>
+                  <span className="text-slate-400 block text-[10px] uppercase font-bold">Bill Number</span>
+                  <span className="font-mono text-slate-800 font-semibold">{viewPo.bill_number || viewPo.po_number}</span>
+                </div>
                 <div>
                   <span className="text-slate-400 block text-[10px] uppercase font-bold">Payment Type</span>
                   <span className="capitalize font-medium text-slate-700">{viewPo.payment_type || 'Cash'}</span>
@@ -1753,7 +1761,7 @@ export default function PurchaseOrders() {
                       }}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 rounded-lg text-xs font-semibold"
                     >
-                      <Edit className="w-3.5 h-3.5" /> Edit PO
+                      <Edit className="w-3.5 h-3.5" /> Edit Purchase Bill
                     </button>
 
                     {/* Delete inside modal */}
@@ -1762,7 +1770,7 @@ export default function PurchaseOrders() {
                       onClick={() => handleDelete(viewPo)}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold"
                     >
-                      <Trash2 className="w-3.5 h-3.5" /> Delete PO
+                      <Trash2 className="w-3.5 h-3.5" /> Delete Purchase Bill
                     </button>
 
                     {/* Convert inside modal */}
@@ -1771,7 +1779,7 @@ export default function PurchaseOrders() {
                       onClick={() => openConvert(viewPo)}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold"
                     >
-                      <ArrowRightCircle className="w-3.5 h-3.5" /> Convert to Bill
+                      <ArrowRightCircle className="w-3.5 h-3.5" /> Book to Expenses
                     </button>
                   </>
                 )}
@@ -1790,14 +1798,14 @@ export default function PurchaseOrders() {
       )}
 
       {/* ──────────────────────────────────────────────────────────────────────── */}
-      {/* ─── CONVERT TO BILL MODAL ─────────────────────────────────────────── */}
+      {/* ─── BOOK TO EXPENSES (CONVERT TO BILL) MODAL ───────────────────────── */}
       {/* ──────────────────────────────────────────────────────────────────────── */}
       {convertModal.open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-emerald-50">
               <h3 className="text-base font-bold text-emerald-800">
-                Convert {convertModal.po?.po_number} to a Bill
+                Book {convertModal.po?.bill_number || convertModal.po?.po_number} to Expenses
               </h3>
               <button
                 onClick={() => setConvertModal({ ...convertModal, open: false })}
@@ -1850,7 +1858,7 @@ export default function PurchaseOrders() {
                   disabled={converting}
                   className="px-5 py-2 text-xs font-bold text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 shadow-sm disabled:opacity-50"
                 >
-                  {converting ? 'Converting...' : 'Convert to Bill'}
+                  {converting ? 'Booking...' : 'Book to Expenses'}
                 </button>
               </div>
             </form>

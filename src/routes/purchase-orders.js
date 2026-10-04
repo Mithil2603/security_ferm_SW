@@ -68,15 +68,14 @@ function getFY(dateStr) {
 
 async function nextPoNumber(poDate) {
   const fy = getFY(poDate || new Date());
-  // MAX of the numeric suffix, not COUNT(*) — a COUNT collides with an
-  // existing number as soon as any earlier PO in the year is deleted.
+  // MAX of numeric sequence across both PB- and legacy PO- prefixes
   const maxRes = await query(
     `SELECT MAX(CAST(SUBSTRING_INDEX(po_number, '-', -1) AS UNSIGNED)) as max_seq
-     FROM purchase_orders WHERE po_number LIKE $1`,
-    [`PO-${fy}-%`]
+     FROM purchase_orders WHERE po_number LIKE $1 OR po_number LIKE $2`,
+    [`PB-${fy}-%`, `PO-${fy}-%`]
   );
   const next = (parseInt(maxRes.rows[0].max_seq) || 0) + 1;
-  return `PO-${fy}-${String(next).padStart(4, '0')}`;
+  return `PB-${fy}-${String(next).padStart(4, '0')}`;
 }
 
 // Self-healing migration check for Vyapar-style enhancement columns
@@ -114,6 +113,12 @@ async function ensureColumns() {
         try { await query(item.sql); } catch (_) {}
       }
     }
+
+    // Auto-migrate legacy PO- identifiers to PB- (Purchase Bill) and ensure bill_number is populated
+    try {
+      await query(`UPDATE purchase_orders SET po_number = REPLACE(po_number, 'PO-', 'PB-') WHERE po_number LIKE 'PO-%'`);
+      await query(`UPDATE purchase_orders SET bill_number = po_number WHERE bill_number IS NULL OR bill_number = ''`);
+    } catch (_) {}
   } catch (_) {}
 }
 
@@ -221,7 +226,7 @@ router.get('/', async (req, res) => {
     let pc = 1;
 
     if (search) {
-      conditions.push(`(po.po_number LIKE $${pc} OR v.name LIKE $${pc})`);
+      conditions.push(`(po.po_number LIKE $${pc} OR po.bill_number LIKE $${pc} OR v.name LIKE $${pc})`);
       params.push(`%${search}%`); pc++;
     }
     if (status) { conditions.push(`po.status = $${pc}`); params.push(status); pc++; }
@@ -253,7 +258,7 @@ router.get('/', async (req, res) => {
   } catch (error) {
     logError(error, req, { feature: 'purchase-orders' });
     logger.error('List purchase orders error:', error);
-    res.status(500).json({ success: false, message: 'Failed to fetch purchase orders' });
+    res.status(500).json({ success: false, message: 'Failed to fetch purchase bills' });
   }
 });
 
@@ -265,13 +270,13 @@ router.get('/:id', async (req, res) => {
        FROM purchase_orders po JOIN vendors v ON po.vendor_id = v.id WHERE po.id = $1`,
       [req.params.id]
     );
-    if (poRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase order not found' });
+    if (poRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase bill not found' });
     const items = await query(`SELECT * FROM purchase_order_items WHERE purchase_order_id = $1 ORDER BY id`, [req.params.id]);
     res.json({ success: true, data: { ...poRes.rows[0], items: items.rows } });
   } catch (error) {
     logError(error, req, { feature: 'purchase-orders' });
     logger.error('Get purchase order error:', error);
-    res.status(500).json({ success: false, message: 'Failed to fetch purchase order' });
+    res.status(500).json({ success: false, message: 'Failed to fetch purchase bill' });
   }
 });
 
@@ -289,7 +294,7 @@ router.post('/', uploadAttachment, async (req, res) => {
     const items = parseItems(req.body);
 
     if (!vendor_id || !po_date) {
-      return res.status(400).json({ success: false, message: 'Vendor and PO date are required' });
+      return res.status(400).json({ success: false, message: 'Vendor and bill date are required' });
     }
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ success: false, message: 'At least one line item is required' });
@@ -305,6 +310,7 @@ router.post('/', uploadAttachment, async (req, res) => {
 
     const totals = computeTotals(items, tax_type, tax_rate, round_off);
     const poNumber = await nextPoNumber(po_date);
+    const assignedBillNumber = (bill_number && String(bill_number).trim()) ? String(bill_number).trim() : poNumber;
     const attachment_url = req.file ? `/uploads/${req.file.filename}` : null;
 
     const poResult = await query(
@@ -315,7 +321,7 @@ router.post('/', uploadAttachment, async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
        RETURNING *`,
       [
-        poNumber, vendor_id, po_date, bill_number || null, state_of_supply || null,
+        poNumber, vendor_id, po_date, assignedBillNumber, state_of_supply || null,
         payment_type || 'cash', payment_details || null, terms_conditions || null,
         totals.subtotal, totals.tax_type, tax_rate || 0,
         totals.cgst_amount, totals.sgst_amount, totals.igst_amount,
@@ -340,11 +346,11 @@ router.post('/', uploadAttachment, async (req, res) => {
     }
 
     const itemsResult = await query(`SELECT * FROM purchase_order_items WHERE purchase_order_id = $1 ORDER BY id`, [po.id]);
-    res.status(201).json({ success: true, data: { ...po, items: itemsResult.rows }, message: 'Purchase order created successfully' });
+    res.status(201).json({ success: true, data: { ...po, items: itemsResult.rows }, message: 'Purchase bill created successfully' });
   } catch (error) {
     logError(error, req, { feature: 'purchase-orders' });
     logger.error('Create purchase order error:', error);
-    res.status(500).json({ success: false, message: 'Failed to create purchase order' });
+    res.status(500).json({ success: false, message: 'Failed to create purchase bill' });
   }
 });
 
@@ -355,9 +361,9 @@ router.put('/:id', uploadAttachment, async (req, res) => {
   try {
     await ensureColumns();
     const existing = await query('SELECT * FROM purchase_orders WHERE id = $1', [req.params.id]);
-    if (existing.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase order not found' });
+    if (existing.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase bill not found' });
     if (existing.rows[0].status !== 'draft') {
-      return res.status(400).json({ success: false, message: 'Only draft purchase orders can be edited — this one has already been billed or cancelled' });
+      return res.status(400).json({ success: false, message: 'Only draft purchase bills can be edited — this one has already been billed or cancelled' });
     }
 
     const {
@@ -377,6 +383,9 @@ router.put('/:id', uploadAttachment, async (req, res) => {
     }
 
     const totals = computeTotals(items, tax_type, tax_rate, round_off);
+    const assignedBillNumber = (bill_number !== undefined && String(bill_number).trim())
+      ? String(bill_number).trim()
+      : (existing.rows[0].bill_number || existing.rows[0].po_number);
 
     let newAttachmentUrl = existing.rows[0].attachment_url;
     if (req.file) {
@@ -398,7 +407,7 @@ router.put('/:id', uploadAttachment, async (req, res) => {
       [
         vendor_id || existing.rows[0].vendor_id,
         po_date || existing.rows[0].po_date,
-        bill_number !== undefined ? bill_number : existing.rows[0].bill_number,
+        assignedBillNumber,
         state_of_supply !== undefined ? state_of_supply : existing.rows[0].state_of_supply,
         payment_type !== undefined ? payment_type : existing.rows[0].payment_type,
         payment_details !== undefined ? payment_details : existing.rows[0].payment_details,
@@ -432,11 +441,11 @@ router.put('/:id', uploadAttachment, async (req, res) => {
       [req.params.id]
     );
     const itemsResult = await query(`SELECT * FROM purchase_order_items WHERE purchase_order_id = $1 ORDER BY id`, [req.params.id]);
-    res.json({ success: true, data: { ...updated.rows[0], items: itemsResult.rows }, message: 'Purchase order updated successfully' });
+    res.json({ success: true, data: { ...updated.rows[0], items: itemsResult.rows }, message: 'Purchase bill updated successfully' });
   } catch (error) {
     logError(error, req, { feature: 'purchase-orders' });
     logger.error('Update purchase order error:', error);
-    res.status(500).json({ success: false, message: 'Failed to update purchase order' });
+    res.status(500).json({ success: false, message: 'Failed to update purchase bill' });
   }
 });
 
@@ -444,24 +453,23 @@ router.put('/:id', uploadAttachment, async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const existing = await query('SELECT status FROM purchase_orders WHERE id = $1', [req.params.id]);
-    if (existing.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase order not found' });
+    if (existing.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase bill not found' });
     if (existing.rows[0].status === 'billed') {
-      return res.status(400).json({ success: false, message: 'This purchase order has already been billed and cannot be deleted' });
+      return res.status(400).json({ success: false, message: 'This purchase bill has already been billed and cannot be deleted' });
     }
     await query('DELETE FROM purchase_orders WHERE id = $1', [req.params.id]);
-    res.json({ success: true, message: 'Purchase order deleted successfully' });
+    res.json({ success: true, message: 'Purchase bill deleted successfully' });
   } catch (error) {
     logError(error, req, { feature: 'purchase-orders' });
     logger.error('Delete purchase order error:', error);
-    res.status(500).json({ success: false, message: 'Failed to delete purchase order' });
+    res.status(500).json({ success: false, message: 'Failed to delete purchase bill' });
   }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /api/purchase-orders/:id/convert-to-bill — the integration point: turns
-// this PO into a real `expenses` row so Vendor Payments, Vendor Ledger, GST
-// Bifurcation, and Financial Reports all pick it up exactly like any other
-// vendor bill, with zero special-casing anywhere else in the app.
+// POST /api/purchase-orders/:id/convert-to-bill — turns this Purchase Bill
+// into a real `expenses` row so Vendor Payments, Vendor Ledger, GST
+// Bifurcation, and Financial Reports all pick it up.
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/:id/convert-to-bill', async (req, res) => {
   try {
@@ -469,15 +477,16 @@ router.post('/:id/convert-to-bill', async (req, res) => {
       `SELECT po.*, v.name as vendor_name FROM purchase_orders po JOIN vendors v ON po.vendor_id = v.id WHERE po.id = $1`,
       [req.params.id]
     );
-    if (poRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase order not found' });
+    if (poRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase bill not found' });
     const po = poRes.rows[0];
-    if (po.status === 'billed') return res.status(400).json({ success: false, message: 'This purchase order has already been billed' });
-    if (po.status === 'cancelled') return res.status(400).json({ success: false, message: 'A cancelled purchase order cannot be billed' });
+    if (po.status === 'billed') return res.status(400).json({ success: false, message: 'This purchase bill has already been billed' });
+    if (po.status === 'cancelled') return res.status(400).json({ success: false, message: 'A cancelled purchase bill cannot be billed' });
 
     const items = await query('SELECT description FROM purchase_order_items WHERE purchase_order_id = $1', [po.id]);
+    const billRef = po.bill_number || po.po_number;
     const description = items.rows.length === 1
       ? items.rows[0].description
-      : `${items.rows[0]?.description || 'Purchase'} + ${items.rows.length - 1} more item(s) (PO ${po.po_number})`;
+      : `${items.rows[0]?.description || 'Purchase'} + ${items.rows.length - 1} more item(s) (Bill ${billRef})`;
 
     const { expense_date, payment_method } = req.body;
 
@@ -486,7 +495,7 @@ router.post('/:id/convert-to-bill', async (req, res) => {
         tax_type, tax_rate, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable, tds_rate)
        VALUES ($1,'purchase_order',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
       [expense_date || po.po_date, description, po.total_amount, payment_method || 'bank_transfer', po.vendor_id,
-       `Converted from Purchase Order ${po.po_number}`, req.user.userId,
+       `Converted from Purchase Bill ${billRef}`, req.user.userId,
        po.tax_type, po.tax_rate, po.cgst_amount, po.sgst_amount, po.igst_amount, po.is_rcm_applicable, po.tds_rate || 0]
     );
     const expense = expenseResult.rows[0];
@@ -496,11 +505,11 @@ router.post('/:id/convert-to-bill', async (req, res) => {
       [expense.id, po.id]
     );
 
-    res.json({ success: true, data: { purchase_order_id: po.id, expense }, message: `Purchase order billed — now visible as an expense ready for Vendor Payments` });
+    res.json({ success: true, data: { purchase_order_id: po.id, expense }, message: `Purchase bill booked — now visible as an expense ready for Vendor Payments` });
   } catch (error) {
     logError(error, req, { feature: 'purchase-orders' });
     logger.error('Convert purchase order to bill error:', error);
-    res.status(500).json({ success: false, message: 'Failed to convert purchase order to a bill' });
+    res.status(500).json({ success: false, message: 'Failed to convert purchase bill to an expense' });
   }
 });
 
@@ -508,16 +517,16 @@ router.post('/:id/convert-to-bill', async (req, res) => {
 router.post('/:id/cancel', async (req, res) => {
   try {
     const existing = await query('SELECT status FROM purchase_orders WHERE id = $1', [req.params.id]);
-    if (existing.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase order not found' });
+    if (existing.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase bill not found' });
     if (existing.rows[0].status === 'billed') {
-      return res.status(400).json({ success: false, message: 'This purchase order has already been billed and cannot be cancelled' });
+      return res.status(400).json({ success: false, message: 'This purchase bill has already been billed and cannot be cancelled' });
     }
     await query(`UPDATE purchase_orders SET status='cancelled', updated_at=CURRENT_TIMESTAMP WHERE id=$1`, [req.params.id]);
-    res.json({ success: true, message: 'Purchase order cancelled' });
+    res.json({ success: true, message: 'Purchase bill cancelled' });
   } catch (error) {
     logError(error, req, { feature: 'purchase-orders' });
     logger.error('Cancel purchase order error:', error);
-    res.status(500).json({ success: false, message: 'Failed to cancel purchase order' });
+    res.status(500).json({ success: false, message: 'Failed to cancel purchase bill' });
   }
 });
 

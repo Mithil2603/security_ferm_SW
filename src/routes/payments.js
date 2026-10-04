@@ -14,6 +14,13 @@ const {
   recordSalaryPayment,
   recordBankEntry,
   deleteClientReceipt,
+  deleteVendorPayment,
+  deleteSalaryPayment,
+  updateClientReceipt,
+  updateVendorPayment,
+  updateSalaryPayment,
+  updateBankEntry,
+  deleteBankEntry,
 } = require('../services/payments/paymentTransactionService');
 
 router.use(authMiddleware);
@@ -343,6 +350,36 @@ router.post('/bank-entry', async (req, res) => {
   }
 });
 
+router.put('/bank-entries/:id', async (req, res) => {
+  try {
+    const effectivePerms = getEffectivePermissions(req.user.role, req.user.permissions);
+    if (!effectivePerms.includes('*') && !effectivePerms.includes('manage_vouchers') && !effectivePerms.includes('edit_vouchers')) {
+      return res.status(403).json({ success: false, message: 'You do not have permission to edit bank entries' });
+    }
+    const updated = await updateBankEntry(req.params.id, req.body, req.user.userId);
+    res.json({ success: true, data: updated, message: 'Bank entry updated successfully' });
+  } catch (error) {
+    logError(error, req, { feature: 'payments' });
+    logger.error('Update bank entry error:', error);
+    res.status(400).json({ success: false, message: error.message || 'Failed to update bank entry' });
+  }
+});
+
+router.delete('/bank-entries/:id', async (req, res) => {
+  try {
+    const effectivePerms = getEffectivePermissions(req.user.role, req.user.permissions);
+    if (!effectivePerms.includes('*') && !effectivePerms.includes('manage_vouchers') && !effectivePerms.includes('delete_vouchers')) {
+      return res.status(403).json({ success: false, message: 'You do not have permission to delete bank entries' });
+    }
+    await deleteBankEntry(req.params.id, req.user.userId);
+    res.json({ success: true, message: 'Bank entry deleted successfully' });
+  } catch (error) {
+    logError(error, req, { feature: 'payments' });
+    logger.error('Delete bank entry error:', error);
+    res.status(400).json({ success: false, message: error.message || 'Failed to delete bank entry' });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/payments — record a payment for whichever tab
 // ─────────────────────────────────────────────────────────────────────────────
@@ -438,31 +475,109 @@ router.post('/', uploadAttachment, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DELETE /api/payments/:id — reverse a client receipt (invoice balance, legacy
-// payments row, tax detail, and the linked voucher) and remove the transaction.
-// Scoped to client_receipt only for now — vendor/salary reversal touch more
-// interdependent state (vendor_payments/expenses, payroll/salary_slips) and
-// weren't asked for here. The frontend handles the confirm + 5s undo window;
-// by the time this fires, the user has already confirmed and let it stand.
+// PUT /api/payments/:id — edit a payment transaction (client, vendor, or salary)
+// ─────────────────────────────────────────────────────────────────────────────
+router.put('/:id', uploadAttachment, async (req, res) => {
+  try {
+    const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1', [req.params.id]);
+    if (txRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Payment not found' });
+    const tx = txRes.rows[0];
+
+    const requiredPermission = TYPE_PERMISSION[tx.transaction_type];
+    const effectivePerms = getEffectivePermissions(req.user.role, req.user.permissions);
+    if (!effectivePerms.includes('*') && !effectivePerms.includes(requiredPermission)) {
+      return res.status(403).json({ success: false, message: 'You do not have permission to edit this payment' });
+    }
+
+    const attachment_url = req.file ? `/uploads/payment_attachments/${req.file.filename}` : (req.body.attachment_url !== undefined ? req.body.attachment_url : tx.attachment_url);
+
+    let result;
+    if (tx.transaction_type === 'client_receipt') {
+      result = await updateClientReceipt(
+        req.params.id,
+        {
+          amount: req.body.amount || req.body.amount_paid,
+          tds_deducted: req.body.tds_deducted !== undefined ? req.body.tds_deducted : req.body.tds_amount,
+          payment_date: req.body.payment_date,
+          payment_method: req.body.payment_method,
+          bank_account_id: req.body.bank_account_id,
+          transaction_reference: req.body.transaction_reference,
+          attachment_url,
+          notes: req.body.notes,
+        },
+        req.user.userId
+      );
+    } else if (tx.transaction_type === 'vendor_payment') {
+      result = await updateVendorPayment(
+        req.params.id,
+        {
+          amount: req.body.amount,
+          tds_amount: req.body.tds_amount !== undefined ? req.body.tds_amount : req.body.tds_deducted,
+          payment_date: req.body.payment_date,
+          payment_method: req.body.payment_method,
+          bank_account_id: req.body.bank_account_id,
+          transaction_reference: req.body.transaction_reference || req.body.reference_number,
+          attachment_url,
+          notes: req.body.notes,
+        },
+        req.user.userId
+      );
+    } else if (tx.transaction_type === 'salary_payment') {
+      result = await updateSalaryPayment(
+        req.params.id,
+        {
+          amount: req.body.amount,
+          payment_date: req.body.payment_date,
+          payment_method: req.body.payment_method,
+          bank_account_id: req.body.bank_account_id,
+          transaction_reference: req.body.transaction_reference,
+          attachment_url,
+          notes: req.body.notes,
+          employee_bank_snapshot: req.body.employee_bank_snapshot,
+        },
+        req.user.userId
+      );
+    }
+
+    res.json({ success: true, data: result, message: 'Payment updated successfully' });
+  } catch (error) {
+    logError(error, req, { feature: 'payments' });
+    logger.error('Update payment error:', error);
+    res.status(400).json({ success: false, message: error.message || 'Failed to update payment' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE /api/payments/:id — reverse and delete any payment transaction
+// (client receipt, vendor payment, or salary payment)
 // ─────────────────────────────────────────────────────────────────────────────
 router.delete('/:id', async (req, res) => {
   try {
     const txRes = await query('SELECT transaction_type FROM payment_transactions WHERE id = $1', [req.params.id]);
     if (txRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Payment not found' });
-    if (txRes.rows[0].transaction_type !== 'client_receipt') {
-      return res.status(400).json({ success: false, message: 'Only client receipts can be deleted from here' });
-    }
+    const tx = txRes.rows[0];
 
+    const requiredPermission = TYPE_PERMISSION[tx.transaction_type];
     const effectivePerms = getEffectivePermissions(req.user.role, req.user.permissions);
-    if (!effectivePerms.includes('*') && !effectivePerms.includes('manage_invoices')) {
+    if (!effectivePerms.includes('*') && !effectivePerms.includes(requiredPermission)) {
       return res.status(403).json({ success: false, message: 'You do not have permission to delete this payment' });
     }
 
-    const result = await deleteClientReceipt(req.params.id, req.user.userId);
-    res.json({ success: true, data: result, message: 'Client receipt deleted' });
+    let result;
+    if (tx.transaction_type === 'client_receipt') {
+      result = await deleteClientReceipt(req.params.id, req.user.userId);
+    } else if (tx.transaction_type === 'vendor_payment') {
+      result = await deleteVendorPayment(req.params.id, req.user.userId);
+    } else if (tx.transaction_type === 'salary_payment') {
+      result = await deleteSalaryPayment(req.params.id, req.user.userId);
+    } else {
+      return res.status(400).json({ success: false, message: 'Unsupported transaction type' });
+    }
+
+    res.json({ success: true, data: result, message: 'Payment deleted successfully' });
   } catch (error) {
     logError(error, req, { feature: 'payments' });
-    logger.error('Delete client receipt error:', error);
+    logger.error('Delete payment error:', error);
     res.status(400).json({ success: false, message: error.message || 'Failed to delete payment' });
   }
 });

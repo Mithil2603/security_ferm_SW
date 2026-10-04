@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { CreditCard, Users, Truck, UserSquare2, Landmark, Plus, Paperclip, X, ExternalLink, Download, Search, Trash2 } from 'lucide-react';
+import { CreditCard, Users, Truck, UserSquare2, Landmark, Plus, Paperclip, X, ExternalLink, Download, Search, Trash2, Edit2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { toast, confirmDialog } from '../context/ToastContext';
@@ -61,8 +61,25 @@ export default function Payments() {
   const [debouncedRegisterSearch, setDebouncedRegisterSearch] = useState('');
   const [registerPage, setRegisterPage] = useState(1);
   const [registerPagination, setRegisterPagination] = useState(null);
-  const [pendingDeletes, setPendingDeletes] = useState([]);
-  const pendingDeletesRef = useRef([]);
+  // Transaction Edit Modal state
+  const [editingTransaction, setEditingTransaction] = useState(null);
+  const [editForm, setEditForm] = useState({
+    amount: '',
+    tds_amount: '',
+    payment_date: '',
+    payment_method: 'bank_transfer',
+    bank_account_id: '',
+    transaction_reference: '',
+    notes: '',
+    employee_bank_snapshot: '',
+  });
+  const [editAttachment, setEditAttachment] = useState(null);
+  const [submittingEdit, setSubmittingEdit] = useState(false);
+
+  // Bank Entry Edit Modal state
+  const [editingBankEntry, setEditingBankEntry] = useState(null);
+  const [editBankForm, setEditBankForm] = useState(emptyBankForm);
+  const [submittingEditBank, setSubmittingEditBank] = useState(false);
 
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -166,55 +183,165 @@ export default function Payments() {
 
   const directionFor = (transactionType) => REGISTER_TYPES.find(t => t.value === transactionType)?.direction || 'debit';
 
-  // Client-receipt delete: confirm, then optimistically hide the row for 5
-  // seconds before the DELETE actually fires — clicking "Undo" within that
-  // window just clears the timer and restores the row, no API call ever made.
-  useEffect(() => {
-    pendingDeletesRef.current = pendingDeletes;
-  }, [pendingDeletes]);
-
-  useEffect(() => () => {
-    pendingDeletesRef.current.forEach(p => { clearTimeout(p.timeoutId); clearInterval(p.intervalId); });
-  }, []);
-
-  const finalizeDeleteReceipt = async (id) => {
-    const entry = pendingDeletesRef.current.find(p => p.id === id);
-    setPendingDeletes(prev => prev.filter(p => p.id !== id));
-    if (!entry) return;
-    clearInterval(entry.intervalId);
-    try {
-      await api.delete(`/payments/${id}`);
-      toast.success('Client receipt deleted');
-    } catch (err) {
-      toast.error(err.response?.data?.message || err.message || 'Failed to delete receipt — restoring it');
-      setRegister(prev => [entry.row, ...prev]);
-    }
-  };
-
-  const handleDeleteReceipt = async (row) => {
+  // Transaction Delete Handler (matches Purchase Bill UX with confirmDialog danger variant)
+  const handleDeleteTransaction = async (row) => {
+    const typeLabels = {
+      client_receipt: 'Client Receipt',
+      vendor_payment: 'Vendor Payment',
+      salary_payment: 'Salary Payment',
+    };
+    const label = typeLabels[row.transaction_type] || 'Payment';
+    const ref = row.invoice_number || row.expense_description || row.transaction_reference || 'this transaction';
     const confirmed = await confirmDialog({
-      title: 'Delete Client Receipt',
-      message: `Delete the ₹${parseFloat(row.amount).toLocaleString()} receipt from ${row.party_name || 'this client'} (${row.invoice_number || 'invoice'})? This reverses the invoice's payment status. You'll have 5 seconds to undo.`,
-      confirmText: 'Delete',
+      title: `Delete ${label}`,
+      message: `Are you sure you want to permanently delete this ${label} of ₹${parseFloat(row.amount).toLocaleString()} for ${row.party_name || 'party'} (${ref})? This will reverse the ledger and payment status. This cannot be undone.`,
+      confirmText: 'Delete Permanently',
       variant: 'danger',
     });
     if (!confirmed) return;
 
-    setRegister(prev => prev.filter(r => r.id !== row.id));
-    const intervalId = setInterval(() => {
-      setPendingDeletes(prev => prev.map(p => (p.id === row.id ? { ...p, secondsLeft: p.secondsLeft - 1 } : p)));
-    }, 1000);
-    const timeoutId = setTimeout(() => finalizeDeleteReceipt(row.id), 5000);
-    setPendingDeletes(prev => [...prev, { id: row.id, row, secondsLeft: 5, timeoutId, intervalId }]);
+    try {
+      await api.delete(`/payments/${row.id}`);
+      toast.success(`${label} deleted successfully`);
+      fetchRegister();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || `Failed to delete ${label}`);
+    }
   };
 
-  const handleUndoDeleteReceipt = (id) => {
-    const entry = pendingDeletesRef.current.find(p => p.id === id);
-    if (!entry) return;
-    clearTimeout(entry.timeoutId);
-    clearInterval(entry.intervalId);
-    setPendingDeletes(prev => prev.filter(p => p.id !== id));
-    setRegister(prev => [entry.row, ...prev].sort((a, b) => (a.payment_date < b.payment_date ? 1 : a.payment_date > b.payment_date ? -1 : b.id - a.id)));
+  // Transaction Edit Handlers
+  const handleStartEditTransaction = (row) => {
+    setEditingTransaction(row);
+    setEditForm({
+      amount: String(row.amount || ''),
+      tds_amount: String(row.tds_amount || ''),
+      payment_date: row.payment_date || '',
+      payment_method: row.payment_method || 'bank_transfer',
+      bank_account_id: row.bank_account_id ? String(row.bank_account_id) : '',
+      transaction_reference: row.transaction_reference || '',
+      notes: row.notes || '',
+      employee_bank_snapshot: row.employee_bank_snapshot || '',
+    });
+    setEditAttachment(null);
+  };
+
+  const handleEditSubmit = async (e) => {
+    e.preventDefault();
+    if (!editForm.amount || parseFloat(editForm.amount) <= 0) {
+      toast.error('Please enter a valid amount');
+      return;
+    }
+    setSubmittingEdit(true);
+    try {
+      const fd = new FormData();
+      fd.append('amount', editForm.amount);
+      fd.append('payment_date', editForm.payment_date);
+      fd.append('payment_method', editForm.payment_method);
+      fd.append('bank_account_id', editForm.bank_account_id);
+      fd.append('transaction_reference', editForm.transaction_reference);
+      fd.append('notes', editForm.notes);
+      if (editingTransaction.transaction_type === 'client_receipt') {
+        fd.append('tds_deducted', editForm.tds_amount || 0);
+      } else if (editingTransaction.transaction_type === 'vendor_payment') {
+        fd.append('tds_amount', editForm.tds_amount || 0);
+      } else if (editingTransaction.transaction_type === 'salary_payment') {
+        fd.append('employee_bank_snapshot', editForm.employee_bank_snapshot || '');
+      }
+      if (editAttachment) {
+        fd.append('attachment', editAttachment);
+      }
+
+      await api.put(`/payments/${editingTransaction.id}`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      const label = editingTransaction.transaction_type === 'client_receipt'
+        ? 'Client receipt'
+        : editingTransaction.transaction_type === 'vendor_payment'
+        ? 'Vendor payment'
+        : 'Salary payment';
+      toast.success(`${label} updated successfully`);
+      setEditingTransaction(null);
+      fetchRegister();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to update payment');
+    } finally {
+      setSubmittingEdit(false);
+    }
+  };
+
+  // Bank Entry Handlers
+  const handleStartEditBankEntry = (v) => {
+    let kind = 'bank_charge';
+    let bankAccountId = '';
+    let toAccountId = '';
+    if (v.voucher_type === 'contra') {
+      kind = 'transfer';
+      bankAccountId = v.credit_account_id ? String(v.credit_account_id) : '';
+      toAccountId = v.debit_account_id ? String(v.debit_account_id) : '';
+    } else {
+      if (v.debit_account_id) {
+        bankAccountId = String(v.debit_account_id);
+        kind = (v.narration && v.narration.toLowerCase().includes('other')) ? 'other_debit' : 'bank_charge';
+      } else if (v.credit_account_id) {
+        bankAccountId = String(v.credit_account_id);
+        kind = (v.narration && v.narration.toLowerCase().includes('interest')) ? 'interest_credited' : 'other_credit';
+      }
+    }
+    setEditingBankEntry(v);
+    setEditBankForm({
+      kind,
+      bank_account_id: bankAccountId,
+      to_account_id: toAccountId,
+      amount: String(v.amount || ''),
+      entry_date: v.voucher_date || '',
+      narration: v.narration || '',
+      transaction_ref: v.transaction_ref || '',
+    });
+  };
+
+  const handleEditBankSubmit = async (e) => {
+    e.preventDefault();
+    if (!editBankForm.amount || parseFloat(editBankForm.amount) <= 0) {
+      toast.error('Please enter a valid amount');
+      return;
+    }
+    if (editBankForm.kind === 'transfer' && (!editBankForm.bank_account_id || !editBankForm.to_account_id)) {
+      toast.error('Please select both a From and a To account');
+      return;
+    }
+    if (editBankForm.kind !== 'transfer' && !editBankForm.bank_account_id) {
+      toast.error('Please select a bank/cash account');
+      return;
+    }
+    setSubmittingEditBank(true);
+    try {
+      await api.put(`/payments/bank-entries/${editingBankEntry.id}`, editBankForm);
+      toast.success(`Bank entry ${editingBankEntry.voucher_number} updated successfully`);
+      setEditingBankEntry(null);
+      fetchBankEntries();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to update bank entry');
+    } finally {
+      setSubmittingEditBank(false);
+    }
+  };
+
+  const handleDeleteBankEntry = async (v) => {
+    const confirmed = await confirmDialog({
+      title: 'Delete Bank Entry',
+      message: `Are you sure you want to permanently delete bank entry ${v.voucher_number} of ₹${parseFloat(v.amount).toLocaleString()}? This will reverse the account balance adjustment. This cannot be undone.`,
+      confirmText: 'Delete Permanently',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    try {
+      await api.delete(`/payments/bank-entries/${v.id}`);
+      toast.success(`Bank entry ${v.voucher_number} deleted successfully`);
+      fetchBankEntries();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to delete bank entry');
+    }
   };
 
   const resetForm = () => {
@@ -883,12 +1010,23 @@ export default function Payments() {
                         </a>
                       ) : '—'}
                     </td>
-                    <td className="px-4 py-3 text-center">
-                      {row.transaction_type === 'client_receipt' ? (
-                        <button onClick={() => handleDeleteReceipt(row)} title="Delete receipt" className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg">
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
+                      <div className="flex items-center justify-center gap-1">
+                        <button
+                          onClick={() => handleStartEditTransaction(row)}
+                          title="Edit payment"
+                          className="p-1.5 text-slate-400 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition-colors"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteTransaction(row)}
+                          title="Delete payment"
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                        >
                           <Trash2 className="w-4 h-4" />
                         </button>
-                      ) : '—'}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -935,13 +1073,14 @@ export default function Payments() {
                   <th className="px-4 py-3 text-right text-xs font-bold text-slate-500 uppercase">Amount</th>
                   <th className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase">Narration</th>
                   <th className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase">Reference</th>
+                  <th className="px-4 py-3 text-center text-xs font-bold text-slate-500 uppercase">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {loadingBankEntries ? (
-                  <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-500">Loading...</td></tr>
+                  <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-500">Loading...</td></tr>
                 ) : bankEntries.length === 0 ? (
-                  <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-500">No bank entries recorded yet</td></tr>
+                  <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-500">No bank entries recorded yet</td></tr>
                 ) : bankEntries.map(v => (
                   <tr key={v.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3 text-sm text-slate-600 whitespace-nowrap">{v.voucher_date}</td>
@@ -952,6 +1091,24 @@ export default function Payments() {
                     <td className="px-4 py-3 text-sm font-bold text-slate-800 text-right">₹{parseFloat(v.amount).toLocaleString()}</td>
                     <td className="px-4 py-3 text-sm text-slate-500">{v.narration || '—'}</td>
                     <td className="px-4 py-3 text-sm text-slate-500">{v.transaction_ref || '—'}</td>
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
+                      <div className="flex items-center justify-center gap-1">
+                        <button
+                          onClick={() => handleStartEditBankEntry(v)}
+                          title="Edit bank entry"
+                          className="p-1.5 text-slate-400 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition-colors"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteBankEntry(v)}
+                          title="Delete bank entry"
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -960,16 +1117,325 @@ export default function Payments() {
         )}
       </div>
 
-      {pendingDeletes.length > 0 && (
-        <div className="fixed bottom-6 right-6 z-50 space-y-2">
-          {pendingDeletes.map(p => (
-            <div key={p.id} className="flex items-center gap-3 bg-slate-900 text-white pl-4 pr-3 py-3 rounded-xl shadow-xl text-sm animate-fade-in">
-              <span>Receipt from {p.row.party_name || 'client'} deleted ({p.secondsLeft}s)</span>
-              <button onClick={() => handleUndoDeleteReceipt(p.id)} className="font-semibold text-teal-300 hover:text-teal-200 px-2 py-1 rounded-lg hover:bg-white/10">
-                Undo
+      {/* Edit Transaction Modal (Client Receipt, Vendor Payment, Salary Payment) */}
+      {editingTransaction && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full border border-slate-200 overflow-hidden my-8">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
+              <div>
+                <h3 className="text-lg font-bold text-slate-800">
+                  Edit {editingTransaction.transaction_type === 'client_receipt' ? 'Client Receipt' : editingTransaction.transaction_type === 'vendor_payment' ? 'Vendor Payment' : 'Salary Payment'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Party: <span className="font-semibold text-slate-700">{editingTransaction.party_name || '—'}</span>
+                  {(editingTransaction.invoice_number || editingTransaction.expense_description) && (
+                    <> • Ref: <span className="font-semibold text-slate-700">{editingTransaction.invoice_number || editingTransaction.expense_description}</span></>
+                  )}
+                </p>
+              </div>
+              <button
+                onClick={() => setEditingTransaction(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200/60 transition-colors"
+              >
+                <X className="w-5 h-5" />
               </button>
             </div>
-          ))}
+
+            <form onSubmit={handleEditSubmit} className="p-6 space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Payment Date *</label>
+                  <input
+                    type="date"
+                    required
+                    value={editForm.payment_date}
+                    onChange={e => setEditForm(f => ({ ...f, payment_date: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Payment Method *</label>
+                  <select
+                    value={editForm.payment_method}
+                    onChange={e => setEditForm(f => ({ ...f, payment_method: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                  >
+                    <option value="bank_transfer">Bank Transfer</option>
+                    <option value="cash">Cash</option>
+                    <option value="cheque">Cheque</option>
+                    <option value="upi">UPI</option>
+                    <option value="card">Card</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Amount (₹) *</label>
+                  <input
+                    type="number"
+                    required
+                    min="0.01"
+                    step="0.01"
+                    value={editForm.amount}
+                    onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+                {editingTransaction.transaction_type !== 'salary_payment' && (
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">TDS Amount (₹)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editForm.tds_amount}
+                      onChange={e => setEditForm(f => ({ ...f, tds_amount: e.target.value }))}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Bank / Cash Account *</label>
+                  <select
+                    required
+                    value={editForm.bank_account_id}
+                    onChange={e => setEditForm(f => ({ ...f, bank_account_id: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                  >
+                    <option value="">-- Select Account --</option>
+                    {bankAccounts.map(a => (
+                      <option key={a.id} value={a.id}>
+                        {a.account_name} ({a.bank_name || (a.account_type === 'cash' ? 'Cash' : a.account_type)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Reference No.</label>
+                  <input
+                    type="text"
+                    value={editForm.transaction_reference}
+                    onChange={e => setEditForm(f => ({ ...f, transaction_reference: e.target.value }))}
+                    placeholder="Cheque / UTR / UPI ref"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+              </div>
+
+              {editingTransaction.transaction_type === 'salary_payment' && (
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Employee Bank Details Snapshot</label>
+                  <input
+                    type="text"
+                    value={editForm.employee_bank_snapshot}
+                    onChange={e => setEditForm(f => ({ ...f, employee_bank_snapshot: e.target.value }))}
+                    placeholder="Bank Name, A/C number, IFSC code"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Notes</label>
+                <textarea
+                  rows={2}
+                  value={editForm.notes}
+                  onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))}
+                  placeholder="Add payment notes..."
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Attachment</label>
+                {editingTransaction.attachment_url && !editAttachment && (
+                  <div className="flex items-center justify-between p-2 mb-2 bg-slate-50 border border-slate-200 rounded-lg text-xs">
+                    <span className="text-slate-600 truncate">Current receipt file attached</span>
+                    <a
+                      href={`${getServerBaseUrl()}${editingTransaction.attachment_url}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-teal-600 hover:text-teal-800 font-semibold"
+                    >
+                      View
+                    </a>
+                  </div>
+                )}
+                <label className="flex items-center gap-2 cursor-pointer bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">
+                  <Paperclip className="w-4 h-4" />
+                  {editAttachment ? editAttachment.name : (editingTransaction.attachment_url ? 'Replace file' : 'Choose file')}
+                  <input type="file" accept="image/*,.pdf" className="hidden" onChange={e => setEditAttachment(e.target.files[0])} />
+                </label>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-3 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setEditingTransaction(null)}
+                  className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingEdit}
+                  className="px-5 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 shadow-sm disabled:opacity-50 transition-colors"
+                >
+                  {submittingEdit ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Bank Entry Modal */}
+      {editingBankEntry && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full border border-slate-200 overflow-hidden my-8">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
+              <div>
+                <h3 className="text-lg font-bold text-slate-800">
+                  Edit Bank Entry
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Voucher: <span className="font-mono font-semibold text-slate-700">{editingBankEntry.voucher_number}</span>
+                </p>
+              </div>
+              <button
+                onClick={() => setEditingBankEntry(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200/60 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditBankSubmit} className="p-6 space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Entry Type *</label>
+                  <select
+                    required
+                    value={editBankForm.kind}
+                    onChange={e => setEditBankForm(f => ({ ...f, kind: e.target.value, to_account_id: '' }))}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                  >
+                    {BANK_ENTRY_KINDS.map(k => (
+                      <option key={k.value} value={k.value}>{k.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Date *</label>
+                  <input
+                    type="date"
+                    required
+                    value={editBankForm.entry_date}
+                    onChange={e => setEditBankForm(f => ({ ...f, entry_date: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    {editBankForm.kind === 'transfer' ? 'From Account *' : 'Bank / Cash Account *'}
+                  </label>
+                  <select
+                    required
+                    value={editBankForm.bank_account_id}
+                    onChange={e => setEditBankForm(f => ({ ...f, bank_account_id: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                  >
+                    <option value="">-- Select Account --</option>
+                    {bankAccounts.map(b => (
+                      <option key={b.id} value={b.id}>
+                        {b.account_name} ({b.bank_name || (b.account_type === 'cash' ? 'Cash' : b.account_type)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {editBankForm.kind === 'transfer' && (
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">To Account *</label>
+                    <select
+                      required
+                      value={editBankForm.to_account_id}
+                      onChange={e => setEditBankForm(f => ({ ...f, to_account_id: e.target.value }))}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                    >
+                      <option value="">-- Select Account --</option>
+                      {bankAccounts
+                        .filter(b => String(b.id) !== String(editBankForm.bank_account_id))
+                        .map(b => (
+                          <option key={b.id} value={b.id}>
+                            {b.account_name} ({b.bank_name || (b.account_type === 'cash' ? 'Cash' : b.account_type)})
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Amount (₹) *</label>
+                  <input
+                    type="number"
+                    required
+                    min="0.01"
+                    step="0.01"
+                    value={editBankForm.amount}
+                    onChange={e => setEditBankForm(f => ({ ...f, amount: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Reference No.</label>
+                  <input
+                    type="text"
+                    value={editBankForm.transaction_ref}
+                    onChange={e => setEditBankForm(f => ({ ...f, transaction_ref: e.target.value }))}
+                    placeholder="Cheque / UTR / statement ref"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Narration</label>
+                <input
+                  type="text"
+                  value={editBankForm.narration}
+                  onChange={e => setEditBankForm(f => ({ ...f, narration: e.target.value }))}
+                  placeholder="e.g. Monthly account maintenance charge"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-3 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setEditingBankEntry(null)}
+                  className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingEditBank}
+                  className="px-5 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 shadow-sm disabled:opacity-50 transition-colors"
+                >
+                  {submittingEditBank ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

@@ -91,18 +91,29 @@ function applyRoundOff(rawAmount, roundOffEnabled) {
 // exports — so a user can specify GST either as a % or as a ₹ amount,
 // whichever is more convenient for that particular invoice.
 function computeGstSplit(taxableValue, tax_type, tax_rate, manualAmounts) {
-  if (manualAmounts && (manualAmounts.cgst_amount !== undefined || manualAmounts.sgst_amount !== undefined || manualAmounts.igst_amount !== undefined)) {
+  if (
+    manualAmounts &&
+    (manualAmounts.cgst_amount !== undefined ||
+      manualAmounts.sgst_amount !== undefined ||
+      manualAmounts.igst_amount !== undefined)
+  ) {
     const cgst = parseFloat(manualAmounts.cgst_amount) || 0;
     const sgst = parseFloat(manualAmounts.sgst_amount) || 0;
     const igst = parseFloat(manualAmounts.igst_amount) || 0;
     const totalGst = cgst + sgst + igst;
-    const effectiveRate = taxableValue > 0 ? parseFloat(((totalGst / taxableValue) * 100).toFixed(2)) : 0;
+    const effectiveRate =
+      taxableValue > 0
+        ? parseFloat(((totalGst / taxableValue) * 100).toFixed(2))
+        : 0;
     return { cgst, sgst, igst, tax_rate: effectiveRate };
   }
 
   const rate = parseFloat(tax_rate);
-  const effectiveRate = tax_type === "none" ? 0 : (isNaN(rate) || rate < 0 ? 18 : rate);
-  let cgst = 0, sgst = 0, igst = 0;
+  const effectiveRate =
+    tax_type === "none" ? 0 : isNaN(rate) || rate < 0 ? 18 : rate;
+  let cgst = 0,
+    sgst = 0,
+    igst = 0;
   if (tax_type === "cgst_sgst") {
     cgst = parseFloat(((taxableValue * effectiveRate) / 200).toFixed(2));
     sgst = parseFloat(((taxableValue * effectiveRate) / 200).toFixed(2));
@@ -176,14 +187,27 @@ function calculateInvoiceAmounts(
   let sgst_amount = new Decimal(0);
   let igst_amount = new Decimal(0);
   const rateDec = new Decimal(
-    tax_type === "none" ? 0 : (isNaN(parseFloat(tax_rate)) || parseFloat(tax_rate) < 0 ? 18 : tax_rate),
+    tax_type === "none"
+      ? 0
+      : isNaN(parseFloat(tax_rate)) || parseFloat(tax_rate) < 0
+        ? 18
+        : tax_rate,
   );
 
   if (tax_type === "cgst_sgst") {
-    cgst_amount = final_taxable.times(rateDec).dividedBy(200).toDecimalPlaces(2);
-    sgst_amount = final_taxable.times(rateDec).dividedBy(200).toDecimalPlaces(2);
+    cgst_amount = final_taxable
+      .times(rateDec)
+      .dividedBy(200)
+      .toDecimalPlaces(2);
+    sgst_amount = final_taxable
+      .times(rateDec)
+      .dividedBy(200)
+      .toDecimalPlaces(2);
   } else if (tax_type === "igst") {
-    igst_amount = final_taxable.times(rateDec).dividedBy(100).toDecimalPlaces(2);
+    igst_amount = final_taxable
+      .times(rateDec)
+      .dividedBy(100)
+      .toDecimalPlaces(2);
   }
 
   let total_amount = final_taxable;
@@ -400,8 +424,14 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
     // A caller may specify GST either as a % rate (the common case) or as
     // exact ₹ amounts directly — whichever is more convenient for that bill.
     const manualGstAmounts =
-      manualCgst !== undefined || manualSgst !== undefined || manualIgst !== undefined
-        ? { cgst_amount: manualCgst, sgst_amount: manualSgst, igst_amount: manualIgst }
+      manualCgst !== undefined ||
+      manualSgst !== undefined ||
+      manualIgst !== undefined
+        ? {
+            cgst_amount: manualCgst,
+            sgst_amount: manualSgst,
+            igst_amount: manualIgst,
+          }
         : null;
 
     if (!client_id || !billing_period_start || !billing_period_end) {
@@ -461,7 +491,12 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
 
       const disc = parseFloat(discount_amount) || 0;
       const taxable = Math.max(0, sub - disc);
-      const { cgst, sgst, igst, tax_rate: effRate } = computeGstSplit(taxable, tax_type, tax_rate, manualGstAmounts);
+      const {
+        cgst,
+        sgst,
+        igst,
+        tax_rate: effRate,
+      } = computeGstSplit(taxable, tax_type, tax_rate, manualGstAmounts);
 
       let total = taxable;
       if (!is_rcm_applicable) {
@@ -504,7 +539,12 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
         const customSub = parseFloat(parseFloat(amount_subtotal).toFixed(2));
         const disc = parseFloat(discount_amount) || 0;
         const taxable = Math.max(0, customSub - disc);
-        const { cgst, sgst, igst, tax_rate: effRate } = computeGstSplit(taxable, tax_type, tax_rate, manualGstAmounts);
+        const {
+          cgst,
+          sgst,
+          igst,
+          tax_rate: effRate,
+        } = computeGstSplit(taxable, tax_type, tax_rate, manualGstAmounts);
         let total = taxable;
         if (!is_rcm_applicable) {
           total += cgst + sgst + igst;
@@ -542,14 +582,34 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
           tax_rate,
         );
         if (manualGstAmounts) {
-          const { cgst, sgst, igst, tax_rate: effRate } = computeGstSplit(
-            amounts.amount_subtotal, tax_type, tax_rate, manualGstAmounts,
+          const {
+            cgst,
+            sgst,
+            igst,
+            tax_rate: effRate,
+          } = computeGstSplit(
+            amounts.amount_subtotal,
+            tax_type,
+            tax_rate,
+            manualGstAmounts,
           );
           let total = amounts.amount_subtotal;
           if (!is_rcm_applicable) total += cgst + sgst + igst;
           total = parseFloat(total.toFixed(2));
-          const { round_off, final_amount } = applyRoundOff(total, roundOffEnabled);
-          amounts = { ...amounts, cgst_amount: cgst, sgst_amount: sgst, igst_amount: igst, tax_rate: effRate, total_amount: total, round_off, final_amount };
+          const { round_off, final_amount } = applyRoundOff(
+            total,
+            roundOffEnabled,
+          );
+          amounts = {
+            ...amounts,
+            cgst_amount: cgst,
+            sgst_amount: sgst,
+            igst_amount: igst,
+            tax_rate: effRate,
+            total_amount: total,
+            round_off,
+            final_amount,
+          };
         }
       }
       isAdhocVal = 0;
@@ -578,7 +638,12 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
         const sub = parseFloat(itemsSubtotal.toFixed(2));
         const disc = parseFloat(discount_amount) || 0;
         const taxable = Math.max(0, sub - disc);
-        const { cgst, sgst, igst, tax_rate: effRate } = computeGstSplit(taxable, tax_type, tax_rate, manualGstAmounts);
+        const {
+          cgst,
+          sgst,
+          igst,
+          tax_rate: effRate,
+        } = computeGstSplit(taxable, tax_type, tax_rate, manualGstAmounts);
         let total = taxable;
         if (!is_rcm_applicable) {
           total += cgst + sgst + igst;
@@ -1273,8 +1338,14 @@ router.post("/event", async (req, res) => {
       billing_period_end,
     } = req.body;
     const manualGstAmounts =
-      manualCgst !== undefined || manualSgst !== undefined || manualIgst !== undefined
-        ? { cgst_amount: manualCgst, sgst_amount: manualSgst, igst_amount: manualIgst }
+      manualCgst !== undefined ||
+      manualSgst !== undefined ||
+      manualIgst !== undefined
+        ? {
+            cgst_amount: manualCgst,
+            sgst_amount: manualSgst,
+            igst_amount: manualIgst,
+          }
         : null;
 
     let client_id = reqClientId;
@@ -1336,8 +1407,12 @@ router.post("/event", async (req, res) => {
       });
     }
 
-    const { cgst: cgst_amount, sgst: sgst_amount, igst: igst_amount, tax_rate: effectiveTaxRate } =
-      computeGstSplit(amount_subtotal, tax_type, tax_rate, manualGstAmounts);
+    const {
+      cgst: cgst_amount,
+      sgst: sgst_amount,
+      igst: igst_amount,
+      tax_rate: effectiveTaxRate,
+    } = computeGstSplit(amount_subtotal, tax_type, tax_rate, manualGstAmounts);
 
     let total_amount = amount_subtotal;
     if (!is_rcm_applicable) {
@@ -1520,8 +1595,14 @@ router.put("/:id", async (req, res) => {
       status: new_status,
     } = req.body;
     const manualGstAmounts =
-      manualCgst !== undefined || manualSgst !== undefined || manualIgst !== undefined
-        ? { cgst_amount: manualCgst, sgst_amount: manualSgst, igst_amount: manualIgst }
+      manualCgst !== undefined ||
+      manualSgst !== undefined ||
+      manualIgst !== undefined
+        ? {
+            cgst_amount: manualCgst,
+            sgst_amount: manualSgst,
+            igst_amount: manualIgst,
+          }
         : null;
 
     const invoiceCheck = await query("SELECT * FROM invoices WHERE id = $1", [
@@ -1586,11 +1667,21 @@ router.put("/:id", async (req, res) => {
         : invoice.discount_amount || 0,
     );
     const taxType = tax_type || invoice.tax_type;
-    const effectiveTaxRateInput = tax_rate !== undefined && tax_rate !== "" ? tax_rate : invoice.tax_rate;
+    const effectiveTaxRateInput =
+      tax_rate !== undefined && tax_rate !== "" ? tax_rate : invoice.tax_rate;
 
     const taxable_value = Math.max(0, sub - disc);
-    const { cgst: cgst_amount, sgst: sgst_amount, igst: igst_amount, tax_rate: newTaxRate } =
-      computeGstSplit(taxable_value, taxType, effectiveTaxRateInput, manualGstAmounts);
+    const {
+      cgst: cgst_amount,
+      sgst: sgst_amount,
+      igst: igst_amount,
+      tax_rate: newTaxRate,
+    } = computeGstSplit(
+      taxable_value,
+      taxType,
+      effectiveTaxRateInput,
+      manualGstAmounts,
+    );
 
     const applyRcm =
       is_rcm_applicable === undefined

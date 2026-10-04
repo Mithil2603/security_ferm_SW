@@ -25,6 +25,11 @@ api.interceptors.request.use((config) => {
     config.url = config.url.substring(1);
   }
 
+  // If payload is FormData, let browser/axios set multipart boundary automatically
+  if (config.data instanceof FormData) {
+    delete config.headers['Content-Type'];
+  }
+
   return config;
 });
 
