@@ -3,6 +3,8 @@ import { X, FileText, Calendar, ShieldCheck, CheckCircle2, UserCheck, UserPlus, 
 import { format, differenceInCalendarDays, parseISO } from 'date-fns';
 import api from '../services/api';
 import Toast from './Toast';
+import RoundOffControl from './RoundOffControl';
+import TaxRateSelect from './TaxRateSelect';
 import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
 
 export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
@@ -35,7 +37,8 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
     tax_type: 'none',
     tax_rate: '18',
     is_rcm_applicable: false,
-    notes: ''
+    notes: '',
+    rounded_final_amount: ''
   });
 
   const [isCustomSite, setIsCustomSite] = useState(false);
@@ -43,6 +46,14 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
   const [error, setError] = useState('');
   const [totals, setTotals] = useState({ subtotal: 0, cgst: 0, sgst: 0, igst: 0, total: 0 });
   const [toast, setToast] = useState({ show: false, message: '', type: 'error' });
+  const [roundOffEnabled, setRoundOffEnabled] = useState(true);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    api.get('/settings/system/invoice_round_off_enabled')
+      .then(res => setRoundOffEnabled(res.data !== 'false'))
+      .catch(() => setRoundOffEnabled(true));
+  }, [isOpen]);
 
   const showToast = (message, type = 'error') => {
     setToast({ show: true, message, type });
@@ -239,6 +250,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
         particular: form.particular || 'Security Guard',
         hsn_code: form.hsn_code || '998525',
         site_name: form.site_name || '',
+        rounded_final_amount: form.rounded_final_amount,
         ...(clientMode === 'existing'
           ? { client_id: form.client_id }
           : {
@@ -668,73 +680,14 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
               </h4>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Apply GST to this invoice?</label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <label className={`flex items-center gap-2.5 p-3 rounded-lg border cursor-pointer transition-all ${
-                    form.tax_type === 'none' ? 'bg-teal-50/60 border-teal-500 ring-1 ring-teal-500' : 'bg-white border-slate-200 hover:bg-slate-50'
-                  }`}>
-                    <input
-                      type="radio"
-                      name="event_tax_type"
-                      value="none"
-                      checked={form.tax_type === 'none'}
-                      onChange={e => setForm({ ...form, tax_type: e.target.value })}
-                      className="text-teal-600 focus:ring-teal-500 h-4 w-4"
-                    />
-                    <div>
-                      <span className="block text-sm font-semibold text-slate-800">No GST (0%)</span>
-                      <span className="block text-xs text-slate-500">Unregistered / Exempt</span>
-                    </div>
-                  </label>
-
-                  <label className={`flex items-center gap-2.5 p-3 rounded-lg border cursor-pointer transition-all ${
-                    form.tax_type === 'cgst_sgst' ? 'bg-teal-50/60 border-teal-500 ring-1 ring-teal-500' : 'bg-white border-slate-200 hover:bg-slate-50'
-                  }`}>
-                    <input
-                      type="radio"
-                      name="event_tax_type"
-                      value="cgst_sgst"
-                      checked={form.tax_type === 'cgst_sgst'}
-                      onChange={e => setForm({ ...form, tax_type: e.target.value })}
-                      className="text-teal-600 focus:ring-teal-500 h-4 w-4"
-                    />
-                    <div>
-                      <span className="block text-sm font-semibold text-slate-800">Intra-State</span>
-                      <span className="block text-xs text-slate-500">CGST ({(parseFloat(form.tax_rate) || 0) / 2}%) + SGST ({(parseFloat(form.tax_rate) || 0) / 2}%)</span>
-                    </div>
-                  </label>
-
-                  <label className={`flex items-center gap-2.5 p-3 rounded-lg border cursor-pointer transition-all ${
-                    form.tax_type === 'igst' ? 'bg-teal-50/60 border-teal-500 ring-1 ring-teal-500' : 'bg-white border-slate-200 hover:bg-slate-50'
-                  }`}>
-                    <input
-                      type="radio"
-                      name="event_tax_type"
-                      value="igst"
-                      checked={form.tax_type === 'igst'}
-                      onChange={e => setForm({ ...form, tax_type: e.target.value })}
-                      className="text-teal-600 focus:ring-teal-500 h-4 w-4"
-                    />
-                    <div>
-                      <span className="block text-sm font-semibold text-slate-800">Inter-State</span>
-                      <span className="block text-xs text-slate-500">IGST ({parseFloat(form.tax_rate) || 0}% Total)</span>
-                    </div>
-                  </label>
-                </div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Tax / % Rate</label>
+                <TaxRateSelect
+                  taxType={form.tax_type}
+                  taxRate={form.tax_rate}
+                  onChange={({ tax_type, tax_rate }) => setForm(prev => ({ ...prev, tax_type, tax_rate }))}
+                  className={inputCls}
+                />
               </div>
-
-              {form.tax_type !== 'none' && (
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">GST Rate (%)</label>
-                  <input
-                    type="number" min="0" max="100" step="0.01"
-                    value={form.tax_rate}
-                    onChange={e => setForm({ ...form, tax_rate: e.target.value })}
-                    className={inputCls}
-                    placeholder="e.g. 5, 12, 18, 28"
-                  />
-                </div>
-              )}
 
               <div className="flex items-center p-3 bg-slate-50 rounded-lg border border-slate-200">
                 <input
@@ -812,6 +765,13 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                 <span>Total Invoice Amount:</span>
                 <span className="text-teal-800">₹{totals.total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
               </div>
+
+              <RoundOffControl
+                total={totals.total}
+                autoRoundOffEnabled={roundOffEnabled}
+                value={form.rounded_final_amount}
+                onChange={v => setForm(prev => ({ ...prev, rounded_final_amount: v }))}
+              />
             </div>
           </form>
         </div>

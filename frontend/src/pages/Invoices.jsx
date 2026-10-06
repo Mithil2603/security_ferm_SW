@@ -7,6 +7,8 @@ import TableSkeleton from '../components/TableSkeleton';
 import EventInvoiceModal from '../components/EventInvoiceModal';
 import EditInvoiceModal from '../components/EditInvoiceModal';
 import BillViewModal from '../components/BillViewModal';
+import RoundOffControl, { computeBilledTotal } from '../components/RoundOffControl';
+import TaxRateSelect from '../components/TaxRateSelect';
 import { getApiBaseUrl } from '../utils/apiUrl';
 import { toast, confirmDialog } from '../context/ToastContext';
 
@@ -91,7 +93,7 @@ export default function Invoices() {
     tax_type: 'none', tax_rate: '18', manual_cgst: '', manual_sgst: '', manual_igst: '',
     is_rcm_applicable: false, discount_amount: '0', notes: '',
     absent_guard_days: 0, absence_deduction: 0,
-    bill_items: []
+    bill_items: [], rounded_final_amount: ''
   });
 
   const handleBillItemChange = (index, field, value) => {
@@ -318,7 +320,7 @@ export default function Invoices() {
       duty_days_worked: '',
       absent_guard_days: 0,
       absence_deduction: 0,
-      bill_items: []
+      bill_items: [], rounded_final_amount: ''
     });
     setError('');
     setIsCreateOpen(true);
@@ -729,12 +731,15 @@ export default function Invoices() {
                             <XCircle className="w-4 h-4" />
                           </button>
                         )}
+                        {/* Record Payment hidden — clients were confused by two places to
+                            record a receipt; receipts are recorded in Bank & Payments only.
                         {inv.status !== 'paid' && inv.status !== 'cancelled' && (
                           <button onClick={() => openPaymentModal(inv)}
                             className="p-1.5 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="Record Payment">
                             <CreditCard className="w-4 h-4" />
                           </button>
                         )}
+                        */}
                         <button onClick={() => handleDeleteInvoice(inv)}
                           className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete Invoice">
                           <Trash2 className="w-4 h-4" />
@@ -1484,67 +1489,19 @@ export default function Invoices() {
                 </div>
               )}
 
-              {/* Tax Configuration */}
+              {/* Tax / % Rate — same options as the Purchase Bill */}
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">Tax Configuration</label>
-                <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Tax Configuration">
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={invoiceForm.tax_type === 'none'}
-                    onClick={() => setInvoiceForm(prev => ({ ...prev, tax_type: 'none' }))}
-                    className={`flex flex-col p-2.5 rounded-lg border text-center transition-all cursor-pointer ${
-                      invoiceForm.tax_type === 'none' 
-                        ? 'bg-teal-50 border-teal-500 ring-1 ring-teal-500 text-teal-900' 
-                        : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'
-                    }`}
-                  >
-                    <span className="text-xs font-bold text-slate-800">No GST</span>
-                    <span className="text-[10px] text-slate-500">0%</span>
-                  </button>
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={invoiceForm.tax_type === 'cgst_sgst'}
-                    onClick={() => setInvoiceForm(prev => ({ ...prev, tax_type: 'cgst_sgst' }))}
-                    className={`flex flex-col p-2.5 rounded-lg border text-center transition-all cursor-pointer ${
-                      invoiceForm.tax_type === 'cgst_sgst' 
-                        ? 'bg-teal-50 border-teal-500 ring-1 ring-teal-500 text-teal-900' 
-                        : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'
-                    }`}
-                  >
-                    <span className="text-xs font-bold text-slate-800">Intra-State</span>
-                    <span className="text-[10px] text-slate-500">{(parseFloat(invoiceForm.tax_rate) || 0) / 2}% CGST + {(parseFloat(invoiceForm.tax_rate) || 0) / 2}% SGST</span>
-                  </button>
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={invoiceForm.tax_type === 'igst'}
-                    onClick={() => setInvoiceForm(prev => ({ ...prev, tax_type: 'igst' }))}
-                    className={`flex flex-col p-2.5 rounded-lg border text-center transition-all cursor-pointer ${
-                      invoiceForm.tax_type === 'igst'
-                        ? 'bg-teal-50 border-teal-500 ring-1 ring-teal-500 text-teal-900'
-                        : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'
-                    }`}
-                  >
-                    <span className="text-xs font-bold text-slate-800">Inter-State</span>
-                    <span className="text-[10px] text-slate-500">{parseFloat(invoiceForm.tax_rate) || 0}% IGST</span>
-                  </button>
-                </div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">Tax / % Rate</label>
+                <TaxRateSelect
+                  taxType={invoiceForm.tax_type}
+                  taxRate={invoiceForm.tax_rate}
+                  onChange={({ tax_type, tax_rate }) => setInvoiceForm(prev => ({ ...prev, tax_type, tax_rate }))}
+                  className={inputCls}
+                />
               </div>
 
               {invoiceForm.tax_type !== 'none' && (
                 <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 space-y-2">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">GST Rate (%)</label>
-                    <input
-                      type="number" min="0" max="100" step="0.01"
-                      value={invoiceForm.tax_rate}
-                      onChange={(e) => setInvoiceForm(prev => ({ ...prev, tax_rate: e.target.value }))}
-                      className={inputCls}
-                      placeholder="e.g. 5, 12, 18, 28"
-                    />
-                  </div>
                   <details className="text-xs">
                     <summary className="cursor-pointer text-teal-700 font-medium select-none">Or enter the exact GST amount (₹) instead</summary>
                     <div className={`grid ${invoiceForm.tax_type === 'cgst_sgst' ? 'grid-cols-2' : 'grid-cols-1'} gap-2 mt-2`}>
@@ -1644,10 +1601,19 @@ export default function Invoices() {
                   effRate = rate;
                 }
                 const total = invoiceForm.is_rcm_applicable ? taxable : (taxable + tax);
-                const roundedTotal = roundOffEnabled ? Math.round(total) : parseFloat(total.toFixed(2));
-                const roundOff = roundOffEnabled ? parseFloat((roundedTotal - total).toFixed(2)) : 0;
+                const { finalAmount: roundedTotal, roundOff } = computeBilledTotal(total, roundOffEnabled, invoiceForm.rounded_final_amount);
 
                 return (
+                  <>
+                  {/* Manual round off hidden — done at payment time in Bank & Payments.
+                      The summary below shows the automatic round off and billed total.
+                  <RoundOffControl
+                    total={total}
+                    autoRoundOffEnabled={roundOffEnabled}
+                    value={invoiceForm.rounded_final_amount}
+                    onChange={v => setInvoiceForm(prev => ({ ...prev, rounded_final_amount: v }))}
+                  />
+                  */}
                   <div className="p-3.5 rounded-xl border text-xs space-y-1.5 bg-slate-50 border-slate-200">
                     <div className="flex justify-between items-center pb-1 border-b border-slate-200/80">
                       <span className="font-bold text-slate-800">
@@ -1677,7 +1643,7 @@ export default function Invoices() {
                     {Math.abs(roundOff) > 0 && (
                       <div className="flex justify-between text-slate-600">
                         <span>Round Off:</span>
-                        <span>₹{roundOff > 0 ? `+₹${roundOff.toFixed(2)}` : `-₹${Math.abs(roundOff).toFixed(2)}`}</span>
+                        <span>{roundOff > 0 ? `+₹${roundOff.toFixed(2)}` : `-₹${Math.abs(roundOff).toFixed(2)}`}</span>
                       </div>
                     )}
                     <div className="flex justify-between text-sm font-bold pt-1.5 border-t border-slate-200 text-teal-800">
@@ -1685,6 +1651,7 @@ export default function Invoices() {
                       <span>₹{roundedTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                     </div>
                   </div>
+                  </>
                 );
               })()}
 

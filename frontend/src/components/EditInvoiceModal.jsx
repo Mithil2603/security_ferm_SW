@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { X, FileEdit, Landmark, MapPin, Shield, Calendar, Plus, Trash2 } from 'lucide-react';
 import api from '../services/api';
+import RoundOffControl from './RoundOffControl';
+import TaxRateSelect from './TaxRateSelect';
 
 export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }) {
   const [submitting, setSubmitting] = useState(false);
@@ -27,7 +29,8 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
     due_date: '',
     notes: '',
     status: '',
-    bill_items: []
+    bill_items: [],
+    rounded_final_amount: ''
   });
 
   const handleBillItemChange = (index, field, value) => {
@@ -161,7 +164,12 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
         due_date: formatDate(invoice.due_date),
         notes: invoice.notes || '',
         status: invoice.status || 'draft',
-        bill_items: items
+        bill_items: items,
+        // Manual invoice round off is disabled (done at payment time instead),
+        // so edits always use the automatic round off.
+        // Was: keep a manual round-off (≥ ₹1) pinned to the saved billed amount —
+        // rounded_final_amount: Math.abs(parseFloat(invoice.round_off) || 0) >= 1 ? String(invoice.final_amount) : ''
+        rounded_final_amount: ''
       });
     }
   }, [invoice]);
@@ -476,16 +484,13 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
               />
             </div>
             <div>
-              <label className={labelCls}>Tax Type</label>
-              <select
-                value={form.tax_type}
-                onChange={e => setForm({ ...form, tax_type: e.target.value })}
+              <label className={labelCls}>Tax / % Rate</label>
+              <TaxRateSelect
+                taxType={form.tax_type}
+                taxRate={form.tax_rate}
+                onChange={({ tax_type, tax_rate }) => setForm(prev => ({ ...prev, tax_type, tax_rate }))}
                 className={inputCls}
-              >
-                <option value="none">No Tax</option>
-                <option value="cgst_sgst">CGST + SGST</option>
-                <option value="igst">IGST</option>
-              </select>
+              />
             </div>
             <div>
               <label className={labelCls}>Discount (₹)</label>
@@ -500,19 +505,6 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
             </div>
           </div>
 
-          {form.tax_type !== 'none' && (
-            <div>
-              <label className={labelCls}>GST Rate (%)</label>
-              <input
-                type="number" min="0" max="100" step="0.01"
-                value={form.tax_rate}
-                onChange={e => setForm({ ...form, tax_rate: e.target.value })}
-                className={inputCls}
-                placeholder="e.g. 5, 12, 18, 28"
-              />
-            </div>
-          )}
-
           {/* Live Financial Summary */}
           {(() => {
             const sub = parseFloat(form.amount_subtotal) || 0;
@@ -524,22 +516,20 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
               tax = taxable * (rate / 100);
             }
             const total = form.is_rcm_applicable ? taxable : (taxable + tax);
-            const roundedTotal = roundOffEnabled ? Math.round(total) : parseFloat(total.toFixed(2));
-            const roundOff = roundOffEnabled ? parseFloat((roundedTotal - total).toFixed(2)) : 0;
 
             return (
-              <div className="flex flex-wrap items-center justify-between text-xs bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-                <span className="text-slate-600">
-                  Tax: <strong className="text-slate-800">{form.is_rcm_applicable ? '₹0 (RCM)' : `₹${tax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}</strong>
-                  {Math.abs(roundOff) > 0 && (
-                    <span className="ml-3">
-                      Round Off: <strong className="text-slate-800">{roundOff > 0 ? `+₹${roundOff.toFixed(2)}` : `-₹${Math.abs(roundOff).toFixed(2)}`}</strong>
-                    </span>
-                  )}
-                </span>
-                <span className="font-bold text-slate-800">
-                  Billed Total: <span className="text-teal-700 text-sm">₹{roundedTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                </span>
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between text-xs bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                  <span className="text-slate-600">
+                    Tax: <strong className="text-slate-800">{form.is_rcm_applicable ? '₹0 (RCM)' : `₹${tax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}</strong>
+                  </span>
+                </div>
+                <RoundOffControl
+                  total={total}
+                  autoRoundOffEnabled={roundOffEnabled}
+                  value={form.rounded_final_amount}
+                  onChange={v => setForm(prev => ({ ...prev, rounded_final_amount: v }))}
+                />
               </div>
             );
           })()}

@@ -7,6 +7,7 @@ import { format } from 'date-fns';
 import { toast, confirmDialog } from '../context/ToastContext';
 import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
+import TaxRateSelect from '../components/TaxRateSelect';
 
 const PAYMENT_METHODS = [
   { value: 'cash', label: 'Cash' },
@@ -529,6 +530,8 @@ export default function Expenses() {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex justify-end gap-2 flex-wrap">
+                        {/* Pay (record payment) hidden — vendor payments are recorded in
+                            Bank & Payments only, so there's one place to do it.
                         {expense.status !== 'rejected' && expense.status !== 'paid' && (
                           <button 
                             onClick={() => {
@@ -546,6 +549,7 @@ export default function Expenses() {
                             Pay
                           </button>
                         )}
+                        */}
                         {expense.status === 'pending' && (
                           <>
                             <button onClick={() => handleApprove(expense.id)}
@@ -794,17 +798,14 @@ export default function Expenses() {
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">GST on this Bill (Optional)</label>
                 <div className="grid grid-cols-3 gap-3">
-                  <select name="tax_type" value={formData.tax_type} onChange={handleInputChange} className={inputCls}>
-                    <option value="none">No GST</option>
-                    <option value="cgst_sgst">CGST + SGST</option>
-                    <option value="igst">IGST</option>
-                  </select>
-                  <input
-                    type="number" min="0" max="100" step="0.1" name="tax_rate"
-                    value={formData.tax_rate} onChange={handleInputChange}
-                    disabled={formData.tax_type === 'none'}
-                    className={`${inputCls} disabled:opacity-50`} placeholder="GST rate %"
-                  />
+                  <div className="col-span-2">
+                    <TaxRateSelect
+                      taxType={formData.tax_type}
+                      taxRate={formData.tax_rate}
+                      onChange={({ tax_type, tax_rate }) => setFormData(prev => ({ ...prev, tax_type, tax_rate }))}
+                      className={inputCls}
+                    />
+                  </div>
                   <label className="flex items-center gap-2 px-1">
                     <input
                       type="checkbox" checked={formData.is_rcm_applicable}

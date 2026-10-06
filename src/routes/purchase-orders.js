@@ -122,6 +122,19 @@ async function ensureColumns() {
   } catch (_) {}
 }
 
+// Expense description for a booked purchase bill.
+function describeBill(items, billRef) {
+  return items.length === 1
+    ? items[0].description
+    : `${items[0]?.description || 'Purchase'} + ${items.length - 1} more item(s) (Bill ${billRef})`;
+}
+
+async function getLinkedExpense(po) {
+  if (po.status !== 'billed' || !po.expense_id) return null;
+  const res = await query('SELECT * FROM expenses WHERE id = $1', [po.expense_id]);
+  return res.rows[0] || null;
+}
+
 function computeTotals(items, tax_type, tax_rate, round_off_val = 0) {
   let subtotal = 0;
   let totalDiscount = 0;
@@ -355,16 +368,18 @@ router.post('/', uploadAttachment, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PUT /api/purchase-orders/:id — edit (draft only)
+// PUT /api/purchase-orders/:id — edit (draft or billed; a billed bill's
+// linked expense is kept in sync so Vendor Payments / Ledger see the change)
 // ─────────────────────────────────────────────────────────────────────────────
 router.put('/:id', uploadAttachment, async (req, res) => {
   try {
     await ensureColumns();
     const existing = await query('SELECT * FROM purchase_orders WHERE id = $1', [req.params.id]);
     if (existing.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase bill not found' });
-    if (existing.rows[0].status !== 'draft') {
-      return res.status(400).json({ success: false, message: 'Only draft purchase bills can be edited — this one has already been billed or cancelled' });
+    if (existing.rows[0].status === 'cancelled') {
+      return res.status(400).json({ success: false, message: 'A cancelled purchase bill cannot be edited' });
     }
+    const linkedExpense = await getLinkedExpense(existing.rows[0]);
 
     const {
       vendor_id, po_date, bill_number, state_of_supply,
@@ -383,6 +398,21 @@ router.put('/:id', uploadAttachment, async (req, res) => {
     }
 
     const totals = computeTotals(items, tax_type, tax_rate, round_off);
+
+    // Payments already made against the booked expense put limits on the edit.
+    if (linkedExpense) {
+      const settled = parseFloat(linkedExpense.amount_paid) || 0;
+      if (settled > 0 && totals.total_amount < settled - 0.01) {
+        return res.status(400).json({
+          success: false,
+          message: `₹${settled.toFixed(2)} has already been paid against this bill — the total can't be reduced below that. Delete or edit the vendor payment first.`,
+        });
+      }
+      if (settled > 0 && vendor_id && String(vendor_id) !== String(existing.rows[0].vendor_id)) {
+        return res.status(400).json({ success: false, message: 'This bill already has payments recorded — the vendor cannot be changed.' });
+      }
+    }
+
     const assignedBillNumber = (bill_number !== undefined && String(bill_number).trim())
       ? String(bill_number).trim()
       : (existing.rows[0].bill_number || existing.rows[0].po_number);
@@ -440,6 +470,24 @@ router.put('/:id', uploadAttachment, async (req, res) => {
        FROM purchase_orders po JOIN vendors v ON po.vendor_id = v.id WHERE po.id = $1`,
       [req.params.id]
     );
+
+    if (linkedExpense) {
+      const po = updated.rows[0];
+      const settled = parseFloat(linkedExpense.amount_paid) || 0;
+      let expenseStatus = linkedExpense.status;
+      if (settled >= po.total_amount - 0.01 && settled > 0) expenseStatus = 'paid';
+      else if (linkedExpense.status === 'paid') expenseStatus = linkedExpense.approver_id ? 'approved' : 'pending';
+      await query(
+        `UPDATE expenses SET description=$1, amount=$2, vendor_id=$3, tax_type=$4, tax_rate=$5,
+          cgst_amount=$6, sgst_amount=$7, igst_amount=$8, is_rcm_applicable=$9, tds_rate=$10, status=$11
+         WHERE id=$12`,
+        [
+          describeBill(totals.items, po.bill_number || po.po_number), po.total_amount, po.vendor_id,
+          po.tax_type, po.tax_rate, po.cgst_amount, po.sgst_amount, po.igst_amount, po.is_rcm_applicable,
+          po.tds_rate || 0, expenseStatus, linkedExpense.id,
+        ]
+      );
+    }
     const itemsResult = await query(`SELECT * FROM purchase_order_items WHERE purchase_order_id = $1 ORDER BY id`, [req.params.id]);
     res.json({ success: true, data: { ...updated.rows[0], items: itemsResult.rows }, message: 'Purchase bill updated successfully' });
   } catch (error) {
@@ -449,15 +497,30 @@ router.put('/:id', uploadAttachment, async (req, res) => {
   }
 });
 
-// DELETE /api/purchase-orders/:id — draft only (cascade deletes items)
+// DELETE /api/purchase-orders/:id — cascade deletes items; a billed bill also
+// removes its booked expense, as long as no vendor payment has been made on it.
 router.delete('/:id', async (req, res) => {
   try {
-    const existing = await query('SELECT status FROM purchase_orders WHERE id = $1', [req.params.id]);
+    const existing = await query('SELECT id, status, expense_id FROM purchase_orders WHERE id = $1', [req.params.id]);
     if (existing.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase bill not found' });
-    if (existing.rows[0].status === 'billed') {
-      return res.status(400).json({ success: false, message: 'This purchase bill has already been billed and cannot be deleted' });
+    const linkedExpense = await getLinkedExpense(existing.rows[0]);
+    if (linkedExpense) {
+      const payments = await query(
+        `SELECT COUNT(*) as count FROM payment_transactions WHERE reference_type = 'expense' AND reference_id = $1`,
+        [linkedExpense.id]
+      );
+      if ((parseFloat(linkedExpense.amount_paid) || 0) > 0 || parseInt(payments.rows[0].count) > 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'This bill has vendor payments recorded against it. Delete those payments in Bank & Payments first, then delete the bill.',
+        });
+      }
     }
     await query('DELETE FROM purchase_orders WHERE id = $1', [req.params.id]);
+    if (linkedExpense) {
+      await query('DELETE FROM vendor_payments WHERE expense_id = $1', [linkedExpense.id]);
+      await query('DELETE FROM expenses WHERE id = $1', [linkedExpense.id]);
+    }
     res.json({ success: true, message: 'Purchase bill deleted successfully' });
   } catch (error) {
     logError(error, req, { feature: 'purchase-orders' });
@@ -484,9 +547,7 @@ router.post('/:id/convert-to-bill', async (req, res) => {
 
     const items = await query('SELECT description FROM purchase_order_items WHERE purchase_order_id = $1', [po.id]);
     const billRef = po.bill_number || po.po_number;
-    const description = items.rows.length === 1
-      ? items.rows[0].description
-      : `${items.rows[0]?.description || 'Purchase'} + ${items.rows.length - 1} more item(s) (Bill ${billRef})`;
+    const description = describeBill(items.rows, billRef);
 
     const { expense_date, payment_method } = req.body;
 

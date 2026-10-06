@@ -1,6 +1,8 @@
 import { ChevronLeft, ChevronRight, MoreHorizontal } from 'lucide-react';
 
-export default function Pagination({ pagination, onPageChange }) {
+// alwaysShow: keep the bar (record count + page buttons) visible even when
+// everything fits on one page, instead of hiding it.
+export default function Pagination({ pagination, onPageChange, alwaysShow = false }) {
   if (!pagination) return null;
 
   const totalRecords = parseInt(pagination.total || 0);
@@ -8,7 +10,8 @@ export default function Pagination({ pagination, onPageChange }) {
   const page = parseInt(pagination.page || 1);
   const totalPages = parseInt(pagination.pages) || Math.ceil(totalRecords / limit) || 1;
 
-  if (totalPages <= 1 && totalRecords <= limit) return null;
+  if (totalRecords === 0) return null;
+  if (!alwaysShow && totalPages <= 1 && totalRecords <= limit) return null;
   
   // Calculate page window
   const getPageNumbers = () => {

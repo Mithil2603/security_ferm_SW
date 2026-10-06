@@ -86,15 +86,40 @@ async function sumPriorTaxDetail(referenceType, referenceId) {
   };
 }
 
-async function insertPaymentTransaction({ transaction_type, party_type, party_id, reference_type, reference_id, amount, payment_method, bank_account_id, payment_date, transaction_reference, attachment_url, notes, created_by, employee_bank_snapshot }) {
+// Round off on a client receipt / vendor payment: the part of the bill settled
+// without cash (+ = written off, e.g. ₹27 on ₹11,227 paid as ₹11,200; − = a
+// little extra received). Like TDS it closes the bill but never hits the bank.
+function parseRoundOff(value, remaining) {
+  const ro = parseFloat(value);
+  if (value === undefined || value === null || value === '' || isNaN(ro)) return 0;
+  const rounded = Math.round(ro * 100) / 100;
+  if (Math.abs(rounded) > Math.max(0, remaining) + 0.5) {
+    throw new Error(`Round off of ₹${Math.abs(rounded).toFixed(2)} is larger than the bill balance of ₹${Math.max(0, remaining).toFixed(2)}`);
+  }
+  return rounded;
+}
+
+// 'YYYY-MM' (also accepts a 'YYYY-MM-DD' payroll date) → 'YYYY-MM', else null.
+function normalizeSalaryMonth(value) {
+  const m = String(value || '').match(/^(\d{4})-(\d{2})/);
+  if (!m || +m[2] < 1 || +m[2] > 12) return null;
+  return `${m[1]}-${m[2]}`;
+}
+
+function salaryMonthLabel(month) {
+  const [y, m] = month.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleString('en-IN', { month: 'short', year: 'numeric' });
+}
+
+async function insertPaymentTransaction({ transaction_type, party_type, party_id, reference_type, reference_id, amount, payment_method, bank_account_id, payment_date, transaction_reference, attachment_url, notes, created_by, employee_bank_snapshot, salary_month, round_off }) {
   const result = await query(
     `INSERT INTO payment_transactions
       (transaction_type, party_type, party_id, reference_type, reference_id, amount,
-       payment_method, bank_account_id, payment_date, transaction_reference, attachment_url, notes, created_by, employee_bank_snapshot)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       payment_method, bank_account_id, payment_date, transaction_reference, attachment_url, notes, created_by, employee_bank_snapshot, salary_month, round_off)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
      RETURNING *`,
     [transaction_type, party_type, party_id, reference_type || 'none', reference_id || null, amount,
-     payment_method, bank_account_id || null, payment_date, transaction_reference || null, attachment_url || null, notes || null, created_by, employee_bank_snapshot || null]
+     payment_method, bank_account_id || null, payment_date, transaction_reference || null, attachment_url || null, notes || null, created_by, employee_bank_snapshot || null, salary_month || null, round_off || 0]
   );
   return result.rows[0];
 }
@@ -200,7 +225,7 @@ async function recordBankEntry(params, userId) {
 async function recordClientReceipt(params, userId) {
   const {
     invoice_id, amount_paid, tds_deducted = 0, payment_date, payment_method,
-    bank_account_id, transaction_reference, attachment_url, notes
+    bank_account_id, transaction_reference, attachment_url, notes, round_off
   } = params;
 
   const invRes = await query(
@@ -210,13 +235,14 @@ async function recordClientReceipt(params, userId) {
   if (invRes.rows.length === 0) throw new Error('Invoice not found');
   const invoice = invRes.rows[0];
 
-  const remainingBefore = parseFloat(invoice.final_amount) - parseFloat(invoice.payment_received || 0) - parseFloat(invoice.tds_deducted || 0);
+  const remainingBefore = parseFloat(invoice.final_amount) - parseFloat(invoice.payment_received || 0) - parseFloat(invoice.tds_deducted || 0) - parseFloat(invoice.settlement_round_off || 0);
   if (remainingBefore <= 0.5) {
     throw new Error('This invoice is already fully paid — please select a different bill');
   }
-  const totalCredit = parseFloat(amount_paid || 0) + parseFloat(tds_deducted || 0);
+  const roundOff = parseRoundOff(round_off, remainingBefore);
+  const totalCredit = parseFloat(amount_paid || 0) + parseFloat(tds_deducted || 0) + roundOff;
   if (totalCredit > remainingBefore + 0.5) {
-    throw new Error(`Amount + TDS exceeds remaining balance of ₹${remainingBefore.toFixed(2)}`);
+    throw new Error(`Amount + TDS + round off exceeds remaining balance of ₹${remainingBefore.toFixed(2)}`);
   }
 
   const payDate = payment_date || todayStr();
@@ -227,7 +253,7 @@ async function recordClientReceipt(params, userId) {
     transaction_type: 'client_receipt', party_type: 'client', party_id: invoice.client_id,
     reference_type: 'invoice', reference_id: invoice_id, amount: parseFloat(amount_paid || 0),
     payment_method, bank_account_id: resolvedBankAccountId, payment_date: payDate,
-    transaction_reference, attachment_url, notes, created_by: userId
+    transaction_reference, attachment_url, notes, created_by: userId, round_off: roundOff
   });
 
   // 2. payment_tax_details — prorated from the invoice's own fixed GST split
@@ -256,12 +282,13 @@ async function recordClientReceipt(params, userId) {
   // 4. update invoice
   const newReceived = parseFloat(invoice.payment_received || 0) + parseFloat(amount_paid || 0);
   const newTds = parseFloat(invoice.tds_deducted || 0) + parseFloat(tds_deducted || 0);
-  const newDue = parseFloat(invoice.final_amount) - newReceived - newTds;
+  const newRoundOff = parseFloat(invoice.settlement_round_off || 0) + roundOff;
+  const newDue = parseFloat(invoice.final_amount) - newReceived - newTds - newRoundOff;
   const isPaid = newDue <= 0.5;
   const newStatus = isPaid ? 'paid' : 'partially_paid';
   await query(
-    'UPDATE invoices SET payment_received=$1, tds_deducted=$2, payment_due=$3, status=$4, updated_at=CURRENT_TIMESTAMP WHERE id=$5',
-    [newReceived.toFixed(2), newTds.toFixed(2), (isPaid ? 0 : Math.max(0, newDue)).toFixed(2), newStatus, invoice_id]
+    'UPDATE invoices SET payment_received=$1, tds_deducted=$2, settlement_round_off=$3, payment_due=$4, status=$5, updated_at=CURRENT_TIMESTAMP WHERE id=$6',
+    [newReceived.toFixed(2), newTds.toFixed(2), newRoundOff.toFixed(2), (isPaid ? 0 : Math.max(0, newDue)).toFixed(2), newStatus, invoice_id]
   );
 
   // 5. voucher
@@ -309,14 +336,15 @@ async function deleteClientReceipt(paymentTransactionId, userId) {
 
   const newReceived = Math.max(0, parseFloat(invoice.payment_received || 0) - parseFloat(tx.amount || 0));
   const newTds = Math.max(0, parseFloat(invoice.tds_deducted || 0) - tdsFromTx);
-  const newDue = parseFloat(invoice.final_amount) - newReceived - newTds;
+  const newRoundOff = parseFloat(invoice.settlement_round_off || 0) - parseFloat(tx.round_off || 0);
+  const newDue = parseFloat(invoice.final_amount) - newReceived - newTds - newRoundOff;
   const newStatus = invoice.status === 'cancelled'
     ? 'cancelled'
     : newDue <= 0.5 ? 'paid' : (newReceived > 0.5 || newTds > 0.5 ? 'partially_paid' : 'sent');
 
   await query(
-    'UPDATE invoices SET payment_received=$1, tds_deducted=$2, payment_due=$3, status=$4, updated_at=CURRENT_TIMESTAMP WHERE id=$5',
-    [newReceived.toFixed(2), newTds.toFixed(2), Math.max(0, newDue).toFixed(2), newStatus, invoice.id]
+    'UPDATE invoices SET payment_received=$1, tds_deducted=$2, settlement_round_off=$3, payment_due=$4, status=$5, updated_at=CURRENT_TIMESTAMP WHERE id=$6',
+    [newReceived.toFixed(2), newTds.toFixed(2), newRoundOff.toFixed(2), Math.max(0, newDue).toFixed(2), newStatus, invoice.id]
   );
 
   await query('DELETE FROM payment_tax_details WHERE payment_transaction_id = $1', [paymentTransactionId]);
@@ -350,7 +378,7 @@ async function deleteClientReceipt(paymentTransactionId, userId) {
 async function recordVendorPayment(params, userId) {
   const {
     expense_id, amount, payment_date, payment_method, bank_account_id, reference_number,
-    attachment_url, notes, tds_amount = 0,
+    attachment_url, notes, tds_amount = 0, round_off,
     // Only used when the bill itself carries no GST info (ad hoc entry):
     tax_type: manualTaxType, tax_rate: manualTaxRate, is_rcm_applicable: manualRcm
   } = params;
@@ -370,9 +398,10 @@ async function recordVendorPayment(params, userId) {
   if (remainingBefore <= 0.5) {
     throw new Error('This bill is already fully paid — please select a different bill');
   }
-  const totalSettlement = paymentAmount + parseFloat(tds_amount || 0);
+  const roundOff = parseRoundOff(round_off, remainingBefore);
+  const totalSettlement = paymentAmount + parseFloat(tds_amount || 0) + roundOff;
   if (totalSettlement > remainingBefore + 0.5) {
-    throw new Error(`Amount + TDS exceeds remaining bill balance of ₹${remainingBefore.toFixed(2)}`);
+    throw new Error(`Amount + TDS + round off exceeds remaining bill balance of ₹${remainingBefore.toFixed(2)}`);
   }
 
   // 1. payment_transactions
@@ -380,7 +409,7 @@ async function recordVendorPayment(params, userId) {
     transaction_type: 'vendor_payment', party_type: 'vendor', party_id: expense.vendor_id || 0,
     reference_type: 'expense', reference_id: expense_id, amount: paymentAmount,
     payment_method: payment_method || 'bank_transfer', bank_account_id: resolvedBankAccountId, payment_date: payDate,
-    transaction_reference: reference_number, attachment_url, notes, created_by: userId
+    transaction_reference: reference_number, attachment_url, notes, created_by: userId, round_off: roundOff
   });
 
   // 2. payment_tax_details
@@ -470,17 +499,21 @@ async function recordVendorPayment(params, userId) {
 async function recordSalaryPayment(params, userId) {
   const {
     reference_type, reference_id, employee_id, amount, payment_date, payment_method,
-    bank_account_id, transaction_reference, attachment_url, notes, employee_bank_snapshot
+    bank_account_id, transaction_reference, attachment_url, notes, employee_bank_snapshot, salary_month
   } = params;
 
   const payDate = payment_date || todayStr();
   let employeeId, employeeName, payrollId = null, netSalary;
+  // A payroll run / salary slip already fixes the month it pays for; a direct
+  // payment needs it from the user.
+  let salaryMonth = normalizeSalaryMonth(salary_month);
 
   // Direct/ad-hoc payment: no payroll run or salary slip to close out — just
   // pay the employee directly (e.g. an advance, off-cycle reimbursement).
   // Nothing to mark "paid" in payroll/salary_slips since there's no such row.
   if (!reference_id) {
     if (!employee_id) throw new Error('employee_id is required for a direct salary payment');
+    if (!salaryMonth) throw new Error('Please select the month this salary is for');
     const empRes = await query('SELECT full_name FROM employees WHERE id = $1', [employee_id]);
     if (empRes.rows.length === 0) throw new Error('Employee not found');
     employeeId = employee_id;
@@ -494,6 +527,7 @@ async function recordSalaryPayment(params, userId) {
     employeeName = empRes.rows[0]?.full_name || 'Employee';
     payrollId = slip.payroll_id || null;
     netSalary = slip.net_salary;
+    salaryMonth = normalizeSalaryMonth(slip.payroll_month) || salaryMonth;
 
     // Keep the legacy payroll table in sync so Balance Sheet's Salary Payable
     // and P&L's payroll cost line (which read `payroll`, not `salary_slips`)
@@ -517,6 +551,7 @@ async function recordSalaryPayment(params, userId) {
     employeeName = empRes.rows[0]?.full_name || 'Employee';
     payrollId = payroll.id;
     netSalary = payroll.net_salary;
+    salaryMonth = normalizeSalaryMonth(payroll.payroll_month) || salaryMonth;
 
     // Keep salary_slips in sync too, if a matching slip exists for this payroll row.
     const slipRes = await query('SELECT id FROM salary_slips WHERE payroll_id = $1', [payrollId]);
@@ -531,6 +566,7 @@ async function recordSalaryPayment(params, userId) {
   const resolvedBankAccountId = bank_account_id || await resolveDefaultBankAccountId(payment_method);
   const finalAmount = parseFloat(amount) || parseFloat(netSalary) || 0;
   if (finalAmount <= 0) throw new Error('A valid payment amount is required');
+  if (!salaryMonth) salaryMonth = normalizeSalaryMonth(payDate);
   const finalReferenceType = (payrollId || reference_id) ? 'payroll' : 'none';
   const finalReferenceId = payrollId || reference_id || null;
 
@@ -538,14 +574,14 @@ async function recordSalaryPayment(params, userId) {
     transaction_type: 'salary_payment', party_type: 'employee', party_id: employeeId,
     reference_type: finalReferenceType, reference_id: finalReferenceId, amount: finalAmount,
     payment_method, bank_account_id: resolvedBankAccountId, payment_date: payDate,
-    transaction_reference, attachment_url, notes, created_by: userId, employee_bank_snapshot
+    transaction_reference, attachment_url, notes, created_by: userId, employee_bank_snapshot, salary_month: salaryMonth
   });
 
   const voucherId = await createPostedVoucher({
     direction: 'payment', amount: finalAmount, bankAccountId: resolvedBankAccountId,
     partyType: 'employee', partyId: employeeId, partyName: employeeName,
     referenceType: finalReferenceType, referenceId: finalReferenceId, voucherDate: payDate,
-    narration: `Salary payment - ${employeeName}`, createdBy: userId
+    narration: `Salary payment - ${employeeName} (${salaryMonthLabel(salaryMonth)})`, createdBy: userId
   });
   if (voucherId) {
     await query('UPDATE payment_transactions SET voucher_id = $1 WHERE id = $2', [voucherId, paymentTx.id]);
@@ -573,7 +609,7 @@ async function deleteVendorPayment(paymentTransactionId, userId) {
         [paymentTransactionId]
       );
       const tdsFromTx = parseFloat(taxRes.rows[0]?.tds_amount) || 0;
-      const totalSettlement = parseFloat(tx.amount || 0) + tdsFromTx;
+      const totalSettlement = parseFloat(tx.amount || 0) + tdsFromTx + parseFloat(tx.round_off || 0);
 
       const newSettled = Math.max(0, parseFloat(expense.amount_paid || 0) - totalSettlement);
       let newStatus = expense.status;
@@ -677,16 +713,19 @@ async function updateClientReceipt(paymentTransactionId, params, userId) {
   const oldTds = parseFloat(oldTaxRes.rows[0]?.tds_amount) || 0;
   const oldAmount = parseFloat(tx.amount || 0);
 
+  const oldRoundOff = parseFloat(tx.round_off || 0);
   const baseReceived = Math.max(0, parseFloat(invoice.payment_received || 0) - oldAmount);
   const baseTds = Math.max(0, parseFloat(invoice.tds_deducted || 0) - oldTds);
-  const maxAllowed = parseFloat(invoice.final_amount) - baseReceived - baseTds;
+  const baseRoundOff = parseFloat(invoice.settlement_round_off || 0) - oldRoundOff;
+  const maxAllowed = parseFloat(invoice.final_amount) - baseReceived - baseTds - baseRoundOff;
 
   const newAmount = params.amount !== undefined ? parseFloat(params.amount) : (params.amount_paid !== undefined ? parseFloat(params.amount_paid) : oldAmount);
   const newTds = params.tds_deducted !== undefined ? parseFloat(params.tds_deducted) : (params.tds_amount !== undefined ? parseFloat(params.tds_amount) : oldTds);
+  const newRoundOff = params.round_off !== undefined ? parseRoundOff(params.round_off, maxAllowed) : oldRoundOff;
 
   if (isNaN(newAmount) || newAmount <= 0) throw new Error('A valid amount is required');
-  if (newAmount + newTds > maxAllowed + 0.5) {
-    throw new Error(`Amount + TDS exceeds remaining invoice balance of ₹${maxAllowed.toFixed(2)}`);
+  if (newAmount + newTds + newRoundOff > maxAllowed + 0.5) {
+    throw new Error(`Amount + TDS + round off exceeds remaining invoice balance of ₹${maxAllowed.toFixed(2)}`);
   }
 
   const payDate = params.payment_date || tx.payment_date;
@@ -700,9 +739,9 @@ async function updateClientReceipt(paymentTransactionId, params, userId) {
   await query(
     `UPDATE payment_transactions SET
       amount = $1, payment_date = $2, payment_method = $3, bank_account_id = $4,
-      transaction_reference = $5, notes = $6, attachment_url = $7
-     WHERE id = $8`,
-    [newAmount, payDate, payMethod, bankAccId, txRef, notes, attachUrl, paymentTransactionId]
+      transaction_reference = $5, notes = $6, attachment_url = $7, round_off = $8
+     WHERE id = $9`,
+    [newAmount, payDate, payMethod, bankAccId, txRef, notes, attachUrl, newRoundOff, paymentTransactionId]
   );
 
   // 2. Update payment_tax_details
@@ -712,7 +751,7 @@ async function updateClientReceipt(paymentTransactionId, params, userId) {
   const remainingCgst = parseFloat(invoice.cgst_amount || 0) - priorTax.cgst_amount;
   const remainingSgst = parseFloat(invoice.sgst_amount || 0) - priorTax.sgst_amount;
   const remainingIgst = parseFloat(invoice.igst_amount || 0) - priorTax.igst_amount;
-  const prorated = prorateTax(newAmount + newTds, maxAllowed, remainingTaxable, remainingCgst, remainingSgst, remainingIgst);
+  const prorated = prorateTax(newAmount + newTds + newRoundOff, maxAllowed, remainingTaxable, remainingCgst, remainingSgst, remainingIgst);
   await insertTaxDetail({
     payment_transaction_id: paymentTransactionId, party_type: 'client', party_id: invoice.client_id,
     taxable_value: prorated.taxable_value, tax_type: invoice.tax_type, tax_rate: invoice.tax_rate,
@@ -741,12 +780,13 @@ async function updateClientReceipt(paymentTransactionId, params, userId) {
   // 4. Update invoice
   const newReceived = baseReceived + newAmount;
   const newTotalTds = baseTds + newTds;
-  const newDue = parseFloat(invoice.final_amount) - newReceived - newTotalTds;
+  const newTotalRoundOff = baseRoundOff + newRoundOff;
+  const newDue = parseFloat(invoice.final_amount) - newReceived - newTotalTds - newTotalRoundOff;
   const isPaid = newDue <= 0.5;
   const newStatus = isPaid ? 'paid' : 'partially_paid';
   await query(
-    'UPDATE invoices SET payment_received=$1, tds_deducted=$2, payment_due=$3, status=$4, updated_at=CURRENT_TIMESTAMP WHERE id=$5',
-    [newReceived.toFixed(2), newTotalTds.toFixed(2), (isPaid ? 0 : Math.max(0, newDue)).toFixed(2), newStatus, invoice.id]
+    'UPDATE invoices SET payment_received=$1, tds_deducted=$2, settlement_round_off=$3, payment_due=$4, status=$5, updated_at=CURRENT_TIMESTAMP WHERE id=$6',
+    [newReceived.toFixed(2), newTotalTds.toFixed(2), newTotalRoundOff.toFixed(2), (isPaid ? 0 : Math.max(0, newDue)).toFixed(2), newStatus, invoice.id]
   );
 
   // 5. Update or recreate Voucher
@@ -793,18 +833,20 @@ async function updateVendorPayment(paymentTransactionId, params, userId) {
   const oldTaxRes = await query('SELECT COALESCE(SUM(tds_amount),0) as tds_amount FROM payment_tax_details WHERE payment_transaction_id = $1', [paymentTransactionId]);
   const oldTds = parseFloat(oldTaxRes.rows[0]?.tds_amount) || 0;
   const oldAmount = parseFloat(tx.amount || 0);
-  const oldTotalSettlement = oldAmount + oldTds;
+  const oldRoundOff = parseFloat(tx.round_off || 0);
+  const oldTotalSettlement = oldAmount + oldTds + oldRoundOff;
 
   const baseSettled = Math.max(0, (parseFloat(expense.amount_paid) || 0) - oldTotalSettlement);
   const remainingBefore = parseFloat(expense.amount) - baseSettled;
 
   const newAmount = params.amount !== undefined ? parseFloat(params.amount) : oldAmount;
   const newTds = params.tds_amount !== undefined ? parseFloat(params.tds_amount) : oldTds;
-  const newTotalSettlement = newAmount + newTds;
+  const newRoundOff = params.round_off !== undefined ? parseRoundOff(params.round_off, remainingBefore) : oldRoundOff;
+  const newTotalSettlement = newAmount + newTds + newRoundOff;
 
   if (isNaN(newAmount) || newAmount <= 0) throw new Error('A valid amount is required');
   if (newTotalSettlement > remainingBefore + 0.5) {
-    throw new Error(`Amount + TDS exceeds remaining bill balance of ₹${remainingBefore.toFixed(2)}`);
+    throw new Error(`Amount + TDS + round off exceeds remaining bill balance of ₹${remainingBefore.toFixed(2)}`);
   }
 
   const payDate = params.payment_date || tx.payment_date;
@@ -818,9 +860,9 @@ async function updateVendorPayment(paymentTransactionId, params, userId) {
   await query(
     `UPDATE payment_transactions SET
       amount = $1, payment_date = $2, payment_method = $3, bank_account_id = $4,
-      transaction_reference = $5, notes = $6, attachment_url = $7
-     WHERE id = $8`,
-    [newAmount, payDate, payMethod, bankAccId, txRef, notes, attachUrl, paymentTransactionId]
+      transaction_reference = $5, notes = $6, attachment_url = $7, round_off = $8
+     WHERE id = $9`,
+    [newAmount, payDate, payMethod, bankAccId, txRef, notes, attachUrl, newRoundOff, paymentTransactionId]
   );
 
   // 2. Update payment_tax_details
@@ -896,13 +938,19 @@ async function updateSalaryPayment(paymentTransactionId, params, userId) {
   const notes = params.notes !== undefined ? params.notes : tx.notes;
   const attachUrl = params.attachment_url !== undefined ? params.attachment_url : tx.attachment_url;
   const empBankSnap = params.employee_bank_snapshot !== undefined ? params.employee_bank_snapshot : tx.employee_bank_snapshot;
+  // Month is fixed by the payroll run when one is linked; only direct payments can change it.
+  let salaryMonth = tx.salary_month;
+  if (params.salary_month !== undefined && params.salary_month !== '' && !tx.reference_id) {
+    salaryMonth = normalizeSalaryMonth(params.salary_month);
+    if (!salaryMonth) throw new Error('Salary month must be in YYYY-MM format');
+  }
 
   await query(
     `UPDATE payment_transactions SET
       amount = $1, payment_date = $2, payment_method = $3, bank_account_id = $4,
-      transaction_reference = $5, notes = $6, attachment_url = $7, employee_bank_snapshot = $8
-     WHERE id = $9`,
-    [newAmount, payDate, payMethod, bankAccId, txRef, notes, attachUrl, empBankSnap, paymentTransactionId]
+      transaction_reference = $5, notes = $6, attachment_url = $7, employee_bank_snapshot = $8, salary_month = $9
+     WHERE id = $10`,
+    [newAmount, payDate, payMethod, bankAccId, txRef, notes, attachUrl, empBankSnap, salaryMonth, paymentTransactionId]
   );
 
   // Update voucher

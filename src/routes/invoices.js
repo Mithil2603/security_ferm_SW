@@ -78,6 +78,26 @@ function applyRoundOff(rawAmount, roundOffEnabled) {
   return { total_amount, round_off, final_amount };
 }
 
+// Manual round-off: the user picks the final billed amount (e.g. 11227 →
+// 11200) and the difference is booked as round_off. GST/taxable values are
+// untouched. Returns null when no custom amount was given, or { error } when
+// the value is unusable.
+function parseCustomFinalAmount(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const n = parseFloat(value);
+  if (!Number.isFinite(n) || n < 0) {
+    return { error: "Rounded bill amount must be a valid non-negative number" };
+  }
+  return { value: parseFloat(n.toFixed(2)) };
+}
+
+function applyCustomRoundOff(rawTotal, customFinal) {
+  const total_amount = parseFloat(Number(rawTotal).toFixed(2));
+  const final_amount = customFinal;
+  const round_off = parseFloat((final_amount - total_amount).toFixed(2));
+  return { total_amount, round_off, final_amount };
+}
+
 // GST used to be hardcoded to exactly 18% (9%+9% or 18% IGST) everywhere an
 // invoice could be created — this now applies whatever rate the caller
 // supplies (defaulting to 18 so existing behavior is unchanged for anyone
@@ -441,6 +461,13 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
       });
     }
 
+    const customFinal = parseCustomFinalAmount(req.body.rounded_final_amount);
+    if (customFinal?.error) {
+      return res
+        .status(400)
+        .json({ success: false, message: customFinal.error });
+    }
+
     // Multiple bills for the same client / site are permitted (e.g. multi-site billing, separate shifts, or supplementary bills)
 
     // Get client details
@@ -664,6 +691,14 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
           final_amount: roundedFinal,
         };
       }
+    }
+
+    if (customFinal) {
+      const { round_off, final_amount } = applyCustomRoundOff(
+        amounts.total_amount,
+        customFinal.value,
+      );
+      amounts = { ...amounts, round_off, final_amount };
     }
 
     let finalNotes = notes || "";
@@ -1419,11 +1454,16 @@ router.post("/event", async (req, res) => {
       total_amount += cgst_amount + sgst_amount + igst_amount;
     }
     total_amount = parseFloat(total_amount.toFixed(2));
+    const customFinal = parseCustomFinalAmount(req.body.rounded_final_amount);
+    if (customFinal?.error) {
+      return res
+        .status(400)
+        .json({ success: false, message: customFinal.error });
+    }
     const roundOffEnabled = await getRoundOffSetting();
-    const { round_off: roundOff, final_amount: roundedFinal } = applyRoundOff(
-      total_amount,
-      roundOffEnabled,
-    );
+    const { round_off: roundOff, final_amount: roundedFinal } = customFinal
+      ? applyCustomRoundOff(total_amount, customFinal.value)
+      : applyRoundOff(total_amount, roundOffEnabled);
 
     const inv_date = invoice_date || new Date().toISOString().split("T")[0];
     const b_start = billing_period_start || event_date || inv_date;
@@ -1698,8 +1738,16 @@ router.put("/:id", async (req, res) => {
       (taxable_value + cgst_amount + sgst_amount + igst_amount).toFixed(2),
     );
     const raw_final = parseFloat(final_amount.toFixed(2));
+    const customFinal = parseCustomFinalAmount(req.body.rounded_final_amount);
+    if (customFinal?.error) {
+      return res
+        .status(400)
+        .json({ success: false, message: customFinal.error });
+    }
     const roundOffEnabled = await getRoundOffSetting();
-    const roundResult = applyRoundOff(raw_final, roundOffEnabled);
+    const roundResult = customFinal
+      ? applyCustomRoundOff(raw_final, customFinal.value)
+      : applyRoundOff(raw_final, roundOffEnabled);
     final_amount = roundResult.final_amount;
     const round_off = roundResult.round_off;
 
@@ -1714,7 +1762,8 @@ router.put("/:id", async (req, res) => {
         (
           final_amount -
           (invoice.payment_received || 0) -
-          (invoice.tds_deducted || 0)
+          (invoice.tds_deducted || 0) -
+          (invoice.settlement_round_off || 0)
         ).toFixed(2),
       );
       if (payment_due <= 0.5) {

@@ -61,70 +61,159 @@ function uploadAttachment(req, res, next) {
 // GET /api/payments — register of all payment transactions, any tab
 // ─────────────────────────────────────────────────────────────────────────────
 const ALL_TYPES = ['client_receipt', 'vendor_payment', 'salary_payment'];
+// Bank entries (charges / interest / transfers) live in `vouchers`, not
+// payment_transactions; the register only includes them when asked for
+// explicitly, so other callers of this endpoint keep getting payment rows only.
+const BANK_ENTRY_TYPE = 'bank_entry';
+const DIRECTION = { client_receipt: 'credit', vendor_payment: 'debit', salary_payment: 'debit' };
 
-// Accepts either `types=client_receipt,vendor_payment` (any combination) or the
-// legacy singular `transaction_type` — so "all", "just vendor", "2 of 3", etc.
-// are all just different subsets of the same filter, in both the register and the PDF.
 function resolveTypesFilter(req) {
   if (req.query.types) {
     const requested = String(req.query.types).split(',').map((t) => t.trim()).filter(Boolean);
-    const valid = requested.filter((t) => ALL_TYPES.includes(t));
+    const valid = requested.filter((t) => ALL_TYPES.includes(t) || t === BANK_ENTRY_TYPE);
     return valid.length > 0 ? valid : ALL_TYPES;
   }
   if (req.query.transaction_type) return [req.query.transaction_type];
   return ALL_TYPES;
 }
 
+// Shape a bank-entry voucher like a register row. Journal entries move money
+// one way (debit_account_id set = charge/money out, credit_account_id set =
+// money in); a transfer (contra) leaves one account and enters another, so it
+// shows on both sides and nets to zero.
+function bankEntryToRegisterRow(v) {
+  const isTransfer = v.voucher_type === 'contra';
+  const amount = parseFloat(v.amount) || 0;
+  const moneyOut = isTransfer || !!v.debit_account_id;
+  const moneyIn = isTransfer || (!v.debit_account_id && !!v.credit_account_id);
+  return {
+    ...v,
+    row_key: `bank_entry-${v.id}`,
+    transaction_type: BANK_ENTRY_TYPE,
+    payment_date: v.voucher_date,
+    party_name: null,
+    transaction_reference: [v.voucher_number, v.narration].filter(Boolean).join(' — '),
+    payment_method: isTransfer ? 'transfer' : 'bank entry',
+    bank_account_name: isTransfer
+      ? `${v.credit_account_name || '?'} → ${v.debit_account_name || '?'}`
+      : (v.debit_account_name || v.credit_account_name || ''),
+    debit_amount: moneyOut ? amount : 0,
+    credit_amount: moneyIn ? amount : 0,
+    total_gst_amount: 0,
+    tds_amount: 0,
+  };
+}
+
 async function fetchPaymentRows({ types, party_id, from_date, to_date, search, limit, offset }) {
-  let conditions = [];
-  let params = [];
+  const paymentTypes = types.filter((t) => t !== BANK_ENTRY_TYPE);
+  // Bank entries have no party, so a party filter excludes them.
+  const includeBank = types.includes(BANK_ENTRY_TYPE) && !party_id;
+  const params = [];
   let pc = 1;
+  const parts = [];
 
-  const typePlaceholders = types.map(() => `$${pc++}`);
-  conditions.push(`pt.transaction_type IN (${typePlaceholders.join(',')})`);
-  params.push(...types);
-
-  if (party_id) { conditions.push(`pt.party_id = $${pc}`); params.push(party_id); pc++; }
-  if (from_date) { conditions.push(`pt.payment_date >= $${pc}`); params.push(from_date); pc++; }
-  if (to_date) { conditions.push(`pt.payment_date <= $${pc}`); params.push(to_date); pc++; }
-  if (search) {
-    conditions.push(`(c.name LIKE $${pc} OR v.name LIKE $${pc} OR e.full_name LIKE $${pc} OR i.invoice_number LIKE $${pc} OR ex.description LIKE $${pc} OR pt.transaction_reference LIKE $${pc})`);
-    params.push(`%${search}%`);
-    pc++;
+  if (paymentTypes.length > 0) {
+    const conditions = [`pt.transaction_type IN (${paymentTypes.map(() => `$${pc++}`).join(',')})`];
+    params.push(...paymentTypes);
+    if (party_id) { conditions.push(`pt.party_id = $${pc}`); params.push(party_id); pc++; }
+    if (from_date) { conditions.push(`pt.payment_date >= $${pc}`); params.push(from_date); pc++; }
+    if (to_date) { conditions.push(`pt.payment_date <= $${pc}`); params.push(to_date); pc++; }
+    if (search) {
+      conditions.push(`(c.name LIKE $${pc} OR v.name LIKE $${pc} OR e.full_name LIKE $${pc} OR i.invoice_number LIKE $${pc} OR ex.description LIKE $${pc} OR pt.transaction_reference LIKE $${pc})`);
+      params.push(`%${search}%`);
+      pc++;
+    }
+    parts.push(`SELECT 'pt' AS src, pt.id AS id, pt.payment_date AS sort_date
+       FROM payment_transactions pt
+       LEFT JOIN clients c ON pt.party_type = 'client' AND pt.party_id = c.id
+       LEFT JOIN vendors v ON pt.party_type = 'vendor' AND pt.party_id = v.id
+       LEFT JOIN employees e ON pt.party_type = 'employee' AND pt.party_id = e.id
+       LEFT JOIN invoices i ON pt.reference_type = 'invoice' AND pt.reference_id = i.id
+       LEFT JOIN expenses ex ON pt.reference_type = 'expense' AND pt.reference_id = ex.id
+       WHERE ${conditions.join(' AND ')}`);
   }
 
-  const where = `WHERE ${conditions.join(' AND ')}`;
-  const joins = `
-     FROM payment_transactions pt
-     LEFT JOIN clients c ON pt.party_type = 'client' AND pt.party_id = c.id
-     LEFT JOIN vendors v ON pt.party_type = 'vendor' AND pt.party_id = v.id
-     LEFT JOIN employees e ON pt.party_type = 'employee' AND pt.party_id = e.id
-     LEFT JOIN invoices i ON pt.reference_type = 'invoice' AND pt.reference_id = i.id
-     LEFT JOIN expenses ex ON pt.reference_type = 'expense' AND pt.reference_id = ex.id`;
+  if (includeBank) {
+    const conditions = [`bv.voucher_type IN ('journal', 'contra')`, `bv.status = 'posted'`];
+    if (from_date) { conditions.push(`bv.voucher_date >= $${pc}`); params.push(from_date); pc++; }
+    if (to_date) { conditions.push(`bv.voucher_date <= $${pc}`); params.push(to_date); pc++; }
+    if (search) {
+      conditions.push(`(bv.voucher_number LIKE $${pc} OR bv.narration LIKE $${pc} OR bv.transaction_ref LIKE $${pc} OR da.account_name LIKE $${pc} OR ca.account_name LIKE $${pc})`);
+      params.push(`%${search}%`);
+      pc++;
+    }
+    parts.push(`SELECT 'bank' AS src, bv.id AS id, bv.voucher_date AS sort_date
+       FROM vouchers bv
+       LEFT JOIN bank_accounts da ON bv.debit_account_id = da.id
+       LEFT JOIN bank_accounts ca ON bv.credit_account_id = ca.id
+       WHERE ${conditions.join(' AND ')}`);
+  }
+
+  if (parts.length === 0) return { rows: [], total: 0 };
+
+  // Page over both sources together by date, then load the full rows for that page.
+  const union = parts.join(' UNION ALL ');
+  const countResult = await query(`SELECT COUNT(*) as count FROM (${union}) x`, params);
+  const total = parseInt(countResult.rows[0].count);
 
   let limitClause = '';
+  const pageParams = [...params];
   if (limit) {
     limitClause = `LIMIT $${pc} OFFSET $${pc + 1}`;
-    params.push(parseInt(limit), parseInt(offset) || 0);
+    pageParams.push(parseInt(limit), parseInt(offset) || 0);
+  }
+  const pageResult = await query(
+    `SELECT src, id FROM (${union}) x ORDER BY sort_date DESC, src DESC, id DESC ${limitClause}`,
+    pageParams
+  );
+  const pageKeys = pageResult.rows;
+  const ptIds = pageKeys.filter((r) => r.src === 'pt').map((r) => r.id);
+  const bankIds = pageKeys.filter((r) => r.src === 'bank').map((r) => r.id);
+
+  const byKey = new Map();
+  if (ptIds.length > 0) {
+    const ptRows = await query(
+      `SELECT pt.*,
+              COALESCE(c.name, v.name, e.full_name) as party_name,
+              i.invoice_number, ex.description as expense_description,
+              ba.account_name as bank_account_name, ba.account_type as bank_account_type,
+              ptd.total_gst_amount, ptd.tds_amount, ptd.cgst_amount, ptd.sgst_amount, ptd.igst_amount
+       FROM payment_transactions pt
+       LEFT JOIN clients c ON pt.party_type = 'client' AND pt.party_id = c.id
+       LEFT JOIN vendors v ON pt.party_type = 'vendor' AND pt.party_id = v.id
+       LEFT JOIN employees e ON pt.party_type = 'employee' AND pt.party_id = e.id
+       LEFT JOIN invoices i ON pt.reference_type = 'invoice' AND pt.reference_id = i.id
+       LEFT JOIN expenses ex ON pt.reference_type = 'expense' AND pt.reference_id = ex.id
+       LEFT JOIN bank_accounts ba ON pt.bank_account_id = ba.id
+       LEFT JOIN payment_tax_details ptd ON ptd.payment_transaction_id = pt.id
+       WHERE pt.id IN (${ptIds.map((_, idx) => `$${idx + 1}`).join(',')})`,
+      ptIds
+    );
+    for (const r of ptRows.rows) {
+      const amount = parseFloat(r.amount) || 0;
+      const isCredit = DIRECTION[r.transaction_type] === 'credit';
+      byKey.set(`pt-${r.id}`, {
+        ...r,
+        row_key: `${r.transaction_type}-${r.id}`,
+        debit_amount: isCredit ? 0 : amount,
+        credit_amount: isCredit ? amount : 0,
+      });
+    }
+  }
+  if (bankIds.length > 0) {
+    const bankRows = await query(
+      `SELECT bv.*, da.account_name as debit_account_name, ca.account_name as credit_account_name
+       FROM vouchers bv
+       LEFT JOIN bank_accounts da ON bv.debit_account_id = da.id
+       LEFT JOIN bank_accounts ca ON bv.credit_account_id = ca.id
+       WHERE bv.id IN (${bankIds.map((_, idx) => `$${idx + 1}`).join(',')})`,
+      bankIds
+    );
+    for (const r of bankRows.rows) byKey.set(`bank-${r.id}`, bankEntryToRegisterRow(r));
   }
 
-  const result = await query(
-    `SELECT pt.*,
-            COALESCE(c.name, v.name, e.full_name) as party_name,
-            i.invoice_number, ex.description as expense_description,
-            ba.account_name as bank_account_name, ba.account_type as bank_account_type,
-            ptd.total_gst_amount, ptd.tds_amount, ptd.cgst_amount, ptd.sgst_amount, ptd.igst_amount
-     ${joins}
-     LEFT JOIN bank_accounts ba ON pt.bank_account_id = ba.id
-     LEFT JOIN payment_tax_details ptd ON ptd.payment_transaction_id = pt.id
-     ${where}
-     ORDER BY pt.payment_date DESC, pt.id DESC
-     ${limitClause}`,
-    params
-  );
-
-  const countResult = await query(`SELECT COUNT(*) as count ${joins} ${where}`, params.slice(0, pc - 1));
-  return { rows: result.rows, total: parseInt(countResult.rows[0].count) };
+  const rows = pageKeys.map((k) => byKey.get(`${k.src}-${k.id}`)).filter(Boolean);
+  return { rows, total };
 }
 
 router.get('/', async (req, res) => {
@@ -220,8 +309,7 @@ router.get('/open-bills', async (req, res) => {
 // a Debit/Credit column and totals, so the same filter that's on screen is
 // what gets downloaded.
 // ─────────────────────────────────────────────────────────────────────────────
-const TYPE_LABELS = { client_receipt: 'Client Receipts', vendor_payment: 'Vendor Payments', salary_payment: 'Salary Payments' };
-const DIRECTION = { client_receipt: 'credit', vendor_payment: 'debit', salary_payment: 'debit' };
+const TYPE_LABELS = { client_receipt: 'Client Receipts', vendor_payment: 'Vendor Payments', salary_payment: 'Salary Payments', bank_entry: 'Bank Entries' };
 
 router.get('/register/pdf', async (req, res) => {
   try {
@@ -231,20 +319,21 @@ router.get('/register/pdf', async (req, res) => {
 
     let totalDebit = 0, totalCredit = 0, totalGst = 0, totalTds = 0;
     const tableRows = rows.map((r) => {
-      const amount = parseFloat(r.amount) || 0;
+      const debitAmt = parseFloat(r.debit_amount) || 0;
+      const creditAmt = parseFloat(r.credit_amount) || 0;
       const gst = parseFloat(r.total_gst_amount) || 0;
       const tds = parseFloat(r.tds_amount) || 0;
-      const isCredit = DIRECTION[r.transaction_type] === 'credit';
-      if (isCredit) totalCredit += amount; else totalDebit += amount;
+      totalDebit += debitAmt;
+      totalCredit += creditAmt;
       totalGst += gst;
       totalTds += tds;
       return {
         date: r.payment_date,
         type: TYPE_LABELS[r.transaction_type] || r.transaction_type,
         party: r.party_name || '',
-        reference: r.invoice_number || r.expense_description || r.transaction_reference || '',
-        debit: isCredit ? '' : amount.toFixed(2),
-        credit: isCredit ? amount.toFixed(2) : '',
+        reference: r.invoice_number || r.expense_description || (r.salary_month ? `Salary ${r.salary_month}` : '') || r.transaction_reference || '',
+        debit: debitAmt > 0 ? debitAmt.toFixed(2) : '',
+        credit: creditAmt > 0 ? creditAmt.toFixed(2) : '',
         gst: gst > 0 ? gst.toFixed(2) : '',
         tds: tds > 0 ? tds.toFixed(2) : '',
         method: (r.payment_method || '').replace('_', ' '),
@@ -256,7 +345,11 @@ router.get('/register/pdf', async (req, res) => {
     const agencySetting = await query("SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'");
     const agencySettings = agencySetting.rows.length > 0 ? JSON.parse(agencySetting.rows[0].setting_value) : null;
 
-    const includedLabel = types.length === 3 ? 'All Payments' : types.map((t) => TYPE_LABELS[t]).join(' + ');
+    const includedLabel = ALL_TYPES.every((t) => types.includes(t)) && types.includes(BANK_ENTRY_TYPE)
+      ? 'All Payments + Bank Entries'
+      : ALL_TYPES.every((t) => types.includes(t)) && types.length === ALL_TYPES.length
+        ? 'All Payments'
+        : types.map((t) => TYPE_LABELS[t]).join(' + ');
     const subtitleLines = [includedLabel];
     if (from_date || to_date) subtitleLines.push(`Period: ${from_date || 'Start'} to ${to_date || 'Today'}`);
 
@@ -308,25 +401,48 @@ router.get('/register/pdf', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/bank-entries', async (req, res) => {
   try {
-    const { from_date, to_date, limit = 100 } = req.query;
-    let conditions = [`v.voucher_type IN ('journal', 'contra')`, `v.status = 'posted'`];
+    const { from_date, to_date, bank_account_id, search } = req.query;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.max(1, parseInt(req.query.limit) || 20);
+    // types=journal,contra — journal = charges/interest/adjustments, contra = transfers
+    const types = String(req.query.types || 'journal,contra').split(',').filter(t => t === 'journal' || t === 'contra');
+    if (types.length === 0) {
+      return res.json({ success: true, data: [], pagination: { page: 1, limit, total: 0, totalPages: 0 } });
+    }
+    let conditions = [`v.voucher_type IN (${types.map(t => `'${t}'`).join(', ')})`, `v.status = 'posted'`];
     let params = [];
     let pc = 1;
     if (from_date) { conditions.push(`v.voucher_date >= $${pc}`); params.push(from_date); pc++; }
     if (to_date) { conditions.push(`v.voucher_date <= $${pc}`); params.push(to_date); pc++; }
-    params.push(parseInt(limit));
+    if (bank_account_id) {
+      conditions.push(`(v.debit_account_id = $${pc} OR v.credit_account_id = $${pc})`);
+      params.push(parseInt(bank_account_id)); pc++;
+    }
+    if (search) {
+      conditions.push(`(v.voucher_number LIKE $${pc} OR v.narration LIKE $${pc} OR v.transaction_ref LIKE $${pc} OR da.account_name LIKE $${pc} OR ca.account_name LIKE $${pc})`);
+      params.push(`%${search}%`); pc++;
+    }
+    const where = conditions.join(' AND ');
+    const joins = `
+       FROM vouchers v
+       LEFT JOIN bank_accounts da ON v.debit_account_id = da.id
+       LEFT JOIN bank_accounts ca ON v.credit_account_id = ca.id`;
 
     const result = await query(
       `SELECT v.*, da.account_name as debit_account_name, ca.account_name as credit_account_name
-       FROM vouchers v
-       LEFT JOIN bank_accounts da ON v.debit_account_id = da.id
-       LEFT JOIN bank_accounts ca ON v.credit_account_id = ca.id
-       WHERE ${conditions.join(' AND ')}
+       ${joins}
+       WHERE ${where}
        ORDER BY v.voucher_date DESC, v.id DESC
-       LIMIT $${pc}`,
-      params
+       LIMIT $${pc} OFFSET $${pc + 1}`,
+      [...params, limit, (page - 1) * limit]
     );
-    res.json({ success: true, data: result.rows });
+    const countResult = await query(`SELECT COUNT(*) as count ${joins} WHERE ${where}`, params);
+    const total = parseInt(countResult.rows[0].count);
+    res.json({
+      success: true,
+      data: result.rows,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
   } catch (error) {
     logError(error, req, { feature: 'payments' });
     logger.error('Fetch bank entries error:', error);
@@ -420,6 +536,7 @@ router.post('/', uploadAttachment, async (req, res) => {
           invoice_id: req.body.invoice_id,
           amount_paid: req.body.amount_paid || req.body.amount,
           tds_deducted: req.body.tds_deducted || 0,
+          round_off: req.body.round_off,
           payment_date: req.body.payment_date,
           payment_method: req.body.payment_method,
           bank_account_id: req.body.bank_account_id,
@@ -441,6 +558,7 @@ router.post('/', uploadAttachment, async (req, res) => {
           attachment_url,
           notes: req.body.notes,
           tds_amount: req.body.tds_amount || 0,
+          round_off: req.body.round_off,
           tax_type: req.body.tax_type,
           tax_rate: req.body.tax_rate,
           is_rcm_applicable: req.body.is_rcm_applicable === 'true' || req.body.is_rcm_applicable === true,
@@ -461,6 +579,7 @@ router.post('/', uploadAttachment, async (req, res) => {
           attachment_url,
           notes: req.body.notes,
           employee_bank_snapshot: req.body.employee_bank_snapshot,
+          salary_month: req.body.salary_month,
         },
         req.user.userId
       );
@@ -498,6 +617,7 @@ router.put('/:id', uploadAttachment, async (req, res) => {
         {
           amount: req.body.amount || req.body.amount_paid,
           tds_deducted: req.body.tds_deducted !== undefined ? req.body.tds_deducted : req.body.tds_amount,
+          round_off: req.body.round_off,
           payment_date: req.body.payment_date,
           payment_method: req.body.payment_method,
           bank_account_id: req.body.bank_account_id,
@@ -513,6 +633,7 @@ router.put('/:id', uploadAttachment, async (req, res) => {
         {
           amount: req.body.amount,
           tds_amount: req.body.tds_amount !== undefined ? req.body.tds_amount : req.body.tds_deducted,
+          round_off: req.body.round_off,
           payment_date: req.body.payment_date,
           payment_method: req.body.payment_method,
           bank_account_id: req.body.bank_account_id,
@@ -534,6 +655,7 @@ router.put('/:id', uploadAttachment, async (req, res) => {
           attachment_url,
           notes: req.body.notes,
           employee_bank_snapshot: req.body.employee_bank_snapshot,
+          salary_month: req.body.salary_month,
         },
         req.user.userId
       );

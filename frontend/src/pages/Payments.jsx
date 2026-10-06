@@ -5,6 +5,7 @@ import api from '../services/api';
 import { toast, confirmDialog } from '../context/ToastContext';
 import { getServerBaseUrl, getApiBaseUrl } from '../utils/apiUrl';
 import Pagination from '../components/Pagination';
+import TaxRateSelect from '../components/TaxRateSelect';
 
 const TABS = [
   { key: 'client', label: 'Client Receipts', icon: Users, transactionType: 'client_receipt', partyType: 'client' },
@@ -19,13 +20,38 @@ const REGISTER_TYPES = [
   { value: 'client_receipt', label: 'Client Receipts', direction: 'credit' },
   { value: 'vendor_payment', label: 'Vendor Payments', direction: 'debit' },
   { value: 'salary_payment', label: 'Salary Payments', direction: 'debit' },
+  { value: 'bank_entry', label: 'Bank Entries', direction: 'both' },
 ];
 
+// Local calendar date (YYYY-MM-DD) — toISOString() is UTC and would show
+// yesterday's date before 5:30 AM IST.
+const todayLocal = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+// Salary is usually paid in arrears, so default to last month.
+const lastMonth = () => {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+
+const salaryMonthLabel = (month) => {
+  const [y, m] = String(month || '').split('-').map(Number);
+  if (!y || !m) return '';
+  return new Date(y, m - 1, 1).toLocaleString('en-IN', { month: 'short', year: 'numeric' });
+};
+
+const freshForm = () => ({ ...emptyForm, payment_date: todayLocal(), salary_month: lastMonth() });
+
 const emptyForm = {
-  party_id: '', bill_id: '', amount: '', tds_amount: '',
+  party_id: '', bill_id: '', amount: '', tds_amount: '', payment_date: '', salary_month: '',
   payment_method: 'bank_transfer', bank_account_id: '', transaction_reference: '', notes: '',
   tax_type: 'none', tax_rate: '', is_rcm_applicable: false,
   employee_bank_choice: 'current',
+  round_off_enabled: false,
 };
 
 // Bank Entries — charges, interest, other adjustments, and inter-account
@@ -36,6 +62,11 @@ const BANK_ENTRY_KINDS = [
   { value: 'other_debit', label: 'Other Charge / Debit' },
   { value: 'other_credit', label: 'Other Credit' },
   { value: 'transfer', label: 'Transfer Between Accounts (bank↔bank, cash↔bank)' },
+];
+
+const BANK_ENTRY_TYPES = [
+  { value: 'journal', label: 'Charges / Interest / Adjustments' },
+  { value: 'contra', label: 'Transfers' },
 ];
 
 const emptyBankForm = {
@@ -72,6 +103,8 @@ export default function Payments() {
     transaction_reference: '',
     notes: '',
     employee_bank_snapshot: '',
+    salary_month: '',
+    round_off: '',
   });
   const [editAttachment, setEditAttachment] = useState(null);
   const [submittingEdit, setSubmittingEdit] = useState(false);
@@ -82,13 +115,20 @@ export default function Payments() {
   const [submittingEditBank, setSubmittingEditBank] = useState(false);
 
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState(emptyForm);
+  const [form, setForm] = useState(freshForm);
   const [attachment, setAttachment] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const [bankForm, setBankForm] = useState(emptyBankForm);
+  const [bankForm, setBankForm] = useState(() => ({ ...emptyBankForm, entry_date: todayLocal() }));
   const [bankEntries, setBankEntries] = useState([]);
   const [loadingBankEntries, setLoadingBankEntries] = useState(false);
+  const [bankPage, setBankPage] = useState(1);
+  const [bankPagination, setBankPagination] = useState(null);
+  const [bankTypes, setBankTypes] = useState(BANK_ENTRY_TYPES.map(t => t.value));
+  const [bankDates, setBankDates] = useState({ from: '', to: '' });
+  const [bankAccountFilter, setBankAccountFilter] = useState('');
+  const [bankSearch, setBankSearch] = useState('');
+  const [debouncedBankSearch, setDebouncedBankSearch] = useState('');
   const [submittingBank, setSubmittingBank] = useState(false);
 
   const partyList = activeTab === 'client' ? clients : activeTab === 'vendor' ? vendors : employees;
@@ -181,7 +221,6 @@ export default function Payments() {
     window.open(`${getApiBaseUrl()}/payments/register/pdf?${params.toString()}`, '_blank');
   };
 
-  const directionFor = (transactionType) => REGISTER_TYPES.find(t => t.value === transactionType)?.direction || 'debit';
 
   // Transaction Delete Handler (matches Purchase Bill UX with confirmDialog danger variant)
   const handleDeleteTransaction = async (row) => {
@@ -221,6 +260,8 @@ export default function Payments() {
       transaction_reference: row.transaction_reference || '',
       notes: row.notes || '',
       employee_bank_snapshot: row.employee_bank_snapshot || '',
+      salary_month: row.salary_month || '',
+      round_off: parseFloat(row.round_off) ? String(row.round_off) : '',
     });
     setEditAttachment(null);
   };
@@ -242,10 +283,13 @@ export default function Payments() {
       fd.append('notes', editForm.notes);
       if (editingTransaction.transaction_type === 'client_receipt') {
         fd.append('tds_deducted', editForm.tds_amount || 0);
+        fd.append('round_off', editForm.round_off || 0);
       } else if (editingTransaction.transaction_type === 'vendor_payment') {
         fd.append('tds_amount', editForm.tds_amount || 0);
+        fd.append('round_off', editForm.round_off || 0);
       } else if (editingTransaction.transaction_type === 'salary_payment') {
         fd.append('employee_bank_snapshot', editForm.employee_bank_snapshot || '');
+        if (!editingTransaction.reference_id) fd.append('salary_month', editForm.salary_month || '');
       }
       if (editAttachment) {
         fd.append('attachment', editAttachment);
@@ -320,6 +364,7 @@ export default function Payments() {
       toast.success(`Bank entry ${editingBankEntry.voucher_number} updated successfully`);
       setEditingBankEntry(null);
       fetchBankEntries();
+      fetchRegister();
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Failed to update bank entry');
     } finally {
@@ -339,13 +384,14 @@ export default function Payments() {
       await api.delete(`/payments/bank-entries/${v.id}`);
       toast.success(`Bank entry ${v.voucher_number} deleted successfully`);
       fetchBankEntries();
+      fetchRegister();
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Failed to delete bank entry');
     }
   };
 
   const resetForm = () => {
-    setForm(emptyForm);
+    setForm(freshForm());
     setAttachment(null);
     setOpenBills([]);
   };
@@ -354,19 +400,47 @@ export default function Payments() {
     setActiveTab(key);
     setShowForm(false);
     resetForm();
-    if (key === 'bank') fetchBankEntries();
+    setBankPage(1);
   };
 
   const fetchBankEntries = async () => {
     setLoadingBankEntries(true);
     try {
-      const res = await api.get('/payments/bank-entries?limit=100');
-      setBankEntries(res.data || []);
+      const params = new URLSearchParams({ page: bankPage, limit: 20, types: bankTypes.join(',') });
+      if (bankDates.from) params.set('from_date', bankDates.from);
+      if (bankDates.to) params.set('to_date', bankDates.to);
+      if (bankAccountFilter) params.set('bank_account_id', bankAccountFilter);
+      if (debouncedBankSearch) params.set('search', debouncedBankSearch);
+      const res = await api.get(`/payments/bank-entries?${params.toString()}`);
+      const rows = res.data || [];
+      // Deleting the last entry on a page leaves it empty — step back one page.
+      if (rows.length === 0 && bankPage > 1) {
+        setBankPage(p => p - 1);
+        return;
+      }
+      setBankEntries(rows);
+      setBankPagination(res.pagination || null);
     } catch (err) {
       console.error('Failed to load bank entries', err);
     } finally {
       setLoadingBankEntries(false);
     }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'bank') fetchBankEntries();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, bankPage, bankTypes, bankDates, bankAccountFilter, debouncedBankSearch]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedBankSearch(bankSearch), 300);
+    return () => clearTimeout(timer);
+  }, [bankSearch]);
+
+  useEffect(() => { setBankPage(1); }, [bankTypes, bankDates, bankAccountFilter, debouncedBankSearch]);
+
+  const toggleBankType = (value) => {
+    setBankTypes(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]);
   };
 
   const handleBankFormSubmit = async (e) => {
@@ -387,7 +461,7 @@ export default function Payments() {
     try {
       await api.post('/payments/bank-entry', bankForm);
       toast.success('Bank entry recorded successfully');
-      setBankForm(emptyBankForm);
+      setBankForm({ ...emptyBankForm, entry_date: todayLocal() });
       setShowForm(false);
       fetchBankEntries();
     } catch (err) {
@@ -434,6 +508,26 @@ export default function Payments() {
   const computedTds = isTdsLocked ? Math.round((parseFloat(form.amount) || 0) * tdsRatio * 100) / 100 : null;
   const effectiveTdsValue = isTdsLocked ? computedTds : form.tds_amount;
 
+  // Round off (client / vendor only): pay a rounded amount and write the small
+  // difference off so the bill is fully settled — e.g. ₹11,227 due, ₹11,200 paid,
+  // ₹27 round off. Positive = written off, negative = a little extra received.
+  const canRoundOff = (activeTab === 'client' || activeTab === 'vendor') && !!selectedBill;
+  const billDue = canRoundOff ? (billDueAmount(selectedBill) || 0) : 0;
+  const roundOffValue = canRoundOff && form.round_off_enabled
+    ? Math.round((billDue - (parseFloat(form.amount) || 0) - (parseFloat(effectiveTdsValue) || 0)) * 100) / 100
+    : 0;
+  const roundOffSuggestions = (() => {
+    if (!canRoundOff) return [];
+    const net = Math.round((billDue - (parseFloat(effectiveTdsValue) || 0)) * 100) / 100;
+    if (net <= 0) return [];
+    return [...new Set([
+      Math.floor(net / 100) * 100,
+      Math.floor(net / 10) * 10,
+      Math.ceil(net / 10) * 10,
+      Math.ceil(net / 100) * 100,
+    ])].filter(v => v > 0 && v !== net).sort((a, b) => a - b);
+  })();
+
   const handleBillChange = (billId) => {
     const bill = openBills.find(b => String(b.id) === String(billId));
     const due = billDueAmount(bill);
@@ -449,6 +543,9 @@ export default function Payments() {
       bill_id: billId,
       amount: amount !== null ? String(Math.round(amount * 100) / 100) : f.amount,
       tds_amount: '',
+      round_off_enabled: false,
+      // A payroll run / salary slip already belongs to a month — lock to it.
+      ...(activeTab === 'employee' && bill?.period ? { salary_month: String(bill.period).slice(0, 7) } : {}),
     }));
   };
 
@@ -476,11 +573,20 @@ export default function Payments() {
       toast.error('Please select a party and enter a valid amount');
       return;
     }
+    if (!form.payment_date) {
+      toast.error('Please select a payment date');
+      return;
+    }
+    if (activeTab === 'employee' && !form.salary_month) {
+      toast.error('Please select the month this salary is for');
+      return;
+    }
     setSubmitting(true);
     try {
       const fd = new FormData();
       fd.append('transaction_type', tab.transactionType);
       fd.append('amount', form.amount);
+      fd.append('payment_date', form.payment_date);
       fd.append('payment_method', form.payment_method);
       fd.append('bank_account_id', form.bank_account_id);
       fd.append('transaction_reference', form.transaction_reference);
@@ -490,9 +596,11 @@ export default function Payments() {
       if (activeTab === 'client') {
         fd.append('invoice_id', form.bill_id);
         fd.append('tds_deducted', effectiveTdsValue || 0);
+        fd.append('round_off', roundOffValue);
       } else if (activeTab === 'vendor') {
         fd.append('expense_id', form.bill_id);
         fd.append('tds_amount', effectiveTdsValue || 0);
+        fd.append('round_off', roundOffValue);
         if (!(selectedBill && selectedBill.tax_type && selectedBill.tax_type !== 'none')) {
           fd.append('tax_type', form.tax_type);
           fd.append('tax_rate', form.tax_rate || 0);
@@ -500,6 +608,7 @@ export default function Payments() {
         }
       } else {
         fd.append('employee_id', form.party_id);
+        fd.append('salary_month', form.salary_month);
         if (form.bill_id) {
           const src = selectedBill?.source || 'payroll';
           fd.append('reference_type', src);
@@ -534,11 +643,11 @@ export default function Payments() {
           <p className="text-slate-500 mt-1">Record money received from clients, paid to vendors, disbursed as salary, and general bank activity — charges, interest, and transfers.</p>
         </div>
         <button
-          onClick={() => setShowForm(s => !s)}
+          onClick={() => setShowForm(true)}
           className="inline-flex items-center gap-2 px-4 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-medium shadow-sm transition-colors"
         >
-          {showForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-          {showForm ? 'Cancel' : activeTab === 'bank' ? 'Record Bank Entry' : 'Record Payment'}
+          <Plus className="w-4 h-4" />
+          {activeTab === 'bank' ? 'Record Bank Entry' : 'Record Payment'}
         </button>
       </div>
 
@@ -566,7 +675,18 @@ export default function Payments() {
         </div>
 
         {showForm && activeTab === 'bank' && (
-          <form onSubmit={handleBankFormSubmit} className="p-6 border-b border-slate-200 bg-slate-50/50 space-y-4">
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full border border-slate-200 overflow-hidden my-8">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
+              <div>
+                <h3 className="text-lg font-bold text-slate-800">Record Bank Entry</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Bank charges, interest, other adjustments, or a transfer between accounts.</p>
+              </div>
+              <button type="button" onClick={() => setShowForm(false)} className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          <form onSubmit={handleBankFormSubmit} className="p-6 space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">Entry Type *</label>
@@ -582,9 +702,9 @@ export default function Payments() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Date</label>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Date *</label>
                 <input
-                  type="date"
+                  type="date" required
                   value={bankForm.entry_date}
                   onChange={e => setBankForm(f => ({ ...f, entry_date: e.target.value }))}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
@@ -667,10 +787,23 @@ export default function Payments() {
               </button>
             </div>
           </form>
+          </div>
+          </div>
         )}
 
         {showForm && activeTab !== 'bank' && (
-          <form onSubmit={handleSubmit} className="p-6 border-b border-slate-200 bg-slate-50/50 space-y-4">
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full border border-slate-200 overflow-hidden my-8">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
+              <div>
+                <h3 className="text-lg font-bold text-slate-800">{activeTab === 'client' ? 'Record Client Receipt' : activeTab === 'vendor' ? 'Record Vendor Payment' : 'Record Salary Payment'}</h3>
+                <p className="text-xs text-slate-500 mt-0.5">{activeTab === 'client' ? 'Money received from a client against an invoice.' : activeTab === 'vendor' ? 'Money paid to a vendor against a bill.' : 'Salary paid to an employee.'}</p>
+              </div>
+              <button type="button" onClick={() => setShowForm(false)} className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">
@@ -743,7 +876,16 @@ export default function Payments() {
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Payment Date *</label>
+                <input
+                  type="date" required
+                  value={form.payment_date}
+                  onChange={e => setForm(f => ({ ...f, payment_date: e.target.value }))}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                />
+              </div>
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">Amount (₹) *</label>
                 <input
@@ -753,6 +895,19 @@ export default function Payments() {
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
                 />
               </div>
+              {activeTab === 'employee' && (
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Salary Month *</label>
+                  <input
+                    type="month" required
+                    value={form.salary_month}
+                    onChange={e => setForm(f => ({ ...f, salary_month: e.target.value }))}
+                    disabled={!!form.bill_id}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 disabled:bg-slate-100 disabled:text-slate-500"
+                  />
+                  {form.bill_id && <p className="text-xs text-slate-400 mt-1">Set by the selected salary run.</p>}
+                </div>
+              )}
               {activeTab !== 'employee' && (
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">TDS Deducted (₹)</label>
@@ -786,6 +941,45 @@ export default function Payments() {
               </div>
             </div>
 
+            {canRoundOff && (
+              <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-2 text-xs">
+                <label className="flex items-center gap-2 font-semibold text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.round_off_enabled}
+                    onChange={e => setForm(f => ({ ...f, round_off_enabled: e.target.checked }))}
+                  />
+                  Round off &amp; settle this {activeTab === 'client' ? 'invoice' : 'bill'} in full
+                  <span className="font-normal text-slate-500">(due ₹{billDue.toLocaleString('en-IN', { minimumFractionDigits: 2 })})</span>
+                </label>
+                {form.round_off_enabled && (
+                  <>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-slate-500">{activeTab === 'client' ? 'Amount received:' : 'Amount paid:'}</span>
+                      {roundOffSuggestions.map(v => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => setForm(f => ({ ...f, amount: String(v) }))}
+                          className={`px-2 py-1 rounded border font-semibold transition-colors cursor-pointer ${parseFloat(form.amount) === v ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}
+                        >
+                          ₹{v.toLocaleString('en-IN')}
+                        </button>
+                      ))}
+                      <span className="text-slate-400">or type it in Amount above</span>
+                    </div>
+                    <p className="text-slate-600">
+                      Round off: <strong className="text-slate-800">{roundOffValue > 0 ? `-₹${roundOffValue.toFixed(2)} (written off)` : roundOffValue < 0 ? `+₹${Math.abs(roundOffValue).toFixed(2)} (extra received)` : '₹0.00'}</strong>
+                      {' '}— the {activeTab === 'client' ? 'invoice' : 'bill'} will be marked fully paid. Only the actual amount goes to the bank.
+                    </p>
+                    {billDue > 0 && Math.abs(roundOffValue) > billDue * 0.01 && (
+                      <p className="text-amber-700">Round off is more than 1% of the amount due — double-check the amount.</p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
             {activeTab === 'client' && selectedBill && selectedBill.tax_type && selectedBill.tax_type !== 'none' && (
               <div className="p-3 bg-white rounded-lg border border-slate-200">
                 <p className="text-xs text-slate-600">
@@ -809,26 +1003,13 @@ export default function Payments() {
                   </p>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-700 mb-1">Tax Type</label>
-                      <select
-                        value={form.tax_type}
-                        onChange={e => setForm(f => ({ ...f, tax_type: e.target.value }))}
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs font-medium text-slate-700 mb-1">Tax / % Rate</label>
+                      <TaxRateSelect
+                        taxType={form.tax_type}
+                        taxRate={form.tax_rate}
+                        onChange={({ tax_type, tax_rate }) => setForm(f => ({ ...f, tax_type, tax_rate }))}
                         className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
-                      >
-                        <option value="none">None</option>
-                        <option value="cgst_sgst">CGST + SGST</option>
-                        <option value="igst">IGST</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-700 mb-1">GST Rate (%)</label>
-                      <input
-                        type="number" min="0" max="100" step="0.1"
-                        value={form.tax_rate}
-                        onChange={e => setForm(f => ({ ...f, tax_rate: e.target.value }))}
-                        disabled={form.tax_type === 'none'}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 disabled:opacity-50"
                       />
                     </div>
                     <label className="flex items-center gap-2 mt-5">
@@ -891,7 +1072,8 @@ export default function Payments() {
               </div>
             </div>
 
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-3">
+              <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
               <button
                 type="submit"
                 disabled={submitting}
@@ -901,6 +1083,8 @@ export default function Payments() {
               </button>
             </div>
           </form>
+          </div>
+          </div>
         )}
 
         {/* Register filter — independent of the Record Payment tab above:
@@ -988,16 +1172,21 @@ export default function Payments() {
               ) : register.length === 0 ? (
                 <tr><td colSpan={13} className="px-4 py-8 text-center text-slate-500">No payments match this filter</td></tr>
               ) : register.map(row => {
-                const isCredit = directionFor(row.transaction_type) === 'credit';
-                const typeLabel = REGISTER_TYPES.find(t => t.value === row.transaction_type)?.label || row.transaction_type;
+                const isBankEntry = row.transaction_type === 'bank_entry';
+                const debitAmt = parseFloat(row.debit_amount) || 0;
+                const creditAmt = parseFloat(row.credit_amount) || 0;
+                const typeLabel = isBankEntry
+                  ? (row.voucher_type === 'contra' ? 'Bank Transfer' : 'Bank Entry')
+                  : (REGISTER_TYPES.find(t => t.value === row.transaction_type)?.label || row.transaction_type);
                 return (
-                  <tr key={row.id} className="hover:bg-slate-50">
+                  <tr key={row.row_key || row.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3 text-sm text-slate-600 whitespace-nowrap">{row.payment_date}</td>
                     <td className="px-4 py-3 text-sm text-slate-500">{typeLabel}</td>
                     <td className="px-4 py-3 text-sm font-medium text-slate-800">{row.party_name || '—'}</td>
-                    <td className="px-4 py-3 text-sm text-slate-500">{row.invoice_number || row.expense_description || row.transaction_reference || '—'}</td>
-                    <td className="px-4 py-3 text-sm font-bold text-rose-700 text-right">{isCredit ? '' : `₹${parseFloat(row.amount).toLocaleString()}`}</td>
-                    <td className="px-4 py-3 text-sm font-bold text-teal-700 text-right">{isCredit ? `₹${parseFloat(row.amount).toLocaleString()}` : ''}</td>
+                    <td className="px-4 py-3 text-sm text-slate-500">{row.invoice_number || row.expense_description || (row.salary_month && `Salary — ${salaryMonthLabel(row.salary_month)}`) || row.transaction_reference || '—'}
+                      {parseFloat(row.round_off) ? <span className="block text-[11px] text-slate-400">Round off ₹{parseFloat(row.round_off).toFixed(2)}</span> : null}</td>
+                    <td className="px-4 py-3 text-sm font-bold text-rose-700 text-right">{debitAmt > 0 ? `₹${debitAmt.toLocaleString()}` : ''}</td>
+                    <td className="px-4 py-3 text-sm font-bold text-teal-700 text-right">{creditAmt > 0 ? `₹${creditAmt.toLocaleString()}` : ''}</td>
                     <td className="px-4 py-3 text-sm text-amber-700 text-right">{parseFloat(row.total_gst_amount) > 0 ? `₹${parseFloat(row.total_gst_amount).toLocaleString()}` : '—'}</td>
                     <td className="px-4 py-3 text-sm text-indigo-700 text-right">{parseFloat(row.tds_amount) > 0 ? `₹${parseFloat(row.tds_amount).toLocaleString()}` : '—'}</td>
                     <td className="px-4 py-3 text-sm text-slate-500 capitalize">{row.payment_method?.replace('_', ' ')}</td>
@@ -1013,15 +1202,15 @@ export default function Payments() {
                     <td className="px-4 py-3 text-center whitespace-nowrap">
                       <div className="flex items-center justify-center gap-1">
                         <button
-                          onClick={() => handleStartEditTransaction(row)}
-                          title="Edit payment"
+                          onClick={() => isBankEntry ? handleStartEditBankEntry(row) : handleStartEditTransaction(row)}
+                          title={isBankEntry ? 'Edit bank entry' : 'Edit payment'}
                           className="p-1.5 text-slate-400 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition-colors"
                         >
                           <Edit2 className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => handleDeleteTransaction(row)}
-                          title="Delete payment"
+                          onClick={() => isBankEntry ? handleDeleteBankEntry(row) : handleDeleteTransaction(row)}
+                          title={isBankEntry ? 'Delete bank entry' : 'Delete payment'}
                           className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -1037,10 +1226,10 @@ export default function Payments() {
                 <tr>
                   <td colSpan={4} className="px-4 py-3 text-sm text-right text-slate-700">TOTAL</td>
                   <td className="px-4 py-3 text-sm text-rose-700 text-right">
-                    ₹{register.filter(r => directionFor(r.transaction_type) === 'debit').reduce((s, r) => s + (parseFloat(r.amount) || 0), 0).toLocaleString()}
+                    ₹{register.reduce((s, r) => s + (parseFloat(r.debit_amount) || 0), 0).toLocaleString()}
                   </td>
                   <td className="px-4 py-3 text-sm text-teal-700 text-right">
-                    ₹{register.filter(r => directionFor(r.transaction_type) === 'credit').reduce((s, r) => s + (parseFloat(r.amount) || 0), 0).toLocaleString()}
+                    ₹{register.reduce((s, r) => s + (parseFloat(r.credit_amount) || 0), 0).toLocaleString()}
                   </td>
                   <td className="px-4 py-3 text-sm text-amber-700 text-right">
                     ₹{register.reduce((s, r) => s + (parseFloat(r.total_gst_amount) || 0), 0).toLocaleString()}
@@ -1055,12 +1244,63 @@ export default function Payments() {
           </table>
         </div>
         <div className="px-4 py-3 border-t border-slate-200">
-          <Pagination pagination={registerPagination} onPageChange={setRegisterPage} />
+          <Pagination pagination={registerPagination} onPageChange={setRegisterPage} alwaysShow />
         </div>
         </>
         )}
 
         {activeTab === 'bank' && (
+          <>
+          <div className="p-4 border-b border-slate-200 bg-slate-50/50 flex flex-wrap items-center gap-4">
+            <span className="text-xs font-bold text-slate-500 uppercase">Show:</span>
+            {BANK_ENTRY_TYPES.map(t => (
+              <label key={t.value} className="flex items-center gap-1.5 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={bankTypes.includes(t.value)}
+                  onChange={() => toggleBankType(t.value)}
+                />
+                {t.label}
+              </label>
+            ))}
+            <input
+              type="date"
+              value={bankDates.from}
+              onChange={e => setBankDates(d => ({ ...d, from: e.target.value }))}
+              className="px-2 py-1 border border-slate-300 rounded-md text-xs"
+            />
+            <span className="text-xs text-slate-400">to</span>
+            <input
+              type="date"
+              value={bankDates.to}
+              onChange={e => setBankDates(d => ({ ...d, to: e.target.value }))}
+              className="px-2 py-1 border border-slate-300 rounded-md text-xs"
+            />
+            <select
+              value={bankAccountFilter}
+              onChange={e => setBankAccountFilter(e.target.value)}
+              className="px-2 py-1 border border-slate-300 rounded-md text-xs bg-white"
+            >
+              <option value="">All accounts</option>
+              {bankAccounts.map(a => (
+                <option key={a.id} value={a.id}>{a.account_name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="p-4 border-b border-slate-200">
+            <div className="relative max-w-md">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search by voucher no., narration, reference, or account..."
+                value={bankSearch}
+                onChange={e => setBankSearch(e.target.value)}
+                className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
+              />
+            </div>
+          </div>
+
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-200">
               <thead className="bg-slate-50">
@@ -1080,7 +1320,7 @@ export default function Payments() {
                 {loadingBankEntries ? (
                   <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-500">Loading...</td></tr>
                 ) : bankEntries.length === 0 ? (
-                  <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-500">No bank entries recorded yet</td></tr>
+                  <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-500">No bank entries found</td></tr>
                 ) : bankEntries.map(v => (
                   <tr key={v.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3 text-sm text-slate-600 whitespace-nowrap">{v.voucher_date}</td>
@@ -1114,6 +1354,10 @@ export default function Payments() {
               </tbody>
             </table>
           </div>
+          <div className="px-4 py-3 border-t border-slate-200">
+            <Pagination pagination={bankPagination} onPageChange={setBankPage} alwaysShow />
+          </div>
+          </>
         )}
       </div>
 
@@ -1142,6 +1386,20 @@ export default function Payments() {
             </div>
 
             <form onSubmit={handleEditSubmit} className="p-6 space-y-4">
+              {editingTransaction.transaction_type === 'salary_payment' && (
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Salary Month *</label>
+                  <input
+                    type="month"
+                    required={!editingTransaction.reference_id}
+                    value={editForm.salary_month}
+                    onChange={e => setEditForm(f => ({ ...f, salary_month: e.target.value }))}
+                    disabled={!!editingTransaction.reference_id}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 disabled:bg-slate-100 disabled:text-slate-500"
+                  />
+                  {editingTransaction.reference_id && <p className="text-xs text-slate-400 mt-1">Set by the linked salary run.</p>}
+                </div>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Payment Date *</label>
@@ -1193,6 +1451,20 @@ export default function Payments() {
                       onChange={e => setEditForm(f => ({ ...f, tds_amount: e.target.value }))}
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
                     />
+                  </div>
+                )}
+                {editingTransaction.transaction_type !== 'salary_payment' && (
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">Round Off (₹)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={editForm.round_off}
+                      onChange={e => setEditForm(f => ({ ...f, round_off: e.target.value }))}
+                      placeholder="0"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1">Written off to settle the bill (− if extra was received).</p>
                   </div>
                 )}
               </div>

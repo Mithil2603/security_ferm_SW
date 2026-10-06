@@ -207,6 +207,7 @@ const createInvoiceSchema = Joi.object({
   hsn_code: Joi.string().max(20).optional().allow('', null).label('HSN code'),
   bill_items: Joi.any().optional().allow('', null).label('Bill items'),
   tds_rate: Joi.number().min(0).max(100).optional().allow(null, '').label('TDS rate (%)'),
+  rounded_final_amount: Joi.number().min(0).optional().allow(null, '').label('Rounded bill amount'),
   notes: Joi.string().max(2000).optional().allow('', null).label('Notes'),
 });
 
@@ -270,6 +271,7 @@ const createExpenseSchema = Joi.object({
   tax_rate: Joi.number().min(0).max(100).optional().allow(null, '').label('Tax rate (%)'),
   is_rcm_applicable: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false')).optional().label('RCM applicable'),
   tds_rate: Joi.number().min(0).max(100).optional().allow(null, '').label('TDS rate (%)'),
+  rounded_final_amount: Joi.number().min(0).optional().allow(null, '').label('Rounded bill amount'),
 });
 
 // POST /api/attendance

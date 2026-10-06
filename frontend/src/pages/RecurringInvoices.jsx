@@ -5,6 +5,7 @@ import { format } from 'date-fns';
 import { toast, confirmDialog } from '../context/ToastContext';
 import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
+import TaxRateSelect from '../components/TaxRateSelect';
 
 const FREQUENCIES = [
   { value: 'weekly', label: 'Weekly' },
@@ -383,13 +384,13 @@ export default function RecurringInvoices() {
               {/* Tax */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">Tax Type</label>
-                  <select name="tax_type" value={form.tax_type} onChange={handleInputChange}
-                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white">
-                    <option value="none">No Tax</option>
-                    <option value="cgst_sgst">CGST + SGST</option>
-                    <option value="igst">IGST</option>
-                  </select>
+                  <label className="block text-sm text-gray-400 mb-1">Tax / % Rate</label>
+                  <TaxRateSelect
+                    taxType={form.tax_type}
+                    taxRate={form.tax_rate}
+                    onChange={({ tax_type, tax_rate }) => setForm(prev => ({ ...prev, tax_type, tax_rate }))}
+                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white"
+                  />
                 </div>
                 <div>
                   <label className="block text-sm text-gray-400 mb-1">Discount (₹)</label>
@@ -397,14 +398,6 @@ export default function RecurringInvoices() {
                     className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white" />
                 </div>
               </div>
-
-              {form.tax_type !== 'none' && (
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">GST Rate (%)</label>
-                  <input type="number" name="tax_rate" value={form.tax_rate} onChange={handleInputChange} min="0" max="100" step="0.01"
-                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="e.g. 5, 12, 18, 28" />
-                </div>
-              )}
 
               {/* Options */}
               <div className="grid grid-cols-2 gap-4">

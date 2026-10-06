@@ -393,8 +393,8 @@ export default function PurchaseOrders() {
       const data = res.data;
       if (!data) throw new Error('Could not load bill details');
 
-      if (data.status !== 'draft') {
-        toast.warning(`This purchase bill is ${data.status} and cannot be edited`);
+      if (data.status === 'cancelled') {
+        toast.warning('This purchase bill is cancelled and cannot be edited');
         return;
       }
 
@@ -533,10 +533,13 @@ export default function PurchaseOrders() {
   const handleDelete = async (poOrId, poNumberParam) => {
     const id = typeof poOrId === 'object' ? poOrId.id : poOrId;
     const num = typeof poOrId === 'object' ? (poOrId.bill_number || poOrId.po_number) : (poNumberParam || 'this Purchase Bill');
+    const isBilled = typeof poOrId === 'object' && poOrId.status === 'billed';
 
     const confirmed = await confirmDialog({
       title: 'Delete Purchase Bill',
-      message: `Are you sure you want to permanently delete ${num}? This cannot be undone.`,
+      message: isBilled
+        ? `${num} is booked to Expenses. Deleting it also removes that expense entry. This cannot be undone.`
+        : `Are you sure you want to permanently delete ${num}? This cannot be undone.`,
       confirmText: 'Delete Permanently',
       variant: 'danger',
     });
@@ -800,7 +803,7 @@ export default function PurchaseOrders() {
                           </button>
 
                           {/* Edit Button */}
-                          {po.status === 'draft' && (
+                          {po.status !== 'cancelled' && (
                             <button
                               onClick={() => startEditPO(po)}
                               title="Edit Purchase Bill"
@@ -833,15 +836,13 @@ export default function PurchaseOrders() {
                           )}
 
                           {/* Delete Button */}
-                          {po.status !== 'billed' && (
-                            <button
-                              onClick={() => handleDelete(po)}
-                              title="Delete Purchase Bill"
-                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
+                          <button
+                            onClick={() => handleDelete(po)}
+                            title="Delete Purchase Bill"
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
 
                           {po.status === 'billed' && (
                             <span className="text-xs text-emerald-600 flex items-center gap-1 pl-1">
@@ -1750,7 +1751,7 @@ export default function PurchaseOrders() {
             {/* Modal Actions */}
             <div className="px-6 py-3 border-t border-slate-100 flex items-center justify-between bg-slate-50">
               <div className="flex items-center gap-2">
-                {viewPo.status === 'draft' && (
+                {viewPo.status !== 'cancelled' && (
                   <>
                     {/* Edit inside modal */}
                     <button
@@ -1774,6 +1775,7 @@ export default function PurchaseOrders() {
                     </button>
 
                     {/* Convert inside modal */}
+                    {viewPo.status === 'draft' && (
                     <button
                       type="button"
                       onClick={() => openConvert(viewPo)}
@@ -1781,6 +1783,7 @@ export default function PurchaseOrders() {
                     >
                       <ArrowRightCircle className="w-3.5 h-3.5" /> Book to Expenses
                     </button>
+                    )}
                   </>
                 )}
               </div>
