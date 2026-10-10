@@ -56,11 +56,14 @@ const emptyForm = {
 
 // Bank Entries — charges, interest, other adjustments, and inter-account
 // transfers, not tied to any client/vendor/employee bill.
+// Labels say "money in / money out" on purpose: "debit"/"credit" meant the
+// opposite things to different people (bank-statement debit = money out, but
+// debiting a cash account = money in), which led to entries on the wrong side.
 const BANK_ENTRY_KINDS = [
-  { value: 'bank_charge', label: 'Bank Charges (debit)' },
-  { value: 'interest_credited', label: 'Interest Credited' },
-  { value: 'other_debit', label: 'Other Charge / Debit' },
-  { value: 'other_credit', label: 'Other Credit' },
+  { value: 'bank_charge', label: 'Bank Charges — money out' },
+  { value: 'interest_credited', label: 'Interest Received — money in' },
+  { value: 'other_debit', label: 'Other Payment / Charge — money out' },
+  { value: 'other_credit', label: 'Other Receipt — money in' },
   { value: 'transfer', label: 'Transfer Between Accounts (bank↔bank, cash↔bank)' },
 ];
 
@@ -324,13 +327,18 @@ export default function Payments() {
       bankAccountId = v.credit_account_id ? String(v.credit_account_id) : '';
       toAccountId = v.debit_account_id ? String(v.debit_account_id) : '';
     } else {
-      if (v.debit_account_id) {
-        bankAccountId = String(v.debit_account_id);
-        kind = (v.narration && v.narration.toLowerCase().includes('other')) ? 'other_debit' : 'bank_charge';
-      } else if (v.credit_account_id) {
+      // debit_account_id = money in (interest / other credit),
+      // credit_account_id = money out (bank charge / other debit).
+      const narration = (v.narration || '').toLowerCase();
+      if (v.credit_account_id) {
         bankAccountId = String(v.credit_account_id);
-        kind = (v.narration && v.narration.toLowerCase().includes('interest')) ? 'interest_credited' : 'other_credit';
+        kind = narration.includes('other') ? 'other_debit' : 'bank_charge';
+      } else if (v.debit_account_id) {
+        bankAccountId = String(v.debit_account_id);
+        kind = narration.includes('interest') ? 'interest_credited' : 'other_credit';
       }
+      // The saved kind (category) wins over the narration guess.
+      if (BANK_ENTRY_KINDS.some(k => k.value === v.category && k.value !== 'transfer')) kind = v.category;
     }
     setEditingBankEntry(v);
     setEditBankForm({
@@ -1308,8 +1316,8 @@ export default function Payments() {
                   <th className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase">Date</th>
                   <th className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase">Voucher No.</th>
                   <th className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase">Type</th>
-                  <th className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase">Debit A/C</th>
-                  <th className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase">Credit A/C</th>
+                  <th className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase">Money In (A/C)</th>
+                  <th className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase">Money Out (A/C)</th>
                   <th className="px-4 py-3 text-right text-xs font-bold text-slate-500 uppercase">Amount</th>
                   <th className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase">Narration</th>
                   <th className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase">Reference</th>
@@ -1326,8 +1334,8 @@ export default function Payments() {
                     <td className="px-4 py-3 text-sm text-slate-600 whitespace-nowrap">{v.voucher_date}</td>
                     <td className="px-4 py-3 text-sm text-slate-500 font-mono">{v.voucher_number}</td>
                     <td className="px-4 py-3 text-sm text-slate-500 capitalize">{v.voucher_type === 'contra' ? 'Transfer' : 'Journal'}</td>
-                    <td className="px-4 py-3 text-sm text-rose-700">{v.debit_account_name || '—'}</td>
-                    <td className="px-4 py-3 text-sm text-teal-700">{v.credit_account_name || '—'}</td>
+                    <td className="px-4 py-3 text-sm text-teal-700">{v.debit_account_name || '—'}</td>
+                    <td className="px-4 py-3 text-sm text-rose-700">{v.credit_account_name || '—'}</td>
                     <td className="px-4 py-3 text-sm font-bold text-slate-800 text-right">₹{parseFloat(v.amount).toLocaleString()}</td>
                     <td className="px-4 py-3 text-sm text-slate-500">{v.narration || '—'}</td>
                     <td className="px-4 py-3 text-sm text-slate-500">{v.transaction_ref || '—'}</td>

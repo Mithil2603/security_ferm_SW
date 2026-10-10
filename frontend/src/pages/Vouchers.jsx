@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import {
   FileText, Plus, Search, Filter, CheckCircle, XCircle, Clock, Eye,
-  ChevronDown, AlertCircle, Send, RefreshCw
+  ChevronDown, AlertCircle, Send, RefreshCw, Trash2, Download
 } from 'lucide-react';
 
 import api from '../services/api';
+import { getApiBaseUrl } from '../utils/apiUrl';
 
 const VOUCHER_TYPES = [
   { key: 'cash_payment', label: 'Cash Payment', prefix: 'CP', color: '#ef4444' },
@@ -16,6 +17,8 @@ const VOUCHER_TYPES = [
   { key: 'contra', label: 'Contra', prefix: 'CT', color: '#06b6d4' },
   { key: 'debit_note', label: 'Debit Note', prefix: 'DN', color: '#ec4899' },
   { key: 'credit_note', label: 'Credit Note', prefix: 'CN', color: '#14b8a6' },
+  { key: 'salary', label: 'Salary Account', prefix: 'SA', color: '#0ea5e9' },
+  { key: 'petty_cash', label: 'Petty Cash Entry', prefix: 'PC', color: '#eab308' },
 ];
 
 const STATUS_CONFIG = {
@@ -86,6 +89,9 @@ export default function Vouchers() {
   // Cancel modal
   const [cancelModal, setCancelModal] = useState(null);
   const [cancelReason, setCancelReason] = useState('');
+  const [deleteModal, setDeleteModal] = useState(null);
+  const [exportTypes, setExportTypes] = useState(VOUCHER_TYPES.map(t => t.key));
+  const [deleting, setDeleting] = useState(false);
 
   
   const fetchVouchers = useCallback(async () => {
@@ -244,6 +250,42 @@ export default function Vouchers() {
     } catch (e) { setError('Failed to cancel'); }
   };
 
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      const data = await api.delete(`/vouchers/${deleteModal.id}`);
+      if (data.success) {
+        setSuccess(data.message);
+        setDeleteModal(null);
+        fetchVouchers();
+        fetchSummary();
+      } else setError(data.message);
+    } catch (e) {
+      setError(e.response?.data?.message || e.message || 'Failed to delete voucher');
+      setDeleteModal(null);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  // Excel / PDF download — any combination of voucher types, for the date range,
+  // status and search set in the filters above.
+  const toggleExportType = (key) => {
+    setExportTypes(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+  };
+  const handleExport = (format) => {
+    if (exportTypes.length === 0) { setError('Select at least one voucher type to download'); return; }
+    const params = new URLSearchParams({ format });
+    if (exportTypes.length < VOUCHER_TYPES.length) params.set('types', exportTypes.join(','));
+    if (statusFilter) params.set('status', statusFilter);
+    if (fromDate) params.set('from_date', fromDate);
+    if (toDate) params.set('to_date', toDate);
+    if (searchTerm) params.set('search', searchTerm);
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token');
+    if (token) params.set('token', token);
+    window.open(`${getApiBaseUrl()}/vouchers/export?${params.toString()}`, '_blank');
+  };
+
   const handleBulkApprove = async () => {
     const pendingIds = vouchers.filter(v => v.status === 'pending_approval').map(v => v.id);
     if (pendingIds.length === 0) return;
@@ -355,14 +397,46 @@ export default function Vouchers() {
           <option value="posted">Posted</option>
           <option value="cancelled">Cancelled</option>
         </select>
-        <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)}
+        <span style={{ fontSize: '12px', color: '#64748b' }}>From</span>
+        <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} title="From date"
           style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '13px' }} />
-        <input type="date" value={toDate} onChange={e => setToDate(e.target.value)}
+        <span style={{ fontSize: '12px', color: '#64748b' }}>To</span>
+        <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} title="To date"
           style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '13px' }} />
         <button onClick={() => { setActiveType(''); setStatusFilter(''); setFromDate(''); setToDate(''); setSearchTerm(''); }}
           style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#f8fafc', cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '4px' }}>
           <RefreshCw size={14} /> Reset
         </button>
+      </div>
+
+      {/* Download (Excel / PDF) */}
+      <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '12px 14px', marginBottom: '16px', display: 'flex', flexWrap: 'wrap', gap: '10px 14px', alignItems: 'center' }}>
+        <span style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Download:</span>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '13px', cursor: 'pointer', fontWeight: 600 }}>
+          <input type="checkbox"
+            checked={exportTypes.length === VOUCHER_TYPES.length}
+            onChange={e => setExportTypes(e.target.checked ? VOUCHER_TYPES.map(t => t.key) : [])} />
+          All
+        </label>
+        {VOUCHER_TYPES.map(vt => (
+          <label key={vt.key} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '13px', cursor: 'pointer' }}>
+            <input type="checkbox" checked={exportTypes.includes(vt.key)} onChange={() => toggleExportType(vt.key)} />
+            {vt.label}
+          </label>
+        ))}
+        <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+          {fromDate || toDate ? `${fromDate || 'Start'} to ${toDate || 'Today'}` : 'All dates'} — set the dates in the filters above
+        </span>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+          <button onClick={() => handleExport('xlsx')}
+            style={{ padding: '7px 14px', borderRadius: '8px', border: 'none', background: '#15803d', color: '#fff', cursor: 'pointer', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Download size={14} /> Excel
+          </button>
+          <button onClick={() => handleExport('pdf')}
+            style={{ padding: '7px 14px', borderRadius: '8px', border: 'none', background: '#1e293b', color: '#fff', cursor: 'pointer', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Download size={14} /> PDF
+          </button>
+        </div>
       </div>
 
       {/* Vouchers Table */}
@@ -436,6 +510,10 @@ export default function Vouchers() {
                           {['draft', 'pending_approval'].includes(v.status) && canDelete && (
                             <button onClick={() => setCancelModal(v)} title="Cancel"
                               style={{ ...actionBtnStyle, color: '#ef4444' }}><XCircle size={14} /></button>
+                          )}
+                          {canDelete && (
+                            <button onClick={() => setDeleteModal(v)} title="Delete"
+                              style={{ ...actionBtnStyle, color: '#dc2626' }}><Trash2 size={14} /></button>
                           )}
                         </div>
                       </td>
@@ -532,7 +610,7 @@ export default function Vouchers() {
                   <textarea value={form.narration} onChange={e => setForm(f => ({ ...f, narration: e.target.value }))}
                     rows={2} placeholder="Describe the transaction" style={{ ...inputStyle, resize: 'vertical' }} />
                 </div>
-                {['bank_payment', 'bank_receipt', 'contra'].includes(form.voucher_type) && (
+                {['bank_payment', 'bank_receipt', 'contra', 'salary'].includes(form.voucher_type) && (
                   <>
                     <div>
                       <label style={labelStyle}>Cheque Number</label>
@@ -623,6 +701,32 @@ export default function Vouchers() {
               <button onClick={() => setViewVoucher(null)}
                 style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#f8fafc', cursor: 'pointer' }}>
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete Modal ─────────────────────────────────────────────────── */}
+      {deleteModal && (
+        <div style={overlayStyle} onClick={() => !deleting && setDeleteModal(null)}>
+          <div style={{ ...modalStyle, maxWidth: '450px' }} onClick={e => e.stopPropagation()}>
+            <h2 style={{ margin: '0 0 12px', fontSize: '18px', color: '#dc2626' }}>Delete Voucher</h2>
+            <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '8px' }}>
+              Permanently delete <strong>{deleteModal.voucher_number}</strong> for {fmt(deleteModal.amount)}?
+            </p>
+            <p style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '16px' }}>
+              It will be removed from the voucher list and the bank/cash balance will be adjusted. This cannot be undone.
+              To keep a record instead, use Cancel.
+            </p>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button onClick={() => setDeleteModal(null)} disabled={deleting}
+                style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#f8fafc', cursor: 'pointer' }}>
+                Back
+              </button>
+              <button onClick={handleDelete} disabled={deleting}
+                style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#dc2626', color: '#fff', cursor: 'pointer', fontWeight: 600, opacity: deleting ? 0.6 : 1 }}>
+                {deleting ? 'Deleting...' : 'Delete Permanently'}
               </button>
             </div>
           </div>

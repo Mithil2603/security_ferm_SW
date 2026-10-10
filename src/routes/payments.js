@@ -77,15 +77,16 @@ function resolveTypesFilter(req) {
   return ALL_TYPES;
 }
 
-// Shape a bank-entry voucher like a register row. Journal entries move money
-// one way (debit_account_id set = charge/money out, credit_account_id set =
-// money in); a transfer (contra) leaves one account and enters another, so it
-// shows on both sides and nets to zero.
+// Shape a bank-entry voucher like a register row. Same convention as every
+// balance in the app: debit_account_id = money IN, credit_account_id = money
+// OUT. A journal entry moves money one way (a bank charge has only the credit
+// side, interest only the debit side); a transfer (contra) leaves one account
+// and enters another, so it shows on both sides and nets to zero.
 function bankEntryToRegisterRow(v) {
   const isTransfer = v.voucher_type === 'contra';
   const amount = parseFloat(v.amount) || 0;
-  const moneyOut = isTransfer || !!v.debit_account_id;
-  const moneyIn = isTransfer || (!v.debit_account_id && !!v.credit_account_id);
+  const moneyOut = isTransfer || (!!v.credit_account_id && !v.debit_account_id);
+  const moneyIn = isTransfer || (!!v.debit_account_id && !v.credit_account_id);
   return {
     ...v,
     row_key: `bank_entry-${v.id}`,
@@ -405,7 +406,7 @@ router.get('/bank-entries', async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.max(1, parseInt(req.query.limit) || 20);
     // types=journal,contra — journal = charges/interest/adjustments, contra = transfers
-    const types = String(req.query.types || 'journal,contra').split(',').filter(t => t === 'journal' || t === 'contra');
+    const types = String(req.query.types !== undefined ? req.query.types : 'journal,contra').split(',').filter(t => t === 'journal' || t === 'contra');
     if (types.length === 0) {
       return res.json({ success: true, data: [], pagination: { page: 1, limit, total: 0, totalPages: 0 } });
     }

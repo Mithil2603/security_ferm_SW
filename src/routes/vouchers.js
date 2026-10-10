@@ -6,6 +6,8 @@ const { authMiddleware, requirePermission } = require('../middleware/auth');
 const Joi = require('joi');
 const { logError } = require('../utils/errorLogger');
 const { VOUCHER_PREFIXES, VOUCHER_TYPE_LABELS, getFinancialYear, getNextVoucherNumber } = require('../utils/voucherNumbering');
+const { sendReport } = require('../utils/tableExport');
+const { deleteVoucher } = require('../utils/voucherDelete');
 
 router.use(authMiddleware);
 router.use(requirePermission('manage_vouchers', 'view_vouchers', 'create_vouchers', 'edit_vouchers', 'delete_vouchers', 'approve_vouchers', 'manage_payroll', 'manage_expenses'));
@@ -15,6 +17,7 @@ const voucherSchema = Joi.object({
   voucher_type: Joi.string().valid(
     'cash_payment', 'cash_receipt', 'bank_payment', 'bank_receipt',
     'journal', 'contra', 'debit_note', 'credit_note',
+    'salary', 'petty_cash',  // Salary Account, Petty Cash Entry
     'payment', 'receipt'  // common aliases
   ).required(),
   voucher_date: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).required(),
@@ -113,6 +116,120 @@ router.get('/', async (req, res) => {
     logError(error, req, { feature: 'vouchers' });
     logger.error('Fetch vouchers error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch vouchers' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/vouchers/export?format=pdf|xlsx — date-wise voucher register for any
+// combination of voucher types (types=cash_payment,bank_receipt,...; empty =
+// all), with the same status / date / search filters as the list. Rows run in
+// date order; a per-type summary follows. Cancelled vouchers are left out
+// unless status=cancelled is asked for.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/export', async (req, res) => {
+  try {
+    const { format = 'xlsx', status, from_date, to_date, search } = req.query;
+    const types = String(req.query.types || '')
+      .split(',').map((t) => t.trim()).filter((t) => VOUCHER_TYPE_LABELS[t]);
+
+    const conditions = [];
+    const params = [];
+    let pc = 1;
+    if (types.length > 0) {
+      conditions.push(`v.voucher_type IN (${types.map(() => `$${pc++}`).join(',')})`);
+      params.push(...types);
+    }
+    if (status) { conditions.push(`v.status = $${pc}`); params.push(status); pc++; }
+    else conditions.push(`v.status != 'cancelled'`);
+    if (from_date) { conditions.push(`v.voucher_date >= $${pc}`); params.push(from_date); pc++; }
+    if (to_date) { conditions.push(`v.voucher_date <= $${pc}`); params.push(to_date); pc++; }
+    if (search) {
+      conditions.push(`(v.voucher_number LIKE $${pc} OR v.party_name LIKE $${pc} OR v.narration LIKE $${pc})`);
+      params.push(`%${search}%`); pc++;
+    }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const result = await query(`
+      SELECT v.*, da.account_name as debit_account_name, ca.account_name as credit_account_name
+      FROM vouchers v
+      LEFT JOIN bank_accounts da ON v.debit_account_id = da.id
+      LEFT JOIN bank_accounts ca ON v.credit_account_id = ca.id
+      ${where}
+      ORDER BY v.voucher_date ASC, v.voucher_number ASC, v.id ASC
+    `, params);
+
+    const STATUS_LABELS = { draft: 'Draft', pending_approval: 'Pending Approval', posted: 'Posted', cancelled: 'Cancelled' };
+    let total = 0;
+    const byType = {};
+    const rows = result.rows.map((v) => {
+      const amount = parseFloat(v.amount) || 0;
+      total += amount;
+      const label = VOUCHER_TYPE_LABELS[v.voucher_type] || v.voucher_type;
+      byType[label] = byType[label] || { type: label, count: 0, amount: 0 };
+      byType[label].count += 1;
+      byType[label].amount += amount;
+      return {
+        date: v.voucher_date,
+        number: v.voucher_number,
+        type: label,
+        party: v.party_name || '',
+        to_account: v.debit_account_name || '',
+        from_account: v.credit_account_name || '',
+        narration: v.narration || '',
+        ref: v.cheque_number || v.transaction_ref || '',
+        status: STATUS_LABELS[v.status] || v.status,
+        amount,
+      };
+    });
+
+    const typeLabel = types.length === 0 || types.length === Object.keys(VOUCHER_TYPE_LABELS).length
+      ? 'All voucher types'
+      : types.map((t) => VOUCHER_TYPE_LABELS[t]).join(', ');
+    const subtitleLines = [
+      typeLabel,
+      `Period: ${from_date || 'Start'} to ${to_date || 'Today'}${status ? ` · Status: ${STATUS_LABELS[status] || status}` : ''}`,
+    ];
+    const stamp = `${from_date || 'start'}_to_${to_date || new Date().toISOString().split('T')[0]}`;
+
+    await sendReport(res, format, {
+      filename: `Vouchers_${stamp}`,
+      sheetName: 'Vouchers',
+      title: 'Voucher Register',
+      subtitleLines,
+      sections: [
+        {
+          name: `Vouchers (${rows.length})`,
+          columns: [
+            { key: 'date', label: 'Date', width: 0.9, excelWidth: 12 },
+            { key: 'number', label: 'Voucher No.', width: 1.2, excelWidth: 18 },
+            { key: 'type', label: 'Type', width: 1.1, excelWidth: 18 },
+            { key: 'party', label: 'Party', width: 1.3, excelWidth: 24 },
+            { key: 'to_account', label: 'Debit A/C (To)', width: 1.1, excelWidth: 20 },
+            { key: 'from_account', label: 'Credit A/C (From)', width: 1.1, excelWidth: 20 },
+            { key: 'narration', label: 'Narration', width: 1.6, excelWidth: 36 },
+            { key: 'ref', label: 'Cheque / Ref', width: 0.9, excelWidth: 16 },
+            { key: 'status', label: 'Status', width: 0.8, excelWidth: 16 },
+            { key: 'amount', label: 'Amount', width: 0.9, money: true, excelWidth: 14 },
+          ],
+          rows: rows.length > 0 ? rows : [{ date: 'No vouchers for this selection' }],
+          totalsRow: rows.length > 0 ? { narration: 'TOTAL', amount: total } : undefined,
+        },
+        {
+          name: 'Summary by Type',
+          columns: [
+            { key: 'type', label: 'Voucher Type', width: 2, excelWidth: 22 },
+            { key: 'count', label: 'Count', width: 1, align: 'right' },
+            { key: 'amount', label: 'Amount', width: 1.2, money: true, excelWidth: 16 },
+          ],
+          rows: Object.values(byType),
+          totalsRow: rows.length > 0 ? { type: 'TOTAL', count: rows.length, amount: total } : undefined,
+        },
+      ],
+    });
+  } catch (error) {
+    logError(error, req, { feature: 'vouchers' });
+    logger.error('Voucher export error:', error);
+    if (!res.headersSent) res.status(500).json({ success: false, message: 'Failed to export vouchers' });
   }
 });
 
@@ -480,6 +597,23 @@ router.post('/:id/cancel', requirePermission('manage_vouchers', 'delete_vouchers
   } catch (error) {
     logError(error, req, { feature: 'vouchers' });
     res.status(500).json({ success: false, message: 'Failed to cancel voucher' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE /api/vouchers/:id — Permanently delete a voucher. Bank balances are
+// derived from posted vouchers, so they adjust automatically. Refused when the
+// voucher belongs to a payment (deleting it here would leave the invoice/bill
+// marked paid with no money behind it) or has been bank-reconciled.
+// ─────────────────────────────────────────────────────────────────────────────
+router.delete('/:id', requirePermission('manage_vouchers', 'delete_vouchers'), async (req, res) => {
+  try {
+    const result = await deleteVoucher(req.params.id);
+    if (!result.ok) return res.status(result.status || 400).json({ success: false, message: result.message });
+    res.json({ success: true, message: result.message });
+  } catch (error) {
+    logError(error, req, { feature: 'vouchers' });
+    res.status(500).json({ success: false, message: 'Failed to delete voucher' });
   }
 });
 

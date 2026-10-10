@@ -134,7 +134,8 @@ function generateTabularReportPDF({ title, subtitleLines = [], columns, rows, to
  * @param {object} opts
  * @param {string} opts.title
  * @param {string[]} [opts.subtitleLines]
- * @param {{name:string, columns:{key:string,label:string,width?:number,align?:string}[], rows:object[]}[]} opts.sections
+ * @param {{name:string, columns:{key:string,label:string,width?:number,align?:string}[], rows:object[], totalsRow?:object}[]} opts.sections
+ *   totalsRow (optional) is drawn bold with a rule above it, like the tabular report.
  * @param {object} [opts.agencySettings]
  */
 function generateMultiSectionReportPDF({ title, subtitleLines = [], sections, agencySettings }, dataCallback, endCallback) {
@@ -207,6 +208,10 @@ function generateMultiSectionReportPDF({ title, subtitleLines = [], sections, ag
     doc.moveTo(startX, y).lineTo(startX + pageWidth, y).strokeColor('#cbd5e1').lineWidth(0.5).stroke();
 
     section.rows.forEach((r) => drawRow(section.columns.map((c) => r[c.key])));
+    if (section.totalsRow) {
+      doc.moveTo(startX, y).lineTo(startX + pageWidth, y).strokeColor('#94a3b8').lineWidth(0.75).stroke();
+      drawRow(section.columns.map((c) => section.totalsRow[c.key]), { bold: true });
+    }
     y += 14;
   });
 

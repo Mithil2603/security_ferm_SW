@@ -11,6 +11,8 @@ const VOUCHER_PREFIXES = {
   contra: 'CT',
   debit_note: 'DN',
   credit_note: 'CN',
+  salary: 'SA',       // Salary Account
+  petty_cash: 'PC',   // Petty Cash Entry
   // Common aliases
   payment: 'BP',      // alias for bank_payment
   receipt: 'BR',      // alias for bank_receipt
@@ -24,7 +26,9 @@ const VOUCHER_TYPE_LABELS = {
   journal: 'Journal Entry',
   contra: 'Contra',
   debit_note: 'Debit Note',
-  credit_note: 'Credit Note'
+  credit_note: 'Credit Note',
+  salary: 'Salary Account',
+  petty_cash: 'Petty Cash Entry'
 };
 
 function getFinancialYear(dateStr) {

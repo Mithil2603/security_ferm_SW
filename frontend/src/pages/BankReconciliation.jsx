@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Landmark, CheckCircle, XCircle, Calendar, RefreshCw, FileText, AlertCircle } from 'lucide-react';
+import { Landmark, CheckCircle, XCircle, Calendar, RefreshCw, FileText, AlertCircle, Download, Trash2 } from 'lucide-react';
 
 import api from '../services/api';
+import { getApiBaseUrl } from '../utils/apiUrl';
+import { confirmDialog } from '../context/ToastContext';
 
 export default function BankReconciliation() {
   const { token } = useAuth();
@@ -132,6 +134,49 @@ export default function BankReconciliation() {
     setTimeout(() => setSuccess(''), 3000);
   };
 
+  // Delete an entry (voucher). The backend refuses payment-created vouchers
+  // (delete the payment in Bank & Payments) and reconciled ones (Undo first).
+  const handleDeleteEntry = async (entry) => {
+    const confirmed = await confirmDialog({
+      title: 'Delete Entry',
+      message: `Permanently delete ${entry.voucher_number} for ${fmt(entry.amount)}? The voucher is removed and the book balance adjusts. This cannot be undone.`,
+      confirmText: 'Delete Permanently',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    setError('');
+    try {
+      const data = await api.delete(`/bank-reconciliation/entry/${entry.id}`);
+      if (data.success) {
+        setSuccess(data.message);
+        setSelectedEntries(prev => { const next = new Set(prev); next.delete(entry.id); return next; });
+        fetchEntries();
+        fetchAccounts();
+      } else setError(data.message);
+    } catch (e) { setError(e.response?.data?.message || e.message || 'Failed to delete entry'); }
+    setTimeout(() => setSuccess(''), 3000);
+  };
+
+  // Excel / PDF download of whichever tab is open: the reconciliation list (with
+  // the current dates / show-reconciled filter) or the BRS as on the To date.
+  const handleDownload = (format) => {
+    if (!selectedAccount) { setError('Select a bank account first'); return; }
+    const params = new URLSearchParams({ format });
+    let path;
+    if (activeTab === 'brs') {
+      path = `export/statement/${selectedAccount}`;
+      if (toDate) params.set('as_on_date', toDate);
+    } else {
+      path = `export/entries/${selectedAccount}`;
+      if (fromDate) params.set('from_date', fromDate);
+      if (toDate) params.set('to_date', toDate);
+      if (showReconciled) params.set('show_reconciled', 'true');
+    }
+    const authToken = localStorage.getItem('token') || sessionStorage.getItem('token');
+    if (authToken) params.set('token', authToken);
+    window.open(`${getApiBaseUrl()}/bank-reconciliation/${path}?${params.toString()}`, '_blank');
+  };
+
   const handleAddAccount = async (e) => {
     e.preventDefault();
     try {
@@ -213,6 +258,18 @@ export default function BankReconciliation() {
               {tab === 'reconcile' ? 'Reconcile' : 'BRS Statement'}
             </button>
           ))}
+        </div>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button onClick={() => handleDownload('xlsx')} disabled={!selectedAccount}
+            title={activeTab === 'brs' ? 'Download BRS statement as Excel' : 'Download entries as Excel'}
+            style={{ padding: '7px 12px', borderRadius: '8px', border: 'none', background: '#15803d', color: '#fff', cursor: 'pointer', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', opacity: selectedAccount ? 1 : 0.5 }}>
+            <Download size={14} /> Excel
+          </button>
+          <button onClick={() => handleDownload('pdf')} disabled={!selectedAccount}
+            title={activeTab === 'brs' ? 'Download BRS statement as PDF' : 'Download entries as PDF'}
+            style={{ padding: '7px 12px', borderRadius: '8px', border: 'none', background: '#1e293b', color: '#fff', cursor: 'pointer', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', opacity: selectedAccount ? 1 : 0.5 }}>
+            <Download size={14} /> PDF
+          </button>
         </div>
       </div>
 
@@ -310,12 +367,18 @@ export default function BankReconciliation() {
                         </span>
                       </td>
                       <td style={tdStyle}>
-                        {entry.is_reconciled && (
-                          <button onClick={() => handleUnreconcile([entry.id])}
-                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: '12px' }}>
-                            Undo
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          {entry.is_reconciled && (
+                            <button onClick={() => handleUnreconcile([entry.id])}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: '12px' }}>
+                              Undo
+                            </button>
+                          )}
+                          <button onClick={() => handleDeleteEntry(entry)} title="Delete entry"
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626', padding: '2px', display: 'flex' }}>
+                            <Trash2 size={14} />
                           </button>
-                        )}
+                        </div>
                       </td>
                     </tr>
                   ))}

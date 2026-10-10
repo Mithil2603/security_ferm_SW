@@ -2,7 +2,8 @@ require('dotenv').config();
 const http = require('http');
 const jwt = require('jsonwebtoken');
 
-const BASE_URL = 'http://localhost:3000/api';
+// Point at another server (e.g. a test DB instance) with TEST_API_URL.
+const BASE_URL = process.env.TEST_API_URL || 'http://localhost:3000/api';
 const token = jwt.sign({ userId: 1, role: 'admin', permissions: ['*'] }, process.env.JWT_SECRET || 'your-default-jwt-secret-key-change-it-in-production', { expiresIn: '1h' });
 
 function req(method, path, body) {
@@ -59,6 +60,16 @@ async function run() {
   });
   console.log('Create Bank Entry:', createBankRes.status, createBankRes.data?.message);
   const voucherId = createBankRes.data?.data?.id;
+  // A bank charge is money OUT: the account must be on the credit side
+  // (balances = opening + debits − credits), never the debit side.
+  const createdEntry = createBankRes.data?.data;
+  if (createdEntry) {
+    const directionOk = String(createdEntry.credit_account_id) === String(bankAccountId) && !createdEntry.debit_account_id;
+    console.log(directionOk
+      ? 'Bank charge direction: OK (credit side — lowers the balance)'
+      : `Bank charge direction: WRONG — debit=${createdEntry.debit_account_id} credit=${createdEntry.credit_account_id}`);
+    if (!directionOk) process.exitCode = 1;
+  }
 
   if (voucherId) {
     // Update Bank Entry
@@ -89,6 +100,7 @@ async function run() {
       employee_id: employee.id,
       amount: 5000,
       payment_date: '2026-10-04',
+      salary_month: '2026-09', // required for direct salary payments
       payment_method: 'bank_transfer',
       bank_account_id: bankAccountId,
       transaction_reference: 'SAL-TEST-001',

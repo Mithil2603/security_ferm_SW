@@ -60,6 +60,8 @@ const processRecurringVouchers = async () => {
         contra: "CT",
         debit_note: "DN",
         credit_note: "CN",
+        salary: "SA",
+        petty_cash: "PC",
       };
       const prefix = prefixMap[rv.voucher_type] || "JV";
       const year = new Date().getFullYear();

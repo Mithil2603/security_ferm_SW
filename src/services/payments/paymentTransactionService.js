@@ -177,44 +177,62 @@ async function createPostedVoucher({ direction, amount, bankAccountId, partyType
 // entry point, reusing the existing 'journal' (single account) and 'contra'
 // (two-account transfer) voucher types.
 // ─────────────────────────────────────────────────────────────────────────────
+// Which side of the voucher the account goes on for each kind of bank entry.
+// Every balance in the app (bank accounts, cash book, balance sheet, BRS) is
+//   opening + SUM(debit_account_id = acct) − SUM(credit_account_id = acct)
+// so debit_account_id is money IN and credit_account_id is money OUT — the same
+// as "Debit Account (Money To)" / "Credit Account (Money From)" on the Vouchers
+// screen. (Bank entries used to be saved the other way round, so a bank charge
+// raised the balance. Existing rows are deliberately not migrated — client data
+// stays as entered; opening an old entry in Edit and saving it with the right
+// type puts it on the correct side.)
+const BANK_ENTRY_KINDS = {
+  bank_charge: { direction: 'out', narration: 'Bank charges' },
+  other_debit: { direction: 'out', narration: 'Other payment' },
+  interest_credited: { direction: 'in', narration: 'Interest received' },
+  other_credit: { direction: 'in', narration: 'Other receipt' },
+};
+
+function bankEntryVoucherFields({ kind, bank_account_id, to_account_id, narration }) {
+  if (kind === 'transfer') {
+    if (!bank_account_id || !to_account_id) throw new Error('Both a from-account and a to-account are required for a transfer');
+    if (String(bank_account_id) === String(to_account_id)) throw new Error('From and To accounts must be different');
+    return {
+      voucherType: 'contra',
+      debitAccountId: to_account_id,    // money arrives at the destination account
+      creditAccountId: bank_account_id, // money leaves the source account
+      narration: narration || 'Transfer between accounts',
+      category: 'transfer',
+    };
+  }
+  const def = BANK_ENTRY_KINDS[kind];
+  if (!def) throw new Error('Unknown bank entry type');
+  if (!bank_account_id) throw new Error('A bank/cash account is required');
+  return {
+    voucherType: 'journal',
+    debitAccountId: def.direction === 'in' ? bank_account_id : null,
+    creditAccountId: def.direction === 'out' ? bank_account_id : null,
+    narration: narration || def.narration,
+    category: kind,
+  };
+}
+
 async function recordBankEntry(params, userId) {
   const { kind, bank_account_id, to_account_id, amount, entry_date, narration, transaction_ref } = params;
   const finalAmount = parseFloat(amount);
   if (isNaN(finalAmount) || finalAmount <= 0) throw new Error('A valid amount is required');
   const entryDate = entry_date || todayStr();
+  const f = bankEntryVoucherFields({ kind, bank_account_id, to_account_id, narration });
 
-  let voucherType, debitAccountId, creditAccountId, finalNarration;
-
-  if (kind === 'transfer') {
-    if (!bank_account_id || !to_account_id) throw new Error('Both a from-account and a to-account are required for a transfer');
-    if (String(bank_account_id) === String(to_account_id)) throw new Error('From and To accounts must be different');
-    voucherType = 'contra';
-    creditAccountId = bank_account_id; // money leaves the source account
-    debitAccountId = to_account_id;    // money arrives at the destination account
-    finalNarration = narration || 'Transfer between accounts';
-  } else {
-    if (!bank_account_id) throw new Error('A bank/cash account is required');
-    voucherType = 'journal';
-    const isDebit = kind === 'bank_charge' || kind === 'other_debit';
-    debitAccountId = isDebit ? bank_account_id : null;
-    creditAccountId = isDebit ? null : bank_account_id;
-    finalNarration = narration || (
-      kind === 'bank_charge' ? 'Bank charges'
-      : kind === 'interest_credited' ? 'Interest credited'
-      : kind === 'other_credit' ? 'Other credit'
-      : 'Other charge'
-    );
-  }
-
-  const voucherNumber = await getNextVoucherNumber(voucherType, entryDate);
+  const voucherNumber = await getNextVoucherNumber(f.voucherType, entryDate);
   const result = await query(
     `INSERT INTO vouchers
       (voucher_number, voucher_type, voucher_date, amount, debit_account_id, credit_account_id,
-       party_type, narration, transaction_ref, status, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'posted',$10)
+       party_type, narration, transaction_ref, status, created_by, category)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'posted',$10,$11)
      RETURNING *`,
-    [voucherNumber, voucherType, entryDate, finalAmount, debitAccountId || null, creditAccountId || null,
-     'other', finalNarration, transaction_ref || null, userId]
+    [voucherNumber, f.voucherType, entryDate, finalAmount, f.debitAccountId || null, f.creditAccountId || null,
+     'other', f.narration, transaction_ref || null, userId, f.category]
   );
   return result.rows[0];
 }
@@ -1001,38 +1019,16 @@ async function updateBankEntry(voucherId, params, userId) {
   const finalAmount = parseFloat(amount);
   if (isNaN(finalAmount) || finalAmount <= 0) throw new Error('A valid amount is required');
   const entryDate = entry_date || existing.voucher_date;
-
-  let voucherType, debitAccountId, creditAccountId, finalNarration;
-
-  if (kind === 'transfer') {
-    if (!bank_account_id || !to_account_id) throw new Error('Both a from-account and a to-account are required for a transfer');
-    if (String(bank_account_id) === String(to_account_id)) throw new Error('From and To accounts must be different');
-    voucherType = 'contra';
-    creditAccountId = bank_account_id;
-    debitAccountId = to_account_id;
-    finalNarration = narration || 'Transfer between accounts';
-  } else {
-    if (!bank_account_id) throw new Error('A bank/cash account is required');
-    voucherType = 'journal';
-    const isDebit = kind === 'bank_charge' || kind === 'other_debit';
-    debitAccountId = isDebit ? bank_account_id : null;
-    creditAccountId = isDebit ? null : bank_account_id;
-    finalNarration = narration || (
-      kind === 'bank_charge' ? 'Bank charges'
-      : kind === 'interest_credited' ? 'Interest credited'
-      : kind === 'other_credit' ? 'Other credit'
-      : 'Other charge'
-    );
-  }
+  const f = bankEntryVoucherFields({ kind, bank_account_id, to_account_id, narration });
 
   const result = await query(
     `UPDATE vouchers SET
       voucher_type = $1, voucher_date = $2, amount = $3, debit_account_id = $4,
-      credit_account_id = $5, narration = $6, transaction_ref = $7, updated_at = CURRENT_TIMESTAMP
-     WHERE id = $8
+      credit_account_id = $5, narration = $6, transaction_ref = $7, category = $8, updated_at = CURRENT_TIMESTAMP
+     WHERE id = $9
      RETURNING *`,
-    [voucherType, entryDate, finalAmount, debitAccountId || null, creditAccountId || null,
-     finalNarration, transaction_ref || null, voucherId]
+    [f.voucherType, entryDate, finalAmount, f.debitAccountId || null, f.creditAccountId || null,
+     f.narration, transaction_ref || null, f.category, voucherId]
   );
   return result.rows[0];
 }
