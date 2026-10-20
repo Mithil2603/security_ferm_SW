@@ -3,6 +3,7 @@ import { Layers, Plus, Users, Zap, X, Edit, Trash2, ChevronDown, ChevronUp } fro
 import api from '../services/api';
 import TableSkeleton from '../components/TableSkeleton';
 import { toast, confirmDialog } from '../context/ToastContext';
+import Select from '../components/ui/Select';
 
 const TEMPLATE_TYPES = {
   custom: { label: 'Custom', color: 'bg-gray-500/20 text-gray-400' },
@@ -174,13 +175,13 @@ export default function SalaryStructures() {
         </div>
         <div>
           <label className="block text-sm text-gray-400 mb-1">Template Type</label>
-          <select name="template_type" value={form.template_type} onChange={handleInput}
+          <Select name="template_type" value={form.template_type} onChange={handleInput}
             className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white">
             <option value="custom">Custom</option>
             <option value="guard">Guard</option>
             <option value="supervisor">Supervisor</option>
             <option value="manager">Manager</option>
-          </select>
+          </Select>
         </div>
       </div>
       <div className="grid grid-cols-3 gap-4">

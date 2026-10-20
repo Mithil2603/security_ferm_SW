@@ -6,6 +6,7 @@ import Toast from './Toast';
 import RoundOffControl from './RoundOffControl';
 import TaxRateSelect from './TaxRateSelect';
 import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
+import Select from './ui/Select';
 
 export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
   const todayStr = format(new Date(), 'yyyy-MM-dd');
@@ -353,7 +354,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
               {clientMode === 'existing' ? (
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Select Client *</label>
-                  <select
+                  <Select
                     required
                     value={form.client_id}
                     onChange={(e) => handleExistingClientChange(e.target.value)}
@@ -366,7 +367,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                         {c.name} {c.client_type === 'event' ? '(Event Client)' : `(Regular - ₹${parseFloat(c.monthly_rate || 0).toLocaleString('en-IN')}/mo)`}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                   {form.client_id && (
                     <div className="mt-3 p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs text-slate-600 grid grid-cols-2 gap-2">
                       <div><span className="font-semibold text-slate-800">Phone:</span> {form.phone || 'N/A'}</div>
@@ -505,7 +506,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                       )}
                     </div>
                     {clientSites.length > 0 && clientMode === 'existing' && !isCustomSite ? (
-                      <select
+                      <Select
                         value={form.site_name}
                         onChange={(e) => {
                           if (e.target.value === '__custom__') {
@@ -528,7 +529,7 @@ export default function EventInvoiceModal({ isOpen, onClose, onSuccess }) {
                           );
                         })}
                         <option value="__custom__">➕ Enter Other / Custom Site...</option>
-                      </select>
+                      </Select>
                     ) : (
                       <input
                         type="text"

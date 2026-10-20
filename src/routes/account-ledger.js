@@ -4,6 +4,7 @@ const { query } = require('../database/connection');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const { logError } = require('../utils/errorLogger');
+const { ensureLinkedLedgers, linkedEntries } = require('../utils/ledgerSources');
 
 router.use(authMiddleware);
 router.use(requirePermission('manage_invoices', 'manage_expenses', 'view_reports', 'manage_payroll', 'view_vouchers'));
@@ -61,6 +62,34 @@ function getFinancialYear(dateVal) {
   }
 }
 
+const VCH_TYPE_LABELS = {
+  cash_payment: 'Payment', bank_payment: 'Payment', cash_receipt: 'Receipt', bank_receipt: 'Receipt',
+  journal: 'Journal', contra: 'Contra', debit_note: 'Debit Note', credit_note: 'Credit Note',
+  salary: 'Salary', petty_cash: 'Petty Cash',
+};
+
+/**
+ * Row for a voucher that names the party (client/vendor) as one of its sides
+ * via party_side. Direction comes from that side, for any voucher type.
+ */
+function partySideRow(v) {
+  const amt = parseFloat(v.amount) || 0;
+  const isDebit = v.party_side === 'debit';
+  const other = isDebit
+    ? (v.credit_acc || v.credit_led || v.narration || 'Journal')
+    : (v.debit_acc || v.debit_led || v.narration || 'Journal');
+  return {
+    id: `vch-${v.id}`,
+    date: v.tx_date,
+    particulars: `${isDebit ? 'To' : 'By'} ${other}`,
+    vch_type: VCH_TYPE_LABELS[v.voucher_type] || v.voucher_type,
+    vch_no: v.voucher_number,
+    debit: isDebit ? amt : 0,
+    credit: isDebit ? 0 : amt,
+    created_at: v.created_at
+  };
+}
+
 /**
  * GET /api/account-ledger/parties
  * Fetch all selectable parties (clients, vendors, bank/cash accounts)
@@ -84,10 +113,14 @@ router.get('/parties', async (req, res) => {
       }
     } catch (_) {}
 
-    const [clientsRes, vendorsRes, bankRes] = await Promise.all([
+    await ensureLinkedLedgers();
+    const [clientsRes, vendorsRes, bankRes, ledgerRes] = await Promise.all([
       query(`SELECT id, name, phone, email, address, city, state, postal_code, gst_number, is_active FROM clients ORDER BY name ASC`),
       query(`SELECT id, name, contact_info, payment_terms_days, is_active FROM vendors ORDER BY name ASC`),
-      query(`SELECT id, account_name, account_type, account_number, bank_name, ifsc_code, is_active FROM bank_accounts ORDER BY account_name ASC`)
+      query(`SELECT id, account_name, account_type, account_number, bank_name, ifsc_code, is_active FROM bank_accounts ORDER BY account_name ASC`),
+      query(`SELECT l.id, l.name, l.is_active, g.name AS group_name, g.nature
+               FROM ledgers l JOIN ledger_groups g ON g.id = l.group_id
+              ORDER BY g.sort_order, l.name`).catch(() => ({ rows: [] }))
     ]);
 
     res.json({
@@ -95,7 +128,8 @@ router.get('/parties', async (req, res) => {
       data: {
         clients: clientsRes.rows || [],
         vendors: vendorsRes.rows || [],
-        bank_accounts: bankRes.rows || []
+        bank_accounts: bankRes.rows || [],
+        ledgers: ledgerRes.rows || []
       }
     });
   } catch (error) {
@@ -197,7 +231,29 @@ router.get('/', async (req, res) => {
         account_type: b.account_type === 'cash' ? 'Cash Account' : 'Bank Account',
         opening_balance: parseFloat(b.opening_balance) || 0
       };
+    } else if (party_type === 'ledger') {
+      const lRes = await query(`
+        SELECT l.*, g.name AS group_name, g.nature
+          FROM ledgers l JOIN ledger_groups g ON g.id = l.group_id
+         WHERE l.id = $1`, [party_id]);
+      if (lRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Ledger not found' });
+      const l = lRes.rows[0];
+      party = {
+        id: l.id,
+        name: l.name,
+        group_name: l.group_name,
+        nature: l.nature,
+        address: l.description || '',
+        account_type: l.group_name,
+        source_type: l.source_type || null,
+        source_key: l.source_key || null
+      };
     }
+
+    // Creditor-natured accounts (vendors; income / liability / capital ledgers)
+    // carry a normal Cr balance; everything else a normal Dr balance.
+    const creditNatured = party_type === 'vendor'
+      || (party_type === 'ledger' && ['income', 'liability', 'capital'].includes(party.nature));
 
     // 3. Gather all transactions across all time for this party
     let allTransactions = [];
@@ -282,19 +338,24 @@ router.get('/', async (req, res) => {
       const vchRes = await query(`
         SELECT 
           v.id, v.voucher_number, v.voucher_date as tx_date, v.voucher_type,
-          v.amount, v.narration, v.created_at,
+          v.amount, v.narration, v.created_at, v.party_side,
           debit_ba.account_name as debit_acc, debit_ba.bank_name as debit_bank,
-          credit_ba.account_name as credit_acc, credit_ba.bank_name as credit_bank
+          credit_ba.account_name as credit_acc, credit_ba.bank_name as credit_bank,
+          dl.name as debit_led, cl.name as credit_led
         FROM vouchers v
         LEFT JOIN bank_accounts debit_ba ON v.debit_account_id = debit_ba.id
         LEFT JOIN bank_accounts credit_ba ON v.credit_account_id = credit_ba.id
+        LEFT JOIN ledgers dl ON v.debit_ledger_id = dl.id
+        LEFT JOIN ledgers cl ON v.credit_ledger_id = cl.id
         WHERE v.party_type = 'client' AND v.party_id = $1 AND v.status = 'posted'
           AND (v.reference_type != 'invoice' OR v.reference_id IS NULL)
       `, [party_id]);
 
       vchRes.rows.forEach(v => {
         const amt = parseFloat(v.amount) || 0;
-        if (v.voucher_type === 'credit_note') {
+        if (v.party_side) {
+          allTransactions.push(partySideRow(v));
+        } else if (v.voucher_type === 'credit_note') {
           allTransactions.push({
             id: `vch-${v.id}`,
             date: v.tx_date,
@@ -397,19 +458,24 @@ router.get('/', async (req, res) => {
       const vchRes = await query(`
         SELECT 
           v.id, v.voucher_number, v.voucher_date as tx_date, v.voucher_type,
-          v.amount, v.narration, v.created_at,
+          v.amount, v.narration, v.created_at, v.party_side,
           debit_ba.account_name as debit_acc, debit_ba.bank_name as debit_bank,
-          credit_ba.account_name as credit_acc, credit_ba.bank_name as credit_bank
+          credit_ba.account_name as credit_acc, credit_ba.bank_name as credit_bank,
+          dl.name as debit_led, cl.name as credit_led
         FROM vouchers v
         LEFT JOIN bank_accounts debit_ba ON v.debit_account_id = debit_ba.id
         LEFT JOIN bank_accounts credit_ba ON v.credit_account_id = credit_ba.id
+        LEFT JOIN ledgers dl ON v.debit_ledger_id = dl.id
+        LEFT JOIN ledgers cl ON v.credit_ledger_id = cl.id
         WHERE v.party_type = 'vendor' AND v.party_id = $1 AND v.status = 'posted'
           AND (v.reference_type != 'expense' OR v.reference_id IS NULL)
       `, [party_id]);
 
       vchRes.rows.forEach(v => {
         const amt = parseFloat(v.amount) || 0;
-        if (['bank_payment', 'cash_payment'].includes(v.voucher_type)) {
+        if (v.party_side) {
+          allTransactions.push(partySideRow(v));
+        } else if (['bank_payment', 'cash_payment'].includes(v.voucher_type)) {
           const bankName = (v.credit_bank || v.credit_acc || primaryBankName).toUpperCase();
           allTransactions.push({
             id: `vch-${v.id}`,
@@ -463,10 +529,13 @@ router.get('/', async (req, res) => {
           v.id, v.voucher_number, v.voucher_date as tx_date, v.voucher_type,
           v.amount, v.party_name, v.narration, v.created_at,
           v.debit_account_id, v.credit_account_id,
-          debit_ba.account_name as debit_acc, credit_ba.account_name as credit_acc
+          debit_ba.account_name as debit_acc, credit_ba.account_name as credit_acc,
+          dl.name as debit_led, cl.name as credit_led
         FROM vouchers v
         LEFT JOIN bank_accounts debit_ba ON v.debit_account_id = debit_ba.id
         LEFT JOIN bank_accounts credit_ba ON v.credit_account_id = credit_ba.id
+        LEFT JOIN ledgers dl ON v.debit_ledger_id = dl.id
+        LEFT JOIN ledgers cl ON v.credit_ledger_id = cl.id
         WHERE (v.debit_account_id = $1 OR v.credit_account_id = $1) AND v.status = 'posted'
       `, [party_id]);
 
@@ -477,8 +546,8 @@ router.get('/', async (req, res) => {
           id: `vch-${v.id}`,
           date: v.tx_date,
           particulars: isDebit 
-            ? `To ${v.party_name || v.credit_acc || 'Receipt'}` 
-            : `By ${v.party_name || v.debit_acc || 'Payment'}`,
+            ? `To ${v.party_name || v.credit_acc || v.credit_led || 'Receipt'}` 
+            : `By ${v.party_name || v.debit_acc || v.debit_led || 'Payment'}`,
           vch_type: v.voucher_type === 'contra' ? 'Contra' : (isDebit ? 'Receipt' : 'Payment'),
           vch_no: v.voucher_number,
           debit: isDebit ? amt : 0,
@@ -486,6 +555,42 @@ router.get('/', async (req, res) => {
           created_at: v.created_at
         });
       });
+    } else if (party_type === 'ledger') {
+      const vchRes = await query(`
+        SELECT
+          v.id, v.voucher_number, v.voucher_date as tx_date, v.voucher_type,
+          v.amount, v.party_name, v.party_side, v.narration, v.created_at,
+          v.debit_ledger_id, v.credit_ledger_id,
+          debit_ba.account_name as debit_acc, credit_ba.account_name as credit_acc,
+          dl.name as debit_led, cl.name as credit_led
+        FROM vouchers v
+        LEFT JOIN bank_accounts debit_ba ON v.debit_account_id = debit_ba.id
+        LEFT JOIN bank_accounts credit_ba ON v.credit_account_id = credit_ba.id
+        LEFT JOIN ledgers dl ON v.debit_ledger_id = dl.id
+        LEFT JOIN ledgers cl ON v.credit_ledger_id = cl.id
+        WHERE (v.debit_ledger_id = $1 OR v.credit_ledger_id = $1) AND v.status = 'posted'
+      `, [party_id]);
+
+      vchRes.rows.forEach(v => {
+        const amt = parseFloat(v.amount) || 0;
+        const isDebit = String(v.debit_ledger_id) === String(party_id);
+        const other = isDebit
+          ? (v.credit_acc || v.credit_led || (v.party_side === 'credit' ? v.party_name : null) || v.narration || 'Journal')
+          : (v.debit_acc || v.debit_led || (v.party_side === 'debit' ? v.party_name : null) || v.narration || 'Journal');
+        allTransactions.push({
+          id: `vch-${v.id}`,
+          date: v.tx_date,
+          particulars: `${isDebit ? 'To' : 'By'} ${other}`,
+          vch_type: VCH_TYPE_LABELS[v.voucher_type] || v.voucher_type,
+          vch_no: v.voucher_number,
+          debit: isDebit ? amt : 0,
+          credit: isDebit ? 0 : amt,
+          created_at: v.created_at
+        });
+      });
+
+      // Auto-linked ledgers: entries recorded in Expenses / Payroll / Bank Entries
+      allTransactions.push(...(await linkedEntries(party)));
     }
 
     // Sort all transactions chronologically
@@ -550,7 +655,7 @@ router.get('/', async (req, res) => {
       let segOpeningSide = 'debit';
       let segOpeningParticulars = 'To Opening Balance';
 
-      if (party_type === 'vendor') {
+      if (creditNatured) {
         // Creditor: normal balance is Credit (we owe vendor)
         segOpeningSide = rollingBalance <= 0 ? 'credit' : 'debit';
         segOpeningParticulars = segOpeningSide === 'credit' ? 'By Opening Balance' : 'To Opening Balance';
@@ -565,7 +670,7 @@ router.get('/', async (req, res) => {
 
       // Calculate on-screen progressive running balance for each transaction row
       let curBalance = (segOpeningSide === 'debit' ? 1 : -1) * segOpeningAmt;
-      if (party_type === 'vendor') {
+      if (creditNatured) {
         curBalance = (segOpeningSide === 'credit' ? 1 : -1) * segOpeningAmt;
       }
 
@@ -573,7 +678,7 @@ router.get('/', async (req, res) => {
         segDebitTotal += r.debit;
         segCreditTotal += r.credit;
 
-        if (party_type === 'vendor') {
+        if (creditNatured) {
           // Credit increases payable, Debit decreases payable
           curBalance += (r.credit - r.debit);
           const runningAmt = Math.abs(curBalance);
@@ -639,7 +744,7 @@ router.get('/', async (req, res) => {
 
     // Determine final balance Dr/Cr side accurately for Party vs Vendor
     let finalBalSide = 'Dr';
-    if (party_type === 'vendor') {
+    if (creditNatured) {
       finalBalSide = rollingBalance <= 0 ? 'Cr' : 'Dr';
     } else {
       finalBalSide = rollingBalance >= 0 ? 'Dr' : 'Cr';

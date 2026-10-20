@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { FileText, Settings, Layers, Download, Eye, X, Plus, Zap, ChevronRight, Pencil, Trash2 } from 'lucide-react';
 import api from '../services/api';
 import TableSkeleton from '../components/TableSkeleton';
+import Select from '../components/ui/Select';
 
 export default function GSTCompliance() {
   const [tab, setTab] = useState('returns'); // returns | hsn | config
@@ -458,12 +459,12 @@ export default function GSTCompliance() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Type *</label>
-                  <select required value={hsnModal.form.type}
+                  <Select required value={hsnModal.form.type}
                     onChange={e => setHsnModal({ ...hsnModal, form: { ...hsnModal.form, type: e.target.value } })}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm">
                     <option value="SAC">SAC (Services)</option>
                     <option value="HSN">HSN (Goods)</option>
-                  </select>
+                  </Select>
                 </div>
               </div>
               <div>

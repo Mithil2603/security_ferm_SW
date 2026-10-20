@@ -4,6 +4,7 @@ import api from '../services/api';
 import * as XLSX from 'xlsx';
 import { getApiBaseUrl } from '../utils/apiUrl';
 import Pagination from '../components/Pagination';
+import Select from '../components/ui/Select';
 
 // Local-date formatter — toISOString() converts to UTC first, which shifts
 // the date by a day in timezones ahead of UTC (e.g. IST). Date-range defaults
@@ -278,16 +279,16 @@ export default function TaxReports() {
 
         <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto print:hidden">
           <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-lg border border-slate-200">
-            <select
+            <Select
               value={fy}
               onChange={(e) => setFy(e.target.value)}
               className="px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm font-medium focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
               title="Financial Year"
             >
               {fyOptions.map(f => <option key={f} value={f}>FY {f}</option>)}
-            </select>
+            </Select>
             {activeTab !== 'gstr3b' && (
-              <select
+              <Select
                 value={customRange ? 'custom' : quarter}
                 onChange={(e) => {
                   if (e.target.value === 'custom') { setCustomRange(true); }
@@ -298,7 +299,7 @@ export default function TaxReports() {
               >
                 {[1, 2, 3, 4].map(q => <option key={q} value={q}>{QUARTER_LABELS[q]}</option>)}
                 <option value="custom">Custom Range</option>
-              </select>
+              </Select>
             )}
           </div>
           {customRange && activeTab !== 'gstr3b' && (

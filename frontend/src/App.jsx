@@ -29,6 +29,7 @@ import Settings from './pages/Settings';
 import StatementArchive from './pages/StatementArchive';
 import PLAccount from './pages/PLAccount';
 import Vouchers from './pages/Vouchers';
+import Ledgers from './pages/Ledgers';
 import BalanceSheet from './pages/BalanceSheet';
 import Budgets from './pages/Budgets';
 import BankReconciliation from './pages/BankReconciliation';
@@ -342,6 +343,7 @@ function App() {
             <Route path="/statements" element={<ProtectedRoute permission="view_reports"><StatementArchive /></ProtectedRoute>} />
             <Route path="/pl-account" element={<ProtectedRoute permission="view_pl_account"><PLAccount /></ProtectedRoute>} />
             <Route path="/vouchers" element={<ProtectedRoute permission={['view_vouchers', 'create_vouchers', 'edit_vouchers', 'delete_vouchers', 'approve_vouchers', 'manage_vouchers']}><Vouchers /></ProtectedRoute>} />
+            <Route path="/ledgers" element={<ProtectedRoute permission={['view_vouchers', 'create_vouchers', 'edit_vouchers', 'manage_vouchers', 'manage_bank_accounts']}><Ledgers /></ProtectedRoute>} />
             <Route path="/balance-sheet" element={<ProtectedRoute permission="view_balance_sheet"><BalanceSheet /></ProtectedRoute>} />
             <Route path="/bank-reconciliation" element={<ProtectedRoute permission="manage_bank_reconciliation"><BankReconciliation /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute permission="manage_settings"><Settings /></ProtectedRoute>} />

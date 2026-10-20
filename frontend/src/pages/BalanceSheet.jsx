@@ -146,6 +146,15 @@ export default function BalanceSheet() {
                 {/* Advances */}
                 <SectionHeader title={bs.assets.advances.label} total={bs.assets.advances.total} prev={prev?.assets?.advances?.total} compare={compare} />
                 <LineItem label="Salary Advances" amount={bs.assets.advances.salary_advances} />
+
+                {/* Custom asset ledgers */}
+                {bs.assets.ledger_assets?.details?.length > 0 && (<>
+                  <div style={{ borderTop: '1px solid #e2e8f0', margin: '12px 0' }} />
+                  <SectionHeader title={bs.assets.ledger_assets.label} total={bs.assets.ledger_assets.total} prev={prev?.assets?.ledger_assets?.total} compare={compare} />
+                  {bs.assets.ledger_assets.details.map(l => (
+                    <LineItem key={`la${l.id}`} label={l.name} amount={l.amount} sub={l.group_name} />
+                  ))}
+                </>)}
               </div>
               {/* Total Assets */}
               <div style={{ padding: '14px 20px', background: '#f0f9ff', borderTop: '2px solid #0f3460', display: 'flex', justifyContent: 'space-between' }}>
@@ -173,8 +182,20 @@ export default function BalanceSheet() {
                 )}
                 <div style={{ borderTop: '1px solid #e2e8f0', margin: '12px 0' }} />
 
+                {/* Custom liability ledgers */}
+                {bs.liabilities.ledger_liabilities?.details?.length > 0 && (<>
+                  <SectionHeader title={bs.liabilities.ledger_liabilities.label} total={bs.liabilities.ledger_liabilities.total} prev={prev?.liabilities?.ledger_liabilities?.total} compare={compare} />
+                  {bs.liabilities.ledger_liabilities.details.map(l => (
+                    <LineItem key={`ll${l.id}`} label={l.name} amount={l.amount} sub={l.group_name} />
+                  ))}
+                  <div style={{ borderTop: '1px solid #e2e8f0', margin: '12px 0' }} />
+                </>)}
+
                 {/* Capital */}
                 <SectionHeader title={bs.liabilities.capital_account.label} total={bs.liabilities.capital_account.total} prev={prev?.liabilities?.capital_account?.total} compare={compare} />
+                {(bs.liabilities.capital_account.capital_ledgers || []).map(l => (
+                  <LineItem key={`lc${l.id}`} label={l.name} amount={l.amount} sub="Capital Account" />
+                ))}
                 <LineItem label="Net Profit (Current FY)" amount={bs.liabilities.capital_account.net_profit} />
                 <LineItem label="Retained Earnings" amount={bs.liabilities.capital_account.retained_earnings} />
               </div>

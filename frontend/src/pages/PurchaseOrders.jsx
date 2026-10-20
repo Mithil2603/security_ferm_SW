@@ -10,6 +10,7 @@ import Pagination from '../components/Pagination';
 import { getServerBaseUrl } from '../utils/apiUrl';
 import { sanitizePhone } from '../utils/phoneValidation';
 import { numberToIndianWords } from '../utils/numberToIndianWords';
+import Select from '../components/ui/Select';
 
 const INDIAN_STATES = [
   "Andaman and Nicobar Islands", "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar",
@@ -713,7 +714,7 @@ export default function PurchaseOrders() {
               />
             </div>
             <div className="flex items-center gap-2">
-              <select
+              <Select
                 value={statusFilter}
                 onChange={e => setStatusFilter(e.target.value)}
                 className="px-3 py-2 border border-slate-300 rounded-xl text-xs font-medium bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500"
@@ -722,7 +723,7 @@ export default function PurchaseOrders() {
                 <option value="draft">Draft</option>
                 <option value="billed">Billed</option>
                 <option value="cancelled">Cancelled</option>
-              </select>
+              </Select>
             </div>
           </div>
 
@@ -1001,7 +1002,7 @@ export default function PurchaseOrders() {
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     State of supply
                   </label>
-                  <select
+                  <Select
                     value={form.state_of_supply}
                     onChange={e => setForm(f => ({ ...f, state_of_supply: e.target.value }))}
                     className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-teal-500 focus:outline-none bg-white text-slate-800"
@@ -1009,7 +1010,7 @@ export default function PurchaseOrders() {
                     {INDIAN_STATES.map(s => (
                       <option key={s} value={s}>{s}</option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
               </div>
             </div>
@@ -1029,14 +1030,14 @@ export default function PurchaseOrders() {
                       <th rowSpan={2} className="py-2 px-1.5 text-right w-28">
                         <div className="flex flex-col items-end gap-0.5">
                           <span>Price/Unit</span>
-                          <select
+                          <Select
                             value={form.price_type || 'without_tax'}
                             onChange={e => handlePriceTypeChange(e.target.value)}
                             className="text-[10px] font-semibold bg-white border border-slate-300 rounded px-1 py-0.5 text-teal-700 hover:border-teal-500 focus:outline-none cursor-pointer"
                           >
                             <option value="without_tax">Without Tax ▾</option>
                             <option value="with_tax">With Tax ▾</option>
-                          </select>
+                          </Select>
                         </div>
                       </th>
                       {/* DISCOUNT split header */}
@@ -1116,7 +1117,7 @@ export default function PurchaseOrders() {
 
                           {/* Unit */}
                           <td className="py-2 px-1.5">
-                            <select
+                            <Select
                               value={it.unit}
                               onChange={e => updateItem(idx, 'unit', e.target.value)}
                               className="w-full h-8.5 px-1.5 bg-white hover:bg-slate-50/70 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-teal-500 rounded-lg text-xs text-slate-700 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-all cursor-pointer"
@@ -1124,7 +1125,7 @@ export default function PurchaseOrders() {
                               {UNIT_OPTIONS.map(u => (
                                 <option key={u} value={u}>{u}</option>
                               ))}
-                            </select>
+                            </Select>
                           </td>
 
                           {/* Price / Unit (Single clean input, mode in header) */}
@@ -1170,7 +1171,7 @@ export default function PurchaseOrders() {
 
                           {/* Tax % Rate Select */}
                           <td className="py-2 px-1">
-                            <select
+                            <Select
                               value={it.tax_rate}
                               onChange={e => updateItem(idx, 'tax_rate', e.target.value)}
                               className="w-full h-8.5 px-1 bg-white hover:bg-slate-50/70 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-teal-500 rounded-lg text-xs text-slate-700 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-all cursor-pointer"
@@ -1178,7 +1179,7 @@ export default function PurchaseOrders() {
                               {TAX_OPTIONS.map((opt, i) => (
                                 <option key={i} value={opt.rate}>{opt.label}</option>
                               ))}
-                            </select>
+                            </Select>
                           </td>
 
                           {/* Tax Amount Display */}
@@ -1254,7 +1255,7 @@ export default function PurchaseOrders() {
                     Terms & Conditions
                   </h3>
                   <div className="mt-2">
-                    <select
+                    <Select
                       value={form.terms_title}
                       onChange={e => handleTermsTemplateSelect(e.target.value)}
                       className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-xs bg-white text-slate-700 focus:ring-1 focus:ring-teal-500 focus:outline-none"
@@ -1263,7 +1264,7 @@ export default function PurchaseOrders() {
                       {TERMS_TEMPLATES.map((t, i) => (
                         <option key={i} value={t.title}>{t.title}</option>
                       ))}
-                    </select>
+                    </Select>
                   </div>
                 </div>
                 <textarea
@@ -1283,7 +1284,7 @@ export default function PurchaseOrders() {
                       <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide mb-1">
                         Payment Type
                       </label>
-                      <select
+                      <Select
                         value={form.payment_type}
                         onChange={e => setForm(f => ({ ...f, payment_type: e.target.value }))}
                         className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-xs bg-white text-slate-800 focus:ring-1 focus:ring-teal-500 focus:outline-none capitalize font-medium"
@@ -1293,7 +1294,7 @@ export default function PurchaseOrders() {
                         <option value="cheque">Cheque</option>
                         <option value="upi">UPI</option>
                         <option value="credit">Credit / To Be Paid</option>
-                      </select>
+                      </Select>
                     </div>
 
                     <div className="pt-5">
@@ -1837,7 +1838,7 @@ export default function PurchaseOrders() {
                 <label className="block text-xs font-medium text-slate-700 mb-1">
                   Default Payment Method
                 </label>
-                <select
+                <Select
                   value={convertModal.payment_method}
                   onChange={e => setConvertModal(m => ({ ...m, payment_method: e.target.value }))}
                   className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-teal-500 focus:outline-none capitalize"
@@ -1846,7 +1847,7 @@ export default function PurchaseOrders() {
                   <option value="cash">Cash</option>
                   <option value="cheque">Cheque</option>
                   <option value="upi">UPI</option>
-                </select>
+                </Select>
               </div>
               <div className="flex justify-end gap-2.5 pt-2">
                 <button

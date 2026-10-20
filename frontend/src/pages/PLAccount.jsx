@@ -182,14 +182,17 @@ export default function PLAccount() {
       ['═══ INCOME ═══', ''],
     ];
     cp.income.by_client.forEach(c => rows.push([`  ${c.name}`, c.collected]));
+    (cp.income.ledgers || []).forEach(l => rows.push([`  ${l.name} (${l.group_name})`, l.amount]));
     rows.push(['TOTAL INCOME', cp.income.total], []);
     rows.push(['═══ COST OF SERVICES ═══', '']);
     cp.cost_of_services.by_employee.forEach(e => rows.push([`  ${e.name}`, e.net_salary]));
+    (cp.cost_of_services.ledgers || []).forEach(l => rows.push([`  ${l.name} (${l.group_name})`, l.amount]));
     rows.push(['TOTAL COST OF SERVICES', cp.cost_of_services.total], []);
     rows.push(['GROSS PROFIT', cp.gross_profit]);
     rows.push([`  Gross Margin`, `${cp.gross_margin}%`], []);
     rows.push(['═══ OPERATING EXPENSES ═══', '']);
     cp.operating_expenses.by_category.forEach(e => rows.push([`  ${e.name}`, e.amount]));
+    (cp.operating_expenses.ledgers || []).forEach(l => rows.push([`  ${l.name} (${l.group_name})`, l.amount]));
     rows.push(['TOTAL OPERATING EXPENSES', cp.operating_expenses.total], []);
     rows.push(['═══════════════════════════', '']);
     rows.push(['NET PROFIT / (LOSS)', cp.net_profit]);
@@ -323,11 +326,16 @@ export default function PLAccount() {
         <>
           {/* INCOME */}
           <CollapsibleSection title="Income (Revenue)" icon={IndianRupee} iconColor="bg-blue-100 text-blue-600"
-            total={cp.income.total} count={cp.income.by_client.length}>
+            total={cp.income.total} count={cp.income.by_client.length + (cp.income.ledgers || []).length}>
             {cp.income.by_client.map((c, i) => (
               <LineItem key={i} label={c.name} amount={c.collected}
                 sublabel={`${c.count} inv | Billed: ${fmt(c.billed)}`}
                 previousAmount={pp?.income?.by_client?.find(x => x.name === c.name)?.collected} />
+            ))}
+            {(cp.income.ledgers || []).map(l => (
+              <LineItem key={`led-${l.id}`} label={l.name} amount={l.amount}
+                sublabel={`Ledger · ${l.group_name}`}
+                previousAmount={pp?.income?.ledgers?.find(x => x.id === l.id)?.amount} />
             ))}
             <LineItem label="TOTAL INCOME" amount={cp.income.total} bold
               previousAmount={pp?.income?.total} />
@@ -335,11 +343,17 @@ export default function PLAccount() {
 
           {/* COST OF SERVICES */}
           <CollapsibleSection title="Cost of Services (Payroll)" icon={Users} iconColor="bg-teal-100 text-teal-600"
-            total={cp.cost_of_services.total} count={cp.cost_of_services.by_employee.length}>
+            total={cp.cost_of_services.total} count={cp.cost_of_services.by_employee.length + (cp.cost_of_services.ledgers || []).length}>
             {cp.cost_of_services.by_employee.map((e, i) => (
               <LineItem key={i} label={e.name} amount={e.net_salary}
                 sublabel={`${e.emp_id} • ${e.months} month(s)`}
                 previousAmount={pp?.cost_of_services?.by_employee?.find(x => x.emp_id === e.emp_id)?.net_salary}
+                isNegative />
+            ))}
+            {(cp.cost_of_services.ledgers || []).map(l => (
+              <LineItem key={`led-${l.id}`} label={l.name} amount={l.amount}
+                sublabel={`Ledger · ${l.group_name}`}
+                previousAmount={pp?.cost_of_services?.ledgers?.find(x => x.id === l.id)?.amount}
                 isNegative />
             ))}
             <div className="px-6 py-2 bg-slate-50 border-t border-slate-200">
@@ -373,11 +387,17 @@ export default function PLAccount() {
 
           {/* OPERATING EXPENSES */}
           <CollapsibleSection title="Operating Expenses" icon={Receipt} iconColor="bg-amber-100 text-amber-600"
-            total={cp.operating_expenses.total} count={cp.operating_expenses.by_category.length}>
+            total={cp.operating_expenses.total} count={cp.operating_expenses.by_category.length + (cp.operating_expenses.ledgers || []).length}>
             {cp.operating_expenses.by_category.map((e, i) => (
               <LineItem key={i} label={e.name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())} amount={e.amount}
                 sublabel={`${e.count} entries`}
                 previousAmount={pp?.operating_expenses?.by_category?.find(x => x.name === e.name)?.amount}
+                isNegative />
+            ))}
+            {(cp.operating_expenses.ledgers || []).map(l => (
+              <LineItem key={`led-${l.id}`} label={l.name} amount={l.amount}
+                sublabel={`Ledger · ${l.group_name}`}
+                previousAmount={pp?.operating_expenses?.ledgers?.find(x => x.id === l.id)?.amount}
                 isNegative />
             ))}
             {cp.operating_expenses.by_vendor.length > 0 && (

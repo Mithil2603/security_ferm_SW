@@ -1,3 +1,4 @@
+import Select from './ui/Select';
 // One dropdown that sets both the tax type and the GST % rate — the same
 // option list as the Purchase Bill "% Rate" column, so every screen offers
 // identical choices.
@@ -29,7 +30,7 @@ export default function TaxRateSelect({ taxType, taxRate, onChange, className, d
   }
 
   return (
-    <select
+    <Select
       value={current}
       disabled={disabled}
       onChange={e => {
@@ -41,6 +42,6 @@ export default function TaxRateSelect({ taxType, taxRate, onChange, className, d
       {options.map(o => (
         <option key={keyOf(o.type, o.rate)} value={keyOf(o.type, o.rate)}>{o.label}</option>
       ))}
-    </select>
+    </Select>
   );
 }

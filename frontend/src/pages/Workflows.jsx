@@ -3,6 +3,7 @@ import { Zap, Bell, Settings, Play, Pause, Plus, Eye, X, Check, Trash2, AlertTri
 import api from '../services/api';
 import TableSkeleton from '../components/TableSkeleton';
 import { toast, confirmDialog } from '../context/ToastContext';
+import Select from '../components/ui/Select';
 
 const TYPE_ICONS = { info: Info, warning: AlertTriangle, success: CheckCircle, alert: AlertTriangle, reminder: Bell, error: AlertTriangle };
 const TYPE_COLORS = { info: 'blue', warning: 'amber', success: 'emerald', alert: 'red', reminder: 'purple', error: 'red' };
@@ -336,22 +337,22 @@ export default function Workflows() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs text-slate-400 mb-1">Trigger Entity *</label>
-                  <select value={ruleForm.trigger_entity} onChange={e => setRuleForm({...ruleForm, trigger_entity: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 text-sm">
+                  <Select value={ruleForm.trigger_entity} onChange={e => setRuleForm({...ruleForm, trigger_entity: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 text-sm">
                     {['invoice','expense','payroll','attendance','employee','pf','gst'].map(o => <option key={o} value={o}>{o}</option>)}
-                  </select>
+                  </Select>
                 </div>
                 <div>
                   <label className="block text-xs text-slate-400 mb-1">Trigger Event *</label>
-                  <select value={ruleForm.trigger_event} onChange={e => setRuleForm({...ruleForm, trigger_event: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 text-sm">
+                  <Select value={ruleForm.trigger_event} onChange={e => setRuleForm({...ruleForm, trigger_event: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 text-sm">
                     {['created','updated','status_changed','overdue','approaching_due','amount_exceeded','monthly_cycle','approval_required'].map(o => <option key={o} value={o}>{o}</option>)}
-                  </select>
+                  </Select>
                 </div>
               </div>
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Action Type *</label>
-                <select value={ruleForm.action_type} onChange={e => setRuleForm({...ruleForm, action_type: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 text-sm">
+                <Select value={ruleForm.action_type} onChange={e => setRuleForm({...ruleForm, action_type: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 text-sm">
                   {['send_notification','auto_approve','escalate','create_reminder','update_status'].map(o => <option key={o} value={o}>{o}</option>)}
-                </select>
+                </Select>
               </div>
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Action Message</label>

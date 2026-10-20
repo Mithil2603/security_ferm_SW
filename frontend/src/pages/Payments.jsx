@@ -6,6 +6,7 @@ import { toast, confirmDialog } from '../context/ToastContext';
 import { getServerBaseUrl, getApiBaseUrl } from '../utils/apiUrl';
 import Pagination from '../components/Pagination';
 import TaxRateSelect from '../components/TaxRateSelect';
+import Select from '../components/ui/Select';
 
 const TABS = [
   { key: 'client', label: 'Client Receipts', icon: Users, transactionType: 'client_receipt', partyType: 'client' },
@@ -698,7 +699,7 @@ export default function Payments() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">Entry Type *</label>
-                <select
+                <Select
                   required
                   value={bankForm.kind}
                   onChange={e => setBankForm(f => ({ ...f, kind: e.target.value, to_account_id: '' }))}
@@ -707,7 +708,7 @@ export default function Payments() {
                   {BANK_ENTRY_KINDS.map(k => (
                     <option key={k.value} value={k.value}>{k.label}</option>
                   ))}
-                </select>
+                </Select>
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">Date *</label>
@@ -725,7 +726,7 @@ export default function Payments() {
                 <label className="block text-xs font-medium text-slate-700 mb-1">
                   {bankForm.kind === 'transfer' ? 'From Account *' : 'Bank / Cash Account *'}
                 </label>
-                <select
+                <Select
                   required
                   value={bankForm.bank_account_id}
                   onChange={e => setBankForm(f => ({ ...f, bank_account_id: e.target.value }))}
@@ -735,12 +736,12 @@ export default function Payments() {
                   {bankAccounts.map(b => (
                     <option key={b.id} value={b.id}>{b.account_name} ({b.bank_name || (b.account_type === 'cash' ? 'Cash' : b.account_type)})</option>
                   ))}
-                </select>
+                </Select>
               </div>
               {bankForm.kind === 'transfer' && (
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">To Account *</label>
-                  <select
+                  <Select
                     required
                     value={bankForm.to_account_id}
                     onChange={e => setBankForm(f => ({ ...f, to_account_id: e.target.value }))}
@@ -750,7 +751,7 @@ export default function Payments() {
                     {bankAccounts.filter(b => String(b.id) !== String(bankForm.bank_account_id)).map(b => (
                       <option key={b.id} value={b.id}>{b.account_name} ({b.bank_name || (b.account_type === 'cash' ? 'Cash' : b.account_type)})</option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
               )}
             </div>
@@ -817,7 +818,7 @@ export default function Payments() {
                 <label className="block text-xs font-medium text-slate-700 mb-1">
                   {activeTab === 'client' ? 'Client' : activeTab === 'vendor' ? 'Vendor' : 'Employee'} *
                 </label>
-                <select
+                <Select
                   required
                   value={form.party_id}
                   onChange={e => handlePartyChange(e.target.value)}
@@ -827,13 +828,13 @@ export default function Payments() {
                   {partyList.map(p => (
                     <option key={p.id} value={p.id}>{p.name || p.full_name}</option>
                   ))}
-                </select>
+                </Select>
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">
                   {activeTab === 'client' ? 'Close Out Invoice *' : activeTab === 'vendor' ? 'Close Out Bill *' : 'Pending Salary (optional)'}
                 </label>
-                <select
+                <Select
                   required={activeTab !== 'employee'}
                   value={form.bill_id}
                   onChange={e => handleBillChange(e.target.value)}
@@ -855,7 +856,7 @@ export default function Payments() {
                       {activeTab === 'employee' && `${b.period} — ₹${parseFloat(b.amount).toLocaleString()} (${b.source === 'salary_slip' ? 'Slip' : 'Payroll'})`}
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
             </div>
 
@@ -868,7 +869,7 @@ export default function Payments() {
                   </p>
                 ) : (
                   <>
-                    <select
+                    <Select
                       required
                       value={form.employee_bank_choice}
                       onChange={e => setForm(f => ({ ...f, employee_bank_choice: e.target.value }))}
@@ -877,7 +878,7 @@ export default function Payments() {
                       {employeeBankOptions.map(opt => (
                         <option key={opt.value} value={opt.value}>{opt.label}</option>
                       ))}
-                    </select>
+                    </Select>
                     <p className="text-[11px] text-slate-400 mt-1">Fetched from {selectedEmployee.full_name}'s employee record — includes their previous account if it was ever updated.</p>
                   </>
                 )}
@@ -935,7 +936,7 @@ export default function Payments() {
               )}
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">Payment Method *</label>
-                <select
+                <Select
                   value={form.payment_method}
                   onChange={e => setForm(f => ({ ...f, payment_method: e.target.value }))}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
@@ -945,7 +946,7 @@ export default function Payments() {
                   <option value="cheque">Cheque</option>
                   <option value="upi">UPI</option>
                   <option value="card">Card</option>
-                </select>
+                </Select>
               </div>
             </div>
 
@@ -1036,7 +1037,7 @@ export default function Payments() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">Bank / Cash Account *</label>
-                <select
+                <Select
                   required
                   value={form.bank_account_id}
                   onChange={e => setForm(f => ({ ...f, bank_account_id: e.target.value }))}
@@ -1046,7 +1047,7 @@ export default function Payments() {
                   {bankAccounts.map(a => (
                     <option key={a.id} value={a.id}>{a.account_name} ({a.bank_name || (a.account_type === 'cash' ? 'Cash' : a.account_type)})</option>
                   ))}
-                </select>
+                </Select>
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">Reference No.</label>
@@ -1284,7 +1285,7 @@ export default function Payments() {
               onChange={e => setBankDates(d => ({ ...d, to: e.target.value }))}
               className="px-2 py-1 border border-slate-300 rounded-md text-xs"
             />
-            <select
+            <Select
               value={bankAccountFilter}
               onChange={e => setBankAccountFilter(e.target.value)}
               className="px-2 py-1 border border-slate-300 rounded-md text-xs bg-white"
@@ -1293,7 +1294,7 @@ export default function Payments() {
               {bankAccounts.map(a => (
                 <option key={a.id} value={a.id}>{a.account_name}</option>
               ))}
-            </select>
+            </Select>
           </div>
 
           <div className="p-4 border-b border-slate-200">
@@ -1421,7 +1422,7 @@ export default function Payments() {
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Payment Method *</label>
-                  <select
+                  <Select
                     value={editForm.payment_method}
                     onChange={e => setEditForm(f => ({ ...f, payment_method: e.target.value }))}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
@@ -1431,7 +1432,7 @@ export default function Payments() {
                     <option value="cheque">Cheque</option>
                     <option value="upi">UPI</option>
                     <option value="card">Card</option>
-                  </select>
+                  </Select>
                 </div>
               </div>
 
@@ -1480,7 +1481,7 @@ export default function Payments() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Bank / Cash Account *</label>
-                  <select
+                  <Select
                     required
                     value={editForm.bank_account_id}
                     onChange={e => setEditForm(f => ({ ...f, bank_account_id: e.target.value }))}
@@ -1492,7 +1493,7 @@ export default function Payments() {
                         {a.account_name} ({a.bank_name || (a.account_type === 'cash' ? 'Cash' : a.account_type)})
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Reference No.</label>
@@ -1598,7 +1599,7 @@ export default function Payments() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Entry Type *</label>
-                  <select
+                  <Select
                     required
                     value={editBankForm.kind}
                     onChange={e => setEditBankForm(f => ({ ...f, kind: e.target.value, to_account_id: '' }))}
@@ -1607,7 +1608,7 @@ export default function Payments() {
                     {BANK_ENTRY_KINDS.map(k => (
                       <option key={k.value} value={k.value}>{k.label}</option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Date *</label>
@@ -1626,7 +1627,7 @@ export default function Payments() {
                   <label className="block text-xs font-medium text-slate-700 mb-1">
                     {editBankForm.kind === 'transfer' ? 'From Account *' : 'Bank / Cash Account *'}
                   </label>
-                  <select
+                  <Select
                     required
                     value={editBankForm.bank_account_id}
                     onChange={e => setEditBankForm(f => ({ ...f, bank_account_id: e.target.value }))}
@@ -1638,12 +1639,12 @@ export default function Payments() {
                         {b.account_name} ({b.bank_name || (b.account_type === 'cash' ? 'Cash' : b.account_type)})
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
                 {editBankForm.kind === 'transfer' && (
                   <div>
                     <label className="block text-xs font-medium text-slate-700 mb-1">To Account *</label>
-                    <select
+                    <Select
                       required
                       value={editBankForm.to_account_id}
                       onChange={e => setEditBankForm(f => ({ ...f, to_account_id: e.target.value }))}
@@ -1657,7 +1658,7 @@ export default function Payments() {
                             {b.account_name} ({b.bank_name || (b.account_type === 'cash' ? 'Cash' : b.account_type)})
                           </option>
                         ))}
-                    </select>
+                    </Select>
                   </div>
                 )}
               </div>

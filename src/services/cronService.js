@@ -99,11 +99,13 @@ const processRecurringVouchers = async () => {
         INSERT INTO vouchers (
           voucher_number, voucher_type, voucher_date, amount, debit_account_id, credit_account_id,
           party_type, party_id, party_name, reference_type, reference_id, narration,
-          status, due_date, category, created_by
+          status, due_date, category, created_by,
+          debit_ledger_id, credit_ledger_id, party_side
         ) VALUES (
           $1, $2, date('now'), $3, $4, $5,
           $6, $7, $8, $9, $10, $11,
-          'pending_approval', $12, $13, $14
+          'pending_approval', $12, $13, $14,
+          $15, $16, $17
         )
       `,
         [
@@ -121,6 +123,9 @@ const processRecurringVouchers = async () => {
           rv.due_date,
           rv.category,
           rv.created_by,
+          rv.debit_ledger_id || null,
+          rv.credit_ledger_id || null,
+          rv.party_side || null,
         ],
       );
 

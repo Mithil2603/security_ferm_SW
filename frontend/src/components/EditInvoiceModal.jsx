@@ -3,6 +3,7 @@ import { X, FileEdit, Landmark, MapPin, Shield, Calendar, Plus, Trash2 } from 'l
 import api from '../services/api';
 import RoundOffControl from './RoundOffControl';
 import TaxRateSelect from './TaxRateSelect';
+import Select from './ui/Select';
 
 export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }) {
   const [submitting, setSubmitting] = useState(false);
@@ -296,7 +297,7 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
               <label className={labelCls}>
                 <span className="flex items-center gap-1"><Landmark className="w-3.5 h-3.5 text-slate-500" /> Payment Bank Account</span>
               </label>
-              <select
+              <Select
                 value={form.bank_account_id}
                 onChange={e => setForm({ ...form, bank_account_id: e.target.value })}
                 className={inputCls}
@@ -307,7 +308,7 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
                     {ba.bank_name || ba.account_name} ({ba.account_number})
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
           </div>
 

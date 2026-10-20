@@ -5,6 +5,7 @@ const { query } = require('../database/connection');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { saveStatement } = require('../utils/statementSaver');
 const { logError } = require('../utils/errorLogger');
+const ledgerTotalsUtil = require('../utils/ledgerTotals');
 
 router.use(authMiddleware);
 router.use(requirePermission('view_balance_sheet', 'manage_payroll', 'view_reports'));
@@ -140,6 +141,15 @@ async function buildBalanceSheet(asOnDate) {
   `, [asOnDate]);
   const totalAdvances = advances.rows[0]?.total || 0;
 
+  // 3b. Custom ledgers (posted vouchers up to the as-on date)
+  const bsLedgers = await ledgerTotalsUtil.ledgerTotals({ to: asOnDate });
+  const assetLedgers = bsLedgers.filter(r => r.nature === 'asset');
+  const liabilityLedgers = bsLedgers.filter(r => r.nature === 'liability');
+  const capitalLedgers = bsLedgers.filter(r => r.nature === 'capital');
+  const totalLedgerAssets = ledgerTotalsUtil.sum(assetLedgers);
+  const totalLedgerLiabilities = ledgerTotalsUtil.sum(liabilityLedgers);
+  const totalCapitalLedgers = ledgerTotalsUtil.sum(capitalLedgers);
+
   // ══════════════════════════════════════════════════════════════════════════
   // LIABILITIES
   // ══════════════════════════════════════════════════════════════════════════
@@ -235,16 +245,23 @@ async function buildBalanceSheet(asOnDate) {
     WHERE payroll_month >= $1 AND payroll_month <= $2
   `, [fyStart, asOnDate]);
 
-  const netProfit = (revenue.rows[0]?.total || 0) - (totalExpenses.rows[0]?.total || 0) - (totalPayroll.rows[0]?.total || 0);
+  // Custom income / expense ledgers for the same FY window
+  const plLedgers = await ledgerTotalsUtil.ledgerTotals({ from: fyStart, to: asOnDate });
+  const ledgerIncome = ledgerTotalsUtil.sum(plLedgers.filter(r => r.nature === 'income'));
+  const ledgerExpense = ledgerTotalsUtil.sum(plLedgers.filter(r => r.nature === 'expense'));
+
+  const netProfit = (revenue.rows[0]?.total || 0) - (totalExpenses.rows[0]?.total || 0) - (totalPayroll.rows[0]?.total || 0)
+    + ledgerIncome - ledgerExpense;
 
   // ══════════════════════════════════════════════════════════════════════════
   // COMPILE BALANCE SHEET
   // ══════════════════════════════════════════════════════════════════════════
 
   const totalCurrentLiabilities = totalSalaryPayable + pfPayable + esiPayable + tdsPayable + gstPayable + totalExpensePayables + totalCreditNotes;
-  const totalAssets = totalCashBank + totalReceivables + totalAdvances;
+  const totalAssets = totalCashBank + totalReceivables + totalAdvances + totalLedgerAssets;
+  const totalLiabilities = totalCurrentLiabilities + totalLedgerLiabilities;
   // Capital = Total Assets - Total Liabilities (balancing figure)
-  const capital = totalAssets - totalCurrentLiabilities;
+  const capital = totalAssets - totalLiabilities;
 
   return {
     assets: {
@@ -263,6 +280,11 @@ async function buildBalanceSheet(asOnDate) {
         label: 'Advances & Deposits',
         salary_advances: totalAdvances,
         total: totalAdvances
+      },
+      ledger_assets: {
+        label: 'Other Assets (Ledgers)',
+        details: ledgerTotalsUtil.lineItems(assetLedgers),
+        total: totalLedgerAssets
       }
     },
     liabilities: {
@@ -277,18 +299,25 @@ async function buildBalanceSheet(asOnDate) {
         credit_notes: totalCreditNotes,
         total: totalCurrentLiabilities
       },
+      ledger_liabilities: {
+        label: 'Other Liabilities (Ledgers)',
+        details: ledgerTotalsUtil.lineItems(liabilityLedgers),
+        total: totalLedgerLiabilities
+      },
       capital_account: {
         label: "Owner's Equity / Capital",
         opening_capital: 0, // Would need manual entry
+        capital_ledgers: ledgerTotalsUtil.lineItems(capitalLedgers),
+        capital_ledger_total: totalCapitalLedgers,
         net_profit: netProfit,
-        retained_earnings: capital,
+        retained_earnings: capital - totalCapitalLedgers,
         total: capital
       }
     },
     totals: {
       total_assets: totalAssets,
-      total_liabilities: totalCurrentLiabilities + capital,
-      is_balanced: Math.abs(totalAssets - (totalCurrentLiabilities + capital)) < 0.01
+      total_liabilities: totalLiabilities + capital,
+      is_balanced: Math.abs(totalAssets - (totalLiabilities + capital)) < 0.01
     },
     financial_year: { start: fyStart, end: asOnDate },
     generated_at: new Date().toISOString()

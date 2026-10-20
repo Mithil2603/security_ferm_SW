@@ -6,6 +6,7 @@ import api from '../services/api';
 import { getApiBaseUrl } from '../utils/apiUrl';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid, LabelList, LineChart, Line, ReferenceLine, ComposedChart, Area } from 'recharts';
 import * as XLSX from 'xlsx';
+import Select from '../components/ui/Select';
 const COLORS = ['#4a90e2', '#f5a623', '#50e3c2', '#ef4444', '#8b5cf6', '#ec4899'];
 const BAR_COLORS = ['#3b4d6e', '#2c7a7b', '#68b36b', '#f6ad55', '#fc8181'];
 
@@ -661,7 +662,7 @@ export default function Reports() {
                 <><Printer className="w-4 h-4 text-slate-500" /> Export PDF</>
               )}
             </button>
-            <select 
+            <Select 
               onChange={(e) => { if(e.target.value) downloadRawData(e.target.value); e.target.value=''; }}
               className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3 py-2 rounded-xl text-sm font-bold shadow-sm outline-none cursor-pointer"
             >
@@ -669,7 +670,7 @@ export default function Reports() {
               <option value="invoices">Export Invoices</option>
               <option value="payroll">Export Payroll</option>
               <option value="expenses">Export Expenses</option>
-            </select>
+            </Select>
             <button
               onClick={handleExportSheet}
               disabled={loading || exportingSheet || !plData}

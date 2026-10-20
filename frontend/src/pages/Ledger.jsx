@@ -4,6 +4,7 @@ import { Plus, Trash2, IndianRupee, ArrowDownRight, ArrowUpRight, Search, X } fr
 import { format } from 'date-fns';
 import { toast, confirmDialog } from '../context/ToastContext';
 import { normalizeAdjustmentCategories } from '../utils/payrollAdjustments';
+import Select from '../components/ui/Select';
 
 export default function Ledger() {
   const [employees, setEmployees] = useState([]);
@@ -270,12 +271,12 @@ export default function Ledger() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Category</label>
-                <select value={form.category} onChange={e => setForm({...form, category: e.target.value})} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent" required>
+                <Select value={form.category} onChange={e => setForm({...form, category: e.target.value})} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent" required>
                   <option value="">Select category...</option>
                   {categories.map((c, i) => (
                     <option key={i} value={JSON.stringify(c)}>{c.name} ({c.type === 'addition' ? 'Addition' : 'Deduction'})</option>
                   ))}
-                </select>
+                </Select>
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Amount (₹)</label>

@@ -7,6 +7,36 @@ import {
 
 import api from '../services/api';
 import { getApiBaseUrl } from '../utils/apiUrl';
+import Pagination from '../components/Pagination';
+import LedgerFormModal from '../components/LedgerFormModal';
+import Select, { GroupedSelect } from '../components/ui/Select';
+import { confirmDialog } from '../context/ToastContext';
+
+const PAGE_SIZE = 20;
+
+// A voucher side (Dr / Cr) is one value from the grouped ledger dropdown:
+// bank:<id> | ledger:<id> | client:<id> | vendor:<id>
+function sideFromVoucher(v, side) {
+  if (v[`${side}_account_id`]) return `bank:${v[`${side}_account_id`]}`;
+  if (v[`${side}_ledger_id`]) return `ledger:${v[`${side}_ledger_id`]}`;
+  if (v.party_side === side && ['client', 'vendor'].includes(v.party_type) && v.party_id) return `${v.party_type}:${v.party_id}`;
+  return '';
+}
+// Sections of the Dr / Cr picker opened first for each voucher type.
+const SIDE_SUGGEST = {
+  cash_payment: { dr: ['expenses', 'vendors'], cr: ['bank'] },
+  bank_payment: { dr: ['expenses', 'vendors'], cr: ['bank'] },
+  petty_cash: { dr: ['expenses'], cr: ['bank'] },
+  salary: { dr: ['expenses'], cr: ['bank'] },
+  cash_receipt: { dr: ['bank'], cr: ['customers', 'income'] },
+  bank_receipt: { dr: ['bank'], cr: ['customers', 'income'] },
+  contra: { dr: ['bank'], cr: ['bank'] },
+  journal: { dr: ['expenses', 'balance_sheet'], cr: ['income', 'balance_sheet'] },
+  debit_note: { dr: ['vendors'], cr: ['expenses'] },
+  credit_note: { dr: ['income'], cr: ['customers'] },
+};
+const sideKind = (val) => (val || '').split(':')[0];
+const sideId = (val) => parseInt((val || '').split(':')[1]) || null;
 
 const VOUCHER_TYPES = [
   { key: 'cash_payment', label: 'Cash Payment', prefix: 'CP', color: '#ef4444' },
@@ -52,6 +82,17 @@ export default function Vouchers() {
   const [toDate, setToDate] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
 
+  // Paging
+  const [page, setPage] = useState(1);
+  const [totalVouchers, setTotalVouchers] = useState(0);
+
+  // Bulk approve: a selection mode — checkboxes on pending rows, header
+  // checkbox for the page, and a banner to extend it to every pending voucher.
+  const [bulkMode, setBulkMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [statusBeforeBulk, setStatusBeforeBulk] = useState('');
+  const [approving, setApproving] = useState(false);
+
   // Modal
   const [showModal, setShowModal] = useState(false);
   const [editingVoucher, setEditingVoucher] = useState(null);
@@ -64,6 +105,8 @@ export default function Vouchers() {
   const [clients, setClients] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [vendors, setVendors] = useState([]);
+  const [ledgerOptions, setLedgerOptions] = useState([]);
+  const [newLedgerFor, setNewLedgerFor] = useState(null); // 'dr' | 'cr' while the create-ledger popup is open
 
   // Form state
   const [form, setForm] = useState({
@@ -72,6 +115,8 @@ export default function Vouchers() {
     amount: '',
     debit_account_id: '',
     credit_account_id: '',
+    dr: '',
+    cr: '',
     party_type: '',
     party_id: '',
     party_name: '',
@@ -103,23 +148,39 @@ export default function Vouchers() {
       if (fromDate) params.append('from_date', fromDate);
       if (toDate) params.append('to_date', toDate);
       if (searchTerm) params.append('search', searchTerm);
-      params.append('limit', '200');
+      params.append('limit', String(PAGE_SIZE));
+      params.append('offset', String((page - 1) * PAGE_SIZE));
 
       const res = await api.get(`/vouchers?${params}`);
       const data = res;
-      if (data.success) setVouchers(data.data);
-      else setError(data.message);
+      if (data.success) {
+        const total = parseInt(data.total) || 0;
+        // Approving/deleting the last rows of a page leaves it empty — step back.
+        if (data.data.length === 0 && page > 1 && total > 0) {
+          setPage(Math.max(1, Math.ceil(total / PAGE_SIZE)));
+        } else {
+          setVouchers(data.data);
+          setTotalVouchers(total);
+        }
+      } else setError(data.message);
     } catch (e) {
       setError('Failed to fetch vouchers');
     }
     setLoading(false);
-  }, [activeType, statusFilter, fromDate, toDate, searchTerm]);
+  }, [activeType, statusFilter, fromDate, toDate, searchTerm, page]);
 
   const fetchBankAccounts = async () => {
     try {
       const res = await api.get(`/bank-accounts?active_only=true`);
       const data = res;
       if (data.success) setBankAccounts(data.data);
+    } catch (e) { /* ignore */ }
+  };
+
+  const fetchLedgerOptions = async () => {
+    try {
+      const res = await api.get('/ledger-accounts/voucher-options');
+      if (res.success) setLedgerOptions(res.data || []);
     } catch (e) { /* ignore */ }
   };
 
@@ -154,7 +215,9 @@ export default function Vouchers() {
   };
 
   useEffect(() => { fetchVouchers(); }, [fetchVouchers]);
-  useEffect(() => { fetchBankAccounts(); fetchPartyLists(); fetchSummary(); }, []);
+  // Any filter change starts again from page 1.
+  useEffect(() => { setPage(1); }, [activeType, statusFilter, fromDate, toDate, searchTerm]);
+  useEffect(() => { fetchBankAccounts(); fetchLedgerOptions(); fetchPartyLists(); fetchSummary(); }, []);
   useEffect(() => {
     if (showModal) fetchNextNumber(form.voucher_type, form.voucher_date);
   }, [form.voucher_type, form.voucher_date, showModal]);
@@ -162,7 +225,7 @@ export default function Vouchers() {
   const resetForm = () => {
     setForm({
       voucher_type: 'cash_payment', voucher_date: new Date().toISOString().split('T')[0],
-      amount: '', debit_account_id: '', credit_account_id: '',
+      amount: '', debit_account_id: '', credit_account_id: '', dr: '', cr: '',
       party_type: '', party_id: '', party_name: '',
       narration: '', cheque_number: '', cheque_date: '', transaction_ref: '',
       reference_type: '', reference_id: '', category: ''
@@ -183,6 +246,7 @@ export default function Vouchers() {
       voucher_type: v.voucher_type, voucher_date: v.voucher_date,
       amount: v.amount, debit_account_id: v.debit_account_id || '',
       credit_account_id: v.credit_account_id || '',
+      dr: sideFromVoucher(v, 'debit'), cr: sideFromVoucher(v, 'credit'),
       party_type: v.party_type || '', party_id: v.party_id || '',
       party_name: v.party_name || '', narration: v.narration || '',
       cheque_number: v.cheque_number || '', cheque_date: v.cheque_date || '',
@@ -199,14 +263,33 @@ export default function Vouchers() {
     try {
       const url = editingVoucher ? `/vouchers/${editingVoucher.id}` : `/vouchers`;
       const method = editingVoucher ? 'PUT' : 'POST';
+      if (!form.dr || !form.cr) { setError('Select both the Debit and the Credit ledger'); return; }
+      if (form.dr === form.cr) { setError('Debit and Credit cannot be the same ledger'); return; }
+      const partyKinds = ['client', 'vendor'];
+      if (partyKinds.includes(sideKind(form.dr)) && partyKinds.includes(sideKind(form.cr))) {
+        setError('Only one side can be a customer or vendor'); return;
+      }
+      const { dr, cr, ...rest } = form;
       const body = {
-        ...form,
+        ...rest,
         amount: parseFloat(form.amount),
-        debit_account_id: form.debit_account_id ? parseInt(form.debit_account_id) : null,
-        credit_account_id: form.credit_account_id ? parseInt(form.credit_account_id) : null,
+        debit_account_id: sideKind(dr) === 'bank' ? sideId(dr) : null,
+        credit_account_id: sideKind(cr) === 'bank' ? sideId(cr) : null,
+        debit_ledger_id: sideKind(dr) === 'ledger' ? sideId(dr) : null,
+        credit_ledger_id: sideKind(cr) === 'ledger' ? sideId(cr) : null,
+        party_side: null,
         party_id: form.party_id ? parseInt(form.party_id) : null,
         reference_id: form.reference_id ? parseInt(form.reference_id) : null,
       };
+      // A customer / vendor picked as Dr or Cr becomes the voucher's party.
+      for (const [val, side] of [[dr, 'debit'], [cr, 'credit']]) {
+        if (partyKinds.includes(sideKind(val))) {
+          body.party_type = sideKind(val);
+          body.party_id = sideId(val);
+          body.party_name = '';
+          body.party_side = side;
+        }
+      }
       const res = await api.request({ url, method, data: body });
       const data = res;
       if (data.success) {
@@ -219,7 +302,7 @@ export default function Vouchers() {
         setError(data.message);
       }
     } catch (e) {
-      setError('Failed to save voucher');
+      setError(e?.message || 'Failed to save voucher');
     }
   };
 
@@ -286,15 +369,73 @@ export default function Vouchers() {
     window.open(`${getApiBaseUrl()}/vouchers/export?${params.toString()}`, '_blank');
   };
 
-  const handleBulkApprove = async () => {
-    const pendingIds = vouchers.filter(v => v.status === 'pending_approval').map(v => v.id);
-    if (pendingIds.length === 0) return;
+  // Enter selection mode showing only pending vouchers; leaving restores the
+  // status filter the user had before.
+  const startBulkApprove = () => {
+    setStatusBeforeBulk(statusFilter);
+    setStatusFilter('pending_approval');
+    setSelectedIds(new Set());
+    setBulkMode(true);
+  };
+  const exitBulkApprove = () => {
+    setBulkMode(false);
+    setSelectedIds(new Set());
+    setStatusFilter(statusBeforeBulk);
+  };
+
+  const pendingOnPage = vouchers.filter(v => v.status === 'pending_approval');
+  const allPageSelected = pendingOnPage.length > 0 && pendingOnPage.every(v => selectedIds.has(v.id));
+  const somePageSelected = pendingOnPage.some(v => selectedIds.has(v.id));
+
+  const toggleSelect = (id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleSelectPage = () => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (allPageSelected) pendingOnPage.forEach(v => next.delete(v.id));
+      else pendingOnPage.forEach(v => next.add(v.id));
+      return next;
+    });
+  };
+  // Select every pending voucher matching the current filters, across all pages.
+  const selectAllPending = async () => {
     try {
-      const res = await api.post(`/vouchers/bulk-approve`, { voucher_ids: pendingIds });
-      const data = res;
-      if (data.success) { setSuccess(data.message); fetchVouchers(); fetchSummary(); }
+      const params = new URLSearchParams({ status: 'pending_approval', limit: '10000', offset: '0' });
+      if (activeType) params.append('voucher_type', activeType);
+      if (fromDate) params.append('from_date', fromDate);
+      if (toDate) params.append('to_date', toDate);
+      if (searchTerm) params.append('search', searchTerm);
+      const data = await api.get(`/vouchers?${params}`);
+      if (data.success) setSelectedIds(new Set(data.data.map(v => v.id)));
       else setError(data.message);
-    } catch (e) { setError('Failed to bulk approve'); }
+    } catch (e) { setError('Failed to select all pending vouchers'); }
+  };
+
+  const handleApproveSelected = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    const confirmed = await confirmDialog({
+      title: 'Approve Vouchers',
+      message: `Approve and post ${ids.length} voucher(s)? Posted vouchers count in bank/cash balances, ledgers and reports.`,
+      confirmText: `Approve ${ids.length}`,
+    });
+    if (!confirmed) return;
+    setApproving(true);
+    try {
+      const data = await api.post(`/vouchers/bulk-approve`, { voucher_ids: ids });
+      if (data.success) {
+        setSuccess(data.message);
+        setSelectedIds(new Set());
+        fetchVouchers();
+        fetchSummary();
+      } else setError(data.message);
+    } catch (e) { setError(e.message || 'Failed to bulk approve'); }
+    setApproving(false);
   };
 
   const getPartyList = () => {
@@ -325,10 +466,10 @@ export default function Vouchers() {
           <p style={{ fontSize: '14px', color: '#64748b', marginTop: '4px' }}>Create, approve, and track financial vouchers</p>
         </div>
         <div style={{ display: 'flex', gap: '12px' }}>
-          {canApprove && pendingCount > 0 && (
-            <button onClick={handleBulkApprove} style={{
+          {canApprove && pendingCount > 0 && !bulkMode && (
+            <button onClick={startBulkApprove} style={{
               padding: '8px 16px', borderRadius: '8px', border: 'none', cursor: 'pointer',
-              background: '#f59e0b', color: '#fff', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px'
+              background: '#f59e0b', color: '#fff', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap'
             }}>
               <CheckCircle size={16} /> Bulk Approve ({pendingCount})
             </button>
@@ -390,13 +531,13 @@ export default function Vouchers() {
           <input type="text" placeholder="Search vouchers..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
             style={{ width: '100%', padding: '8px 8px 8px 34px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '13px' }} />
         </div>
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+        <Select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
           style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '13px', minWidth: '140px' }}>
           <option value="">All Status</option>
           <option value="pending_approval">Pending Approval</option>
           <option value="posted">Posted</option>
           <option value="cancelled">Cancelled</option>
-        </select>
+        </Select>
         <span style={{ fontSize: '12px', color: '#64748b' }}>From</span>
         <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} title="From date"
           style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '13px' }} />
@@ -439,16 +580,58 @@ export default function Vouchers() {
         </div>
       </div>
 
+      {/* Bulk approve bar */}
+      {bulkMode && (
+        <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: '10px', padding: '10px 14px', marginBottom: '12px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 14px' }}>
+          <span style={{ fontSize: '13px', fontWeight: 600, color: '#92400e' }}>
+            Bulk approve — {selectedIds.size} of {totalVouchers} pending voucher(s) selected
+          </span>
+          {allPageSelected && selectedIds.size < totalVouchers && (
+            <button onClick={selectAllPending}
+              style={{ background: 'none', border: 'none', color: '#b45309', fontWeight: 600, fontSize: '13px', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>
+              Select all {totalVouchers} pending vouchers
+            </button>
+          )}
+          {selectedIds.size > 0 && (
+            <button onClick={() => setSelectedIds(new Set())}
+              style={{ background: 'none', border: 'none', color: '#64748b', fontSize: '13px', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>
+              Clear selection
+            </button>
+          )}
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+            <button onClick={exitBulkApprove} disabled={approving}
+              style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#fff', cursor: 'pointer', fontSize: '13px' }}>
+              Cancel
+            </button>
+            <button onClick={handleApproveSelected} disabled={approving || selectedIds.size === 0}
+              style={{ padding: '7px 14px', borderRadius: '8px', border: 'none', background: '#16a34a', color: '#fff', cursor: selectedIds.size ? 'pointer' : 'not-allowed', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', opacity: selectedIds.size && !approving ? 1 : 0.5 }}>
+              <CheckCircle size={14} /> {approving ? 'Approving...' : `Approve Selected (${selectedIds.size})`}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Vouchers Table */}
       <div style={{ background: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
             <thead>
               <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                {bulkMode && (
+                  <th style={{ ...thStyle, width: '40px' }}>
+                    <input type="checkbox" title="Select all pending on this page"
+                      checked={allPageSelected}
+                      ref={el => { if (el) el.indeterminate = !allPageSelected && somePageSelected; }}
+                      disabled={pendingOnPage.length === 0}
+                      onChange={toggleSelectPage}
+                      style={{ cursor: 'pointer', width: '15px', height: '15px' }} />
+                  </th>
+                )}
                 <th style={thStyle}>Voucher #</th>
                 <th style={thStyle}>Type</th>
                 <th style={thStyle}>Date</th>
                 <th style={thStyle}>Party</th>
+                <th style={thStyle}>Dr / Cr</th>
                 <th style={{ ...thStyle, textAlign: 'right' }}>Amount</th>
                 <th style={thStyle}>Narration</th>
                 <th style={thStyle}>Status</th>
@@ -457,17 +640,26 @@ export default function Vouchers() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan="8" style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>Loading vouchers...</td></tr>
+                <tr><td colSpan={bulkMode ? 10 : 9} style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>Loading vouchers...</td></tr>
               ) : vouchers.length === 0 ? (
-                <tr><td colSpan="8" style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>No vouchers found</td></tr>
+                <tr><td colSpan={bulkMode ? 10 : 9} style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>{bulkMode ? 'No vouchers pending approval' : 'No vouchers found'}</td></tr>
               ) : vouchers.map(v => {
                 const typeConfig = VOUCHER_TYPES.find(t => t.key === v.voucher_type);
                 const statusCfg = STATUS_CONFIG[v.status];
                 const StatusIcon = statusCfg?.icon || Clock;
                 return (
-                  <tr key={v.id} style={{ borderBottom: '1px solid #f1f5f9' }}
+                  <tr key={v.id} style={{ borderBottom: '1px solid #f1f5f9', background: bulkMode && selectedIds.has(v.id) ? '#fefce8' : 'transparent' }}
                     onMouseEnter={e => e.currentTarget.style.background = '#f8fafc'}
-                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    onMouseLeave={e => e.currentTarget.style.background = bulkMode && selectedIds.has(v.id) ? '#fefce8' : 'transparent'}>
+                    {bulkMode && (
+                      <td style={{ ...tdStyle, width: '40px' }}>
+                        <input type="checkbox"
+                          checked={selectedIds.has(v.id)}
+                          disabled={v.status !== 'pending_approval'}
+                          onChange={() => toggleSelect(v.id)}
+                          style={{ cursor: v.status === 'pending_approval' ? 'pointer' : 'not-allowed', width: '15px', height: '15px' }} />
+                      </td>
+                    )}
                     <td style={tdStyle}>
                       <span style={{ fontWeight: 600, fontFamily: 'monospace' }}>{v.voucher_number}</span>
                     </td>
@@ -481,6 +673,10 @@ export default function Vouchers() {
                     </td>
                     <td style={tdStyle}>{new Date(v.voucher_date).toLocaleDateString('en-IN')}</td>
                     <td style={tdStyle}>{v.party_name || '-'}</td>
+                    <td style={{ ...tdStyle, fontSize: '12px', lineHeight: 1.35, maxWidth: '200px' }}>
+                      <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><span style={{ color: '#94a3b8' }}>Dr</span> {v.debit_account_name || '-'}</div>
+                      <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><span style={{ color: '#94a3b8' }}>Cr</span> {v.credit_account_name || '-'}</div>
+                    </td>
                     <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600, fontFamily: 'monospace' }}>{fmt(v.amount)}</td>
                     <td style={{ ...tdStyle, maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {v.narration || '-'}
@@ -524,6 +720,12 @@ export default function Vouchers() {
             </tbody>
           </table>
         </div>
+        <div style={{ padding: '0 14px 12px' }}>
+          <Pagination
+            pagination={{ page, limit: PAGE_SIZE, total: totalVouchers, pages: Math.max(1, Math.ceil(totalVouchers / PAGE_SIZE)) }}
+            onPageChange={setPage}
+            alwaysShow />
+        </div>
       </div>
 
       {/* ── Create/Edit Modal ────────────────────────────────────────────── */}
@@ -537,10 +739,10 @@ export default function Vouchers() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
                 <div>
                   <label style={labelStyle}>Voucher Type</label>
-                  <select value={form.voucher_type} onChange={e => setForm(f => ({ ...f, voucher_type: e.target.value }))}
+                  <Select value={form.voucher_type} onChange={e => setForm(f => ({ ...f, voucher_type: e.target.value }))}
                     disabled={!!editingVoucher} style={inputStyle}>
                     {VOUCHER_TYPES.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
-                  </select>
+                  </Select>
                 </div>
                 <div>
                   <label style={labelStyle}>Date</label>
@@ -553,44 +755,47 @@ export default function Vouchers() {
                     onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
                     required placeholder="0.00" style={inputStyle} />
                 </div>
-                <div>
-                  <label style={labelStyle}>Debit Account (Money To)</label>
-                  <select value={form.debit_account_id} onChange={e => setForm(f => ({ ...f, debit_account_id: e.target.value }))}
-                    style={inputStyle}>
-                    <option value="">— Select —</option>
-                    {bankAccounts.map(a => (
-                      <option key={a.id} value={a.id}>{a.account_name} ({a.bank_name || (a.account_type === 'cash' ? 'Cash' : a.account_type)})</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label style={labelStyle}>Credit Account (Money From)</label>
-                  <select value={form.credit_account_id} onChange={e => setForm(f => ({ ...f, credit_account_id: e.target.value }))}
-                    style={inputStyle}>
-                    <option value="">— Select —</option>
-                    {bankAccounts.map(a => (
-                      <option key={a.id} value={a.id}>{a.account_name} ({a.bank_name || (a.account_type === 'cash' ? 'Cash' : a.account_type)})</option>
-                    ))}
-                  </select>
-                </div>
+                {[['dr', 'Debit (Dr) — To', 'Receives the value / expense'], ['cr', 'Credit (Cr) — By', 'Gives the value / income']].map(([key, label, hint]) => (
+                  <div key={key}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                      <label style={labelStyle}>{label} *</label>
+                      <button type="button" onClick={() => setNewLedgerFor(key)}
+                        style={{ background: 'none', border: 'none', color: '#0d9488', fontSize: '11px', fontWeight: 600, cursor: 'pointer', padding: 0 }}>
+                        + New Ledger
+                      </button>
+                    </div>
+                    <GroupedSelect
+                      value={form[key]}
+                      required
+                      onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+                      groups={ledgerOptions}
+                      defaultExpanded={SIDE_SUGGEST[form.voucher_type]?.[key]}
+                      placeholder="Select ledger"
+                      searchPlaceholder="Search bank, customer, vendor, ledger..."
+                      footerAction={{ label: '+ Create new ledger', onClick: () => setNewLedgerFor(key) }}
+                      aria-label={label} />
+                    <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>{hint}</div>
+                  </div>
+                ))}
+                {!['client', 'vendor'].includes(sideKind(form.dr)) && !['client', 'vendor'].includes(sideKind(form.cr)) && (<>
                 <div>
                   <label style={labelStyle}>Party Type</label>
-                  <select value={form.party_type} onChange={e => setForm(f => ({ ...f, party_type: e.target.value, party_id: '', party_name: '' }))}
+                  <Select value={form.party_type} onChange={e => setForm(f => ({ ...f, party_type: e.target.value, party_id: '', party_name: '' }))}
                     style={inputStyle}>
                     <option value="">— None —</option>
                     <option value="client">Client</option>
                     <option value="employee">Employee</option>
                     <option value="vendor">Vendor</option>
                     <option value="other">Other</option>
-                  </select>
+                  </Select>
                 </div>
                 {form.party_type && form.party_type !== 'other' && (
                   <div>
                     <label style={labelStyle}>Select Party</label>
-                    <select value={form.party_id} onChange={e => handlePartyChange(e.target.value)} style={inputStyle}>
+                    <Select value={form.party_id} onChange={e => handlePartyChange(e.target.value)} style={inputStyle}>
                       <option value="">— Select —</option>
                       {getPartyList().map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
+                    </Select>
                   </div>
                 )}
                 {form.party_type === 'other' && (
@@ -600,6 +805,7 @@ export default function Vouchers() {
                       placeholder="Enter name" style={inputStyle} />
                   </div>
                 )}
+                </>)}
                 <div style={{ gridColumn: '1 / -1' }}>
                   <label style={labelStyle}>Budget Category (Optional)</label>
                   <input type="text" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
@@ -640,9 +846,9 @@ export default function Vouchers() {
                 </button>
                 <button 
                   type="submit" 
-                  className="px-5 py-2 rounded-lg border-none cursor-pointer bg-teal-600 hover:bg-teal-700 text-white font-semibold transition-colors text-sm"
+                  className="inline-flex items-center gap-1.5 whitespace-nowrap px-5 py-2 rounded-lg border-none cursor-pointer bg-teal-600 hover:bg-teal-700 text-white font-semibold transition-colors text-sm"
                 >
-                  <Send size={14} style={{ verticalAlign: 'middle', marginRight: '6px' }} />
+                  <Send size={14} className="shrink-0" />
                   {editingVoucher ? 'Update' : 'Submit for Approval'}
                 </button>
               </div>
@@ -650,6 +856,16 @@ export default function Vouchers() {
           </div>
         </div>
       )}
+
+      <LedgerFormModal
+        isOpen={!!newLedgerFor}
+        onClose={() => setNewLedgerFor(null)}
+        onSaved={async (ledger) => {
+          const side = newLedgerFor;
+          setNewLedgerFor(null);
+          await fetchLedgerOptions();
+          if (ledger?.id && side) setForm(f => ({ ...f, [side]: `ledger:${ledger.id}` }));
+        }} />
 
       {/* ── View Modal ───────────────────────────────────────────────────── */}
       {viewVoucher && (

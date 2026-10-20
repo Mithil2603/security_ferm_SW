@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Calculator, ArrowRightLeft, TrendingDown, IndianRupee, FileCheck, ChevronDown, ChevronUp } from 'lucide-react';
 import api from '../services/api';
+import Select from '../components/ui/Select';
 
 const SECTION_FIELDS = [
   { key: 'sec_80c_ppf', label: 'PPF', section: '80C' },
@@ -132,11 +133,11 @@ export default function TaxCalculatorPage() {
             {mode === 'calculator' && (
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Tax Regime</label>
-                <select name="regime" value={form.regime} onChange={handleInput}
+                <Select name="regime" value={form.regime} onChange={handleInput}
                   className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900">
                   <option value="new">New Regime (FY 2025-26)</option>
                   <option value="old">Old Regime</option>
-                </select>
+                </Select>
               </div>
             )}
           </div>
@@ -161,11 +162,11 @@ export default function TaxCalculatorPage() {
                     </div>
                     <div>
                       <label className="block text-xs text-slate-400 mb-1">City Type</label>
-                      <select name="hra_city_type" value={form.hra_city_type} onChange={handleInput}
+                      <Select name="hra_city_type" value={form.hra_city_type} onChange={handleInput}
                         className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 text-sm">
                         <option value="metro">Metro (Delhi, Mumbai, etc.)</option>
                         <option value="non_metro">Non-Metro</option>
-                      </select>
+                      </Select>
                     </div>
                   </div>
 

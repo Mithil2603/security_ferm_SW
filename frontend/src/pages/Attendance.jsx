@@ -5,6 +5,7 @@ import { CalendarCheck, CalendarDays, Check, X, Clock, AlertCircle, Users, X as 
 import api from '../services/api';
 import { format } from 'date-fns';
 import AttendanceImportModal from '../components/AttendanceImportModal';
+import Select from '../components/ui/Select';
 
 export default function Attendance() {
   const { user } = useAuth();
@@ -266,14 +267,14 @@ export default function Attendance() {
                         </td>
                         <td className="px-4 py-3 text-xs text-slate-600">{record.client_name}</td>
                         <td className="px-4 py-3 text-center">
-                          <select value={record.status} onChange={(e) => updateBulkRecord(idx, 'status', e.target.value)}
+                          <Select value={record.status} onChange={(e) => updateBulkRecord(idx, 'status', e.target.value)}
                             className={`px-2 py-1 rounded-lg text-xs font-medium border ${statusColors[record.status]} cursor-pointer`}>
                             <option value="present">Present</option>
                             <option value="absent">Absent</option>
                             <option value="leave">Leave</option>
                             <option value="half_day">Half Day</option>
                             <option value="holiday">Holiday</option>
-                          </select>
+                          </Select>
                         </td>
                         <td className="px-4 py-3 text-center">
                           <input type="time" value={record.check_in_time}

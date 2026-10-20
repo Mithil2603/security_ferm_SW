@@ -82,6 +82,7 @@ const navGroups = [
     icon: Landmark,
     children: [
       { name: 'Bank & Payments', path: '/payments', icon: CreditCard, roles: ['admin', 'accountant', 'manager'], permission: ['manage_invoices', 'manage_expenses', 'manage_payroll', 'manage_vouchers'] },
+      { name: 'Ledgers', path: '/ledgers', icon: ClipboardList, roles: ['admin', 'accountant'], permission: ['view_vouchers', 'create_vouchers', 'edit_vouchers', 'manage_vouchers', 'manage_bank_accounts'] },
       { name: 'Vouchers', path: '/vouchers', icon: BookOpen, roles: ['admin', 'accountant'], permission: ['view_vouchers', 'create_vouchers', 'edit_vouchers', 'delete_vouchers', 'approve_vouchers', 'manage_vouchers'] },
       { name: 'Bank Reconciliation', path: '/bank-reconciliation', icon: Landmark, roles: ['admin', 'accountant'], permission: 'manage_bank_reconciliation' },
     ],

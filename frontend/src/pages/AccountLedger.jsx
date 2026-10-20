@@ -10,16 +10,21 @@ import api from '../services/api';
 import { format } from 'date-fns';
 import * as XLSX from 'xlsx';
 import { toast } from '../context/ToastContext';
+import Select from '../components/ui/Select';
+
+// Selectable list for each ledger tab
+const PARTY_LISTS = { client: 'clients', vendor: 'vendors', bank_account: 'bank_accounts', ledger: 'ledgers' };
+const listFor = (type, data) => (data && data[PARTY_LISTS[type] || 'clients']) || [];
 
 export default function AccountLedger({ defaultType }) {
-  const [parties, setParties] = useState({ clients: [], vendors: [], bank_accounts: [] });
+  const [parties, setParties] = useState({ clients: [], vendors: [], bank_accounts: [], ledgers: [] });
   const [loadingParties, setLoadingParties] = useState(true);
   
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Selection
   const initialType = searchParams.get('type') || defaultType || 'client';
-  const [partyType, setPartyType] = useState(initialType); // 'client' | 'vendor' | 'bank_account'
+  const [partyType, setPartyType] = useState(initialType); // 'client' | 'vendor' | 'bank_account' | 'ledger'
   const [selectedPartyId, setSelectedPartyId] = useState(searchParams.get('id') || '');
   const [searchTerm, setSearchTerm] = useState('');
   const [showRunningBalance, setShowRunningBalance] = useState(true);
@@ -63,7 +68,7 @@ export default function AccountLedger({ defaultType }) {
 
         setPartyType(qType);
 
-        const list = qType === 'vendor' ? partyData.vendors : (qType === 'bank_account' ? partyData.bank_accounts : partyData.clients);
+        const list = listFor(qType, partyData);
         if (qId && list && list.some(p => String(p.id) === String(qId))) {
           setSelectedPartyId(Number(qId) || qId);
         } else if (list && list.length > 0) {
@@ -83,9 +88,9 @@ export default function AccountLedger({ defaultType }) {
     const qType = searchParams.get('type') || defaultType;
     const qId = searchParams.get('id');
 
-    if (qType && ['client', 'vendor', 'bank_account'].includes(qType) && qType !== partyType) {
+    if (qType && Object.keys(PARTY_LISTS).includes(qType) && qType !== partyType) {
       setPartyType(qType);
-      const list = qType === 'vendor' ? parties.vendors : (qType === 'bank_account' ? parties.bank_accounts : parties.clients);
+      const list = listFor(qType, parties);
       if (qId && list && list.some(p => String(p.id) === String(qId))) {
         setSelectedPartyId(Number(qId) || qId);
       } else if (list && list.length > 0) {
@@ -100,7 +105,7 @@ export default function AccountLedger({ defaultType }) {
   const handleTypeChange = (newType) => {
     setPartyType(newType);
     setSearchTerm('');
-    const list = newType === 'client' ? parties.clients : (newType === 'vendor' ? parties.vendors : parties.bank_accounts);
+    const list = listFor(newType, parties);
     if (list && list.length > 0) {
       setSelectedPartyId(list[0].id);
       setSearchParams({ type: newType, id: list[0].id });
@@ -168,7 +173,7 @@ export default function AccountLedger({ defaultType }) {
   };
 
   // Filter party list for search
-  const currentPartyList = (partyType === 'client' ? parties.clients : (partyType === 'vendor' ? parties.vendors : parties.bank_accounts)) || [];
+  const currentPartyList = listFor(partyType, parties);
   const filteredParties = currentPartyList.filter(p => {
     const name = p.name || p.account_name || '';
     const code = p.client_code || p.account_number || '';
@@ -287,6 +292,7 @@ export default function AccountLedger({ defaultType }) {
   const getPageTitle = () => {
     if (partyType === 'vendor') return 'Vendor Ledger (Sundry Creditors)';
     if (partyType === 'bank_account') return 'Bank & Cash Account Ledger';
+    if (partyType === 'ledger') return 'Ledger Account';
     return 'Party Ledger (Sundry Debtors)';
   };
 
@@ -296,6 +302,9 @@ export default function AccountLedger({ defaultType }) {
     }
     if (partyType === 'bank_account') {
       return 'Official double-entry ledger statement for bank accounts and cash in hand.';
+    }
+    if (partyType === 'ledger') {
+      return 'Double-entry statement for your own ledgers (rent, office expenses, capital, loans…) from posted vouchers.';
     }
     return 'Official double-entry ledger for clients & debtors with sales invoices, bank receipts, TDS receivable, and period balancing.';
   };
@@ -386,25 +395,40 @@ export default function AccountLedger({ defaultType }) {
               <Landmark className="w-4 h-4" />
               Bank & Cash Accounts
             </button>
+            <button
+              type="button"
+              onClick={() => handleTypeChange('ledger')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                partyType === 'ledger'
+                  ? 'bg-white text-teal-700 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <BookOpen className="w-4 h-4" />
+              Other Ledgers
+            </button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
             {/* Party Selector */}
             <div className="md:col-span-1">
               <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
-                Select {partyType === 'client' ? 'Client (Debtor)' : partyType === 'vendor' ? 'Vendor (Creditor)' : 'Bank / Cash Account'}
+                Select {partyType === 'client' ? 'Client (Debtor)' : partyType === 'vendor' ? 'Vendor (Creditor)' : partyType === 'ledger' ? 'Ledger' : 'Bank / Cash Account'}
               </label>
-              <select
+              <Select
                 value={selectedPartyId}
                 onChange={(e) => handleSelectParty(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-medium bg-white text-slate-800 focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all shadow-xs"
               >
+                {currentPartyList.length === 0 && (
+                  <option value="">{partyType === 'ledger' ? 'No ledgers yet — create one in Ledgers' : 'None found'}</option>
+                )}
                 {currentPartyList.map(p => (
                   <option key={p.id} value={p.id}>
-                    {p.name || p.account_name} {p.client_code ? `(${p.client_code})` : ''}
+                    {p.name || p.account_name} {p.client_code ? `(${p.client_code})` : ''}{p.group_name ? ` — ${p.group_name}` : ''}{p.is_active === 0 ? ' (inactive)' : ''}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
 
             {/* Date Range & Presets */}
@@ -549,12 +573,14 @@ export default function AccountLedger({ defaultType }) {
                     : (partyType === 'vendor' ? 'bg-rose-100 text-rose-900' : 'bg-emerald-100 text-emerald-900')
                 }`}>
                   ₹{fmtCurrency(ledgerData.final_balance)} {ledgerData.final_balance_side}
+                  {partyType !== 'ledger' && (
                   <span className="text-[10px] font-medium ml-1">
                     {partyType === 'client' 
                       ? (ledgerData.final_balance_side === 'Dr' ? '(Receivable)' : '(Advance Received)')
                       : (ledgerData.final_balance_side === 'Cr' ? '(Payable)' : '(Advance Paid)')
                     }
                   </span>
+                  )}
                 </span>
               </div>
             </div>

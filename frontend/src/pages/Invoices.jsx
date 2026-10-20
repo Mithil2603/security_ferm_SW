@@ -11,6 +11,7 @@ import RoundOffControl, { computeBilledTotal } from '../components/RoundOffContr
 import TaxRateSelect from '../components/TaxRateSelect';
 import { getApiBaseUrl } from '../utils/apiUrl';
 import { toast, confirmDialog } from '../context/ToastContext';
+import Select from '../components/ui/Select';
 
 // Real inclusive day count between two dates (e.g. 01-08 to 30-09 = 61 days),
 // used to scale bill items to the actual selected billing period instead of
@@ -801,7 +802,7 @@ export default function Invoices() {
 
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Client *</label>
-                <select 
+                <Select 
                   required 
                   name="client_id" 
                   value={invoiceForm.client_id} 
@@ -885,7 +886,7 @@ export default function Invoices() {
                       {c.name} {c.client_type === 'event' ? '(Event Client)' : `(${c.employee_count || 1} Guards • ₹${parseFloat(c.monthly_rate).toLocaleString('en-IN')}/mo)`}
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -941,7 +942,7 @@ export default function Invoices() {
                         )}
                       </div>
                       {selectedClientSites.length > 0 && !isCustomSite ? (
-                        <select
+                        <Select
                           value={invoiceForm.site_name}
                           onChange={(e) => {
                             if (e.target.value === '__custom__') {
@@ -964,7 +965,7 @@ export default function Invoices() {
                             );
                           })}
                           <option value="__custom__">➕ Enter Other / Custom Site...</option>
-                        </select>
+                        </Select>
                       ) : (
                         <input 
                           type="text" 
@@ -977,7 +978,7 @@ export default function Invoices() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Payment Bank Account *</label>
-                      <select
+                      <Select
                         value={invoiceForm.bank_account_id}
                         onChange={(e) => setInvoiceForm(prev => ({ ...prev, bank_account_id: e.target.value }))}
                         className={inputCls}
@@ -988,7 +989,7 @@ export default function Invoices() {
                             {b.bank_name} - {b.account_number}
                           </option>
                         ))}
-                      </select>
+                      </Select>
                     </div>
                   </div>
                 );
@@ -1711,13 +1712,13 @@ export default function Invoices() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Method *</label>
-                    <select required value={paymentForm.payment_method} onChange={(e) => setPaymentForm({ ...paymentForm, payment_method: e.target.value })} className={inputCls}>
+                    <Select required value={paymentForm.payment_method} onChange={(e) => setPaymentForm({ ...paymentForm, payment_method: e.target.value })} className={inputCls}>
                       <option value="bank_transfer">Bank Transfer</option>
                       <option value="upi">UPI</option>
                       <option value="cash">Cash</option>
                       <option value="cheque">Cheque</option>
                       <option value="card">Card</option>
-                    </select>
+                    </Select>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Date</label>

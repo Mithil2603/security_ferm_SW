@@ -20,6 +20,7 @@ import { useAuth } from '../context/AuthContext';
 import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
 import { formatAadhar, maskAadhar, maskPan, maskBankAccount } from '../utils/formatters';
 import EmployeeIDCard from '../components/EmployeeIDCard';
+import Select from '../components/ui/Select';
 
 const docCategoryMeta = {
   photo: { label: 'Employee Photo', icon: Camera, color: 'text-purple-600', bg: 'bg-purple-50', border: 'border-purple-200', accept: 'image/jpeg,image/png,image/webp', desc: 'Passport-size photo (JPG, PNG)' },
@@ -578,7 +579,7 @@ export default function Employees() {
             <Calendar className="w-3.5 h-3.5 text-teal-600" />
             Sort:
           </label>
-          <select
+          <Select
             value={`${sortBy}_${sortOrder}`}
             onChange={(e) => {
               const [sb, so] = e.target.value.split('_');
@@ -591,7 +592,7 @@ export default function Employees() {
             <option value="name_desc">Name (Z → A)</option>
             <option value="joining_date_desc">Joining Date (Newest First)</option>
             <option value="joining_date_asc">Joining Date (Oldest First)</option>
-          </select>
+          </Select>
         </div>
       </div>
 
@@ -843,12 +844,12 @@ export default function Employees() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Gender</label>
-                  <select name="gender" value={formData.gender || ''} onChange={handleInputChange} className={inputCls}>
+                  <Select name="gender" value={formData.gender || ''} onChange={handleInputChange} className={inputCls}>
                     <option value="">Select Gender</option>
                     <option value="Male">Male</option>
                     <option value="Female">Female</option>
                     <option value="Other">Other</option>
-                  </select>
+                  </Select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">City</label>
@@ -936,7 +937,7 @@ export default function Employees() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Designation</label>
-                  <select name="designation" value={formData.designation} onChange={handleInputChange} className={inputCls}>
+                  <Select name="designation" value={formData.designation} onChange={handleInputChange} className={inputCls}>
                     <option value="Security Guard">Security Guard</option>
                     <option value="Senior Security Guard">Senior Security Guard</option>
                     <option value="Head Guard">Head Guard</option>
@@ -945,25 +946,25 @@ export default function Employees() {
                     {formData.designation && !['Security Guard', 'Senior Security Guard', 'Head Guard', 'Supervisor', 'Employee'].includes(formData.designation) && (
                       <option value={formData.designation}>{formData.designation}</option>
                     )}
-                  </select>
+                  </Select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Salary Structure</label>
-                  <select name="salary_structure_id" value={formData.salary_structure_id} onChange={handleInputChange} className={inputCls}>
+                  <Select name="salary_structure_id" value={formData.salary_structure_id} onChange={handleInputChange} className={inputCls}>
                     <option value="">-- Select --</option>
                     {salaryStructures.map(ss => (
                       <option key={ss.id} value={ss.id}>{ss.name} (₹{parseFloat(ss.base_salary).toLocaleString('en-IN')})</option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Assigned Client (Site)</label>
-                  <select name="assigned_client_id" value={formData.assigned_client_id} onChange={handleInputChange} className={inputCls}>
+                  <Select name="assigned_client_id" value={formData.assigned_client_id} onChange={handleInputChange} className={inputCls}>
                     <option value="">-- Unassigned --</option>
                     {clientsList.filter(c => c.is_active).map(c => (
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
               </div>
 

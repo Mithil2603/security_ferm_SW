@@ -16,6 +16,9 @@ import { sanitizePhone, validatePhone } from '../utils/phoneValidation';
 import { normalizeAdjustmentCategories } from '../utils/payrollAdjustments';
 
 import DatabaseBackupTab from '../components/settings/DatabaseBackupTab';
+import Pagination from '../components/Pagination';
+import useClientPagination from '../utils/useClientPagination';
+import Select from '../components/ui/Select';
 
 // ─────────────────────────────────────────────────────────────
 // Tab definitions
@@ -101,6 +104,7 @@ export default function Settings() {
 // ═══════════════════════════════════════════════════════════════
 function SalaryStructuresTab() {
   const [structures, setStructures] = useState([]);
+  const structuresPg = useClientPagination(structures, 10);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -265,7 +269,7 @@ function SalaryStructuresTab() {
                   <p className="font-medium text-slate-600 mb-1">No salary structures defined</p>
                   <p className="text-xs">Create one to start onboarding guards.</p>
                 </td></tr>
-              ) : structures.map(ss => {
+              ) : structuresPg.pageItems.map(ss => {
                 const base = parseFloat(ss.base_salary) || 0;
                 const da = parseFloat(ss.dearness_allowance) || 0;
                 const hra = parseFloat(ss.house_rent_allowance) || 0;
@@ -327,6 +331,7 @@ function SalaryStructuresTab() {
             </tbody>
           </table>
         </div>
+        {!loading && <Pagination pagination={structuresPg.pagination} onPageChange={structuresPg.setPage} alwaysShow />}
       </div>
 
       {/* Confirm Deactivate */}
@@ -443,6 +448,7 @@ function SalaryStructuresTab() {
 function TeamManagementTab() {
   const { user: currentUser } = useAuth();
   const [users, setUsers] = useState([]);
+  const usersPg = useClientPagination(users, 10);
   const [loading, setLoading] = useState(true);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isResetOpen, setIsResetOpen] = useState(null);
@@ -662,7 +668,7 @@ function TeamManagementTab() {
                   <div className="flex justify-center mb-2"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-teal-500"></div></div>
                   Loading team...
                 </td></tr>
-              ) : users.map(u => (
+              ) : usersPg.pageItems.map(u => (
                 <tr key={u.id} className={`hover:bg-slate-50 transition-colors ${!u.is_active ? 'opacity-50' : ''}`}>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
@@ -725,6 +731,7 @@ function TeamManagementTab() {
             </tbody>
           </table>
         </div>
+        {!loading && <Pagination pagination={usersPg.pagination} onPageChange={usersPg.setPage} alwaysShow />}
       </div>
 
       {/* Add User Modal */}
@@ -757,7 +764,7 @@ function TeamManagementTab() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Role *</label>
-                  <select
+                  <Select
                     value={addForm.role}
                     onChange={e => {
                       const newRole = e.target.value;
@@ -773,7 +780,7 @@ function TeamManagementTab() {
                     <option value="accountant">Accountant</option>
                     <option value="employee">Employee</option>
                     <option value="admin">Admin</option>
-                  </select>
+                  </Select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Phone (10 Digits)</label>
@@ -1487,6 +1494,7 @@ function AgencyProfileTab() {
 // ═══════════════════════════════════════════════════════════════
 function ExpenseCategoriesTab() {
   const [categories, setCategories] = useState([]);
+  const categoriesPg = useClientPagination(categories, 10);
   const [loading, setLoading] = useState(true);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [newCategory, setNewCategory] = useState('');
@@ -1565,7 +1573,7 @@ function ExpenseCategoriesTab() {
                 <tr><td colSpan={4} className="px-6 py-8 text-center text-slate-500">Loading categories...</td></tr>
               ) : categories.length === 0 ? (
                 <tr><td colSpan={4} className="px-6 py-8 text-center text-slate-500">No categories defined</td></tr>
-              ) : categories.map(cat => (
+              ) : categoriesPg.pageItems.map(cat => (
                 <tr key={cat.id} className={`hover:bg-slate-50 transition-colors ${!cat.is_active ? 'opacity-50' : ''}`}>
                   <td className="px-6 py-4 font-semibold text-slate-800 capitalize">{cat.name.replace(/_/g, ' ')}</td>
                   <td className="px-6 py-4 text-slate-500 font-mono text-xs">{cat.name}</td>
@@ -1586,6 +1594,7 @@ function ExpenseCategoriesTab() {
             </tbody>
           </table>
         </div>
+        {!loading && <Pagination pagination={categoriesPg.pagination} onPageChange={categoriesPg.setPage} alwaysShow />}
       </div>
 
       {isAddOpen && (
@@ -1757,10 +1766,10 @@ function PayrollAdjustmentsTab() {
           </div>
           <div className="w-48">
             <label className="block text-xs font-medium text-slate-700 mb-1">Type</label>
-            <select value={newCat.type} onChange={e => setNewCat({...newCat, type: e.target.value})} className={inputCls}>
+            <Select value={newCat.type} onChange={e => setNewCat({...newCat, type: e.target.value})} className={inputCls}>
               <option value="deduction">Deduction (-)</option>
               <option value="addition">Addition (+)</option>
-            </select>
+            </Select>
           </div>
           <button type="submit" disabled={saving} className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors h-[38px] disabled:opacity-50">
             {saving ? 'Adding...' : 'Add Category'}
@@ -1814,6 +1823,7 @@ function PayrollAdjustmentsTab() {
 // ═══════════════════════════════════════════════════════════════
 function VendorsTab() {
   const [vendors, setVendors] = useState([]);
+  const vendorsPg = useClientPagination(vendors, 10);
   const [loading, setLoading] = useState(true);
   const [newVendor, setNewVendor] = useState({ name: '', contact_info: '', payment_terms_days: 0 });
   const [saving, setSaving] = useState(false);
@@ -1887,7 +1897,7 @@ function VendorsTab() {
 
         <div className="space-y-2">
           {vendors.length === 0 && <p className="text-xs text-slate-400 italic">No vendors found.</p>}
-          {vendors.map((v) => (
+          {vendorsPg.pageItems.map((v) => (
             <div key={v.id} className={`flex justify-between items-center p-4 bg-white border ${v.is_active ? 'border-slate-200' : 'border-red-100 bg-red-50'} rounded-lg shadow-sm`}>
               <div>
                 <h3 className="text-sm font-bold text-slate-800">{v.name}</h3>
@@ -1900,6 +1910,7 @@ function VendorsTab() {
             </div>
           ))}
         </div>
+        <Pagination pagination={vendorsPg.pagination} onPageChange={vendorsPg.setPage} alwaysShow />
       </div>
     </div>
   );
@@ -2041,10 +2052,10 @@ function RecurringExpensesTab() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Category *</label>
-                    <select required value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className={inputCls}>
+                    <Select required value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className={inputCls}>
                       <option value="">-- Select --</option>
                       {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                    </select>
+                    </Select>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Amount (₹) *</label>
@@ -2054,11 +2065,11 @@ function RecurringExpensesTab() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Frequency *</label>
-                    <select required value={formData.frequency} onChange={e => setFormData({...formData, frequency: e.target.value})} className={inputCls}>
+                    <Select required value={formData.frequency} onChange={e => setFormData({...formData, frequency: e.target.value})} className={inputCls}>
                       <option value="weekly">Weekly</option>
                       <option value="monthly">Monthly</option>
                       <option value="yearly">Yearly</option>
-                    </select>
+                    </Select>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Next Run Date *</label>
@@ -2068,19 +2079,19 @@ function RecurringExpensesTab() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Vendor</label>
-                    <select value={formData.vendor_id} onChange={e => setFormData({...formData, vendor_id: e.target.value})} className={inputCls}>
+                    <Select value={formData.vendor_id} onChange={e => setFormData({...formData, vendor_id: e.target.value})} className={inputCls}>
                       <option value="">-- None --</option>
                       {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
-                    </select>
+                    </Select>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Payment Method</label>
-                    <select value={formData.payment_method} onChange={e => setFormData({...formData, payment_method: e.target.value})} className={inputCls}>
+                    <Select value={formData.payment_method} onChange={e => setFormData({...formData, payment_method: e.target.value})} className={inputCls}>
                       <option value="bank_transfer">Bank Transfer</option>
                       <option value="cash">Cash</option>
                       <option value="card">Card</option>
                       <option value="upi">UPI</option>
-                    </select>
+                    </Select>
                   </div>
                 </div>
               </div>

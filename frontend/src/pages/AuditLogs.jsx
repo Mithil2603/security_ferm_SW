@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
 import { format } from 'date-fns';
 import { ShieldAlert, Search, Filter, Server, ChevronLeft, ChevronRight, Activity } from 'lucide-react';
+import Select from '../components/ui/Select';
 
 export default function AuditLogs() {
   const { user } = useAuth();
@@ -92,7 +93,7 @@ export default function AuditLogs() {
             <span className="text-sm font-medium text-slate-700">Filter By:</span>
           </div>
           
-          <select 
+          <Select 
             value={filters.action}
             onChange={(e) => setFilters({...filters, action: e.target.value})}
             className="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
@@ -103,9 +104,9 @@ export default function AuditLogs() {
             <option value="delete">Delete</option>
             <option value="login">Login</option>
             <option value="logout">Logout</option>
-          </select>
+          </Select>
           
-          <select 
+          <Select 
             value={filters.table_name}
             onChange={(e) => setFilters({...filters, table_name: e.target.value})}
             className="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
@@ -116,7 +117,7 @@ export default function AuditLogs() {
             <option value="invoices">Invoices</option>
             <option value="payments">Payments</option>
             <option value="users">Users</option>
-          </select>
+          </Select>
         </div>
 
         {/* Error State */}

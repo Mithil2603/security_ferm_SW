@@ -5,6 +5,7 @@ import { Landmark, CheckCircle, XCircle, Calendar, RefreshCw, FileText, AlertCir
 import api from '../services/api';
 import { getApiBaseUrl } from '../utils/apiUrl';
 import { confirmDialog } from '../context/ToastContext';
+import Select from '../components/ui/Select';
 
 export default function BankReconciliation() {
   const { token } = useAuth();
@@ -203,8 +204,8 @@ export default function BankReconciliation() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <h1 style={{ fontSize: '24px', fontWeight: 700, color: '#1e293b', margin: 0 }}>
-            <Landmark size={24} style={{ verticalAlign: 'middle', marginRight: '8px' }} />
+          <h1 style={{ fontSize: '24px', fontWeight: 700, color: '#1e293b', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Landmark size={24} className="shrink-0" />
             Bank Reconciliation
           </h1>
           <p style={{ color: '#64748b', fontSize: '14px', marginTop: '4px' }}>
@@ -226,7 +227,7 @@ export default function BankReconciliation() {
 
       {/* Account Selector + Filters */}
       <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
-        <select value={selectedAccount} onChange={e => setSelectedAccount(e.target.value)}
+        <Select value={selectedAccount} onChange={e => setSelectedAccount(e.target.value)}
           style={{ padding: '10px 14px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '13px', minWidth: '250px', fontWeight: 600 }}>
           <option value="">Select Bank Account</option>
           {accounts.map(a => (
@@ -235,7 +236,7 @@ export default function BankReconciliation() {
               — Bal: {fmt(a.current_balance)}
             </option>
           ))}
-        </select>
+        </Select>
         <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} placeholder="From"
           style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '13px' }} />
         <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} placeholder="To"
@@ -304,9 +305,9 @@ export default function BankReconciliation() {
               <span style={{ fontWeight: 600, color: '#6366f1' }}>{selectedEntries.size} entries selected</span>
               <button 
                 onClick={handleReconcile} 
-                className="px-5 py-2 rounded-lg border-none cursor-pointer bg-teal-600 hover:bg-teal-700 text-white font-semibold transition-colors text-sm"
+                className="inline-flex items-center gap-1.5 whitespace-nowrap px-5 py-2 rounded-lg border-none cursor-pointer bg-teal-600 hover:bg-teal-700 text-white font-semibold transition-colors text-sm"
               >
-                <CheckCircle size={14} style={{ verticalAlign: 'middle', marginRight: '6px' }} />
+                <CheckCircle size={14} className="shrink-0" />
                 Reconcile Selected
               </button>
             </div>
@@ -506,12 +507,12 @@ export default function BankReconciliation() {
                 </div>
                 <div>
                   <label style={labelStyle}>Account Type *</label>
-                  <select value={accountForm.account_type}
+                  <Select value={accountForm.account_type}
                     onChange={e => setAccountForm(f => ({ ...f, account_type: e.target.value }))}
                     style={inputStyle}>
                     <option value="bank">Bank Account</option>
                     <option value="cash">Cash Account</option>
-                  </select>
+                  </Select>
                 </div>
                 {accountForm.account_type === 'bank' && (
                   <>

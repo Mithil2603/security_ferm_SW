@@ -6,6 +6,7 @@ import { toast, confirmDialog } from '../context/ToastContext';
 import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
 import TaxRateSelect from '../components/TaxRateSelect';
+import Select from '../components/ui/Select';
 
 const FREQUENCIES = [
   { value: 'weekly', label: 'Weekly' },
@@ -251,14 +252,14 @@ export default function RecurringInvoices() {
 
       {/* Filter */}
       <div className="flex items-center gap-3">
-        <select value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(1); }}
+        <Select value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(1); }}
           className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm">
           <option value="">All Statuses</option>
           <option value="active">Active</option>
           <option value="paused">Paused</option>
           <option value="expired">Expired</option>
           <option value="cancelled">Cancelled</option>
-        </select>
+        </Select>
       </div>
 
       {/* Table */}
@@ -344,11 +345,11 @@ export default function RecurringInvoices() {
               {/* Client */}
               <div>
                 <label className="block text-sm text-gray-400 mb-1">Client *</label>
-                <select name="client_id" value={form.client_id} onChange={handleInputChange} required
+                <Select name="client_id" value={form.client_id} onChange={handleInputChange} required
                   className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white">
                   <option value="">Select client...</option>
                   {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                </Select>
               </div>
 
               {/* Rate & Frequency */}
@@ -360,10 +361,10 @@ export default function RecurringInvoices() {
                 </div>
                 <div>
                   <label className="block text-sm text-gray-400 mb-1">Frequency *</label>
-                  <select name="frequency" value={form.frequency} onChange={handleInputChange}
+                  <Select name="frequency" value={form.frequency} onChange={handleInputChange}
                     className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white">
                     {FREQUENCIES.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
-                  </select>
+                  </Select>
                 </div>
               </div>
 

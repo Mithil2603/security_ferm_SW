@@ -4,6 +4,7 @@ import { Building2, FileText, IndianRupee, Printer, TrendingDown, Clock, Search,
 import api from '../services/api';
 import { getServerBaseUrl } from '../utils/apiUrl';
 import { format } from 'date-fns';
+import Select from '../components/ui/Select';
 
 function formatDateSafe(val) {
   if (!val) return '-';
@@ -139,7 +140,7 @@ export default function VendorStatements() {
         <div className="flex items-center gap-3 w-full sm:w-auto">
           <div className="relative flex-1 sm:w-64">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <select
+            <Select
               value={selectedVendorId}
               onChange={(e) => setSelectedVendorId(e.target.value)}
               className="w-full pl-9 pr-4 py-2 bg-white border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-teal-500 focus:border-teal-500 appearance-none shadow-sm"
@@ -148,7 +149,7 @@ export default function VendorStatements() {
               {vendors.map(v => (
                 <option key={v.id} value={v.id}>{v.name}</option>
               ))}
-            </select>
+            </Select>
           </div>
           <button
             onClick={() => navigate(`/vendor-ledger?id=${selectedVendorId || ''}`)}

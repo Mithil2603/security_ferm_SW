@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { TrendingUp, DollarSign, BarChart3, PieChart, ArrowUpRight, ArrowDownRight, Zap, Plus, X } from 'lucide-react';
 import api from '../services/api';
 import TableSkeleton from '../components/TableSkeleton';
+import Select from '../components/ui/Select';
 
 // Indian financial year: Apr-Mar. Matches the same rule the backend uses to
 // tag snapshots/filings, so "current FY" here always lines up with whatever
@@ -337,12 +338,12 @@ export default function FinancialReports() {
                 </div>
                 <div>
                   <label className="block text-xs text-slate-400 mb-1">Type</label>
-                  <select value={budgetForm.budget_type} onChange={e => setBudgetForm({...budgetForm, budget_type: e.target.value})}
+                  <Select value={budgetForm.budget_type} onChange={e => setBudgetForm({...budgetForm, budget_type: e.target.value})}
                     className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900">
                     <option value="annual">Annual</option>
                     <option value="quarterly">Quarterly</option>
                     <option value="monthly">Monthly</option>
-                  </select>
+                  </Select>
                 </div>
               </div>
               <div>

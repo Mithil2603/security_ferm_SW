@@ -5,6 +5,7 @@ const { query } = require('../database/connection');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { saveStatement } = require('../utils/statementSaver');
 const { logError } = require('../utils/errorLogger');
+const ledgerTotalsUtil = require('../utils/ledgerTotals');
 
 router.use(authMiddleware);
 router.use(requirePermission('view_pl_account'));
@@ -225,11 +226,25 @@ async function buildPeriodData(fromDate, toDate) {
     [fromDate, toDate]
   );
 
+  // ── CUSTOM LEDGERS (posted vouchers) ──────────────────────────────────────
+  // Incomes add to income; Direct Expenses to cost of services; Indirect
+  // Expenses to operating expenses.
+  const ledgerRows = await ledgerTotalsUtil.ledgerTotals({ from: fromDate, to: toDate });
+  const incomeLedgers = ledgerRows.filter(r => r.nature === 'income');
+  const directLedgers = ledgerRows.filter(r => r.nature === 'expense' && r.is_direct);
+  const indirectLedgers = ledgerRows.filter(r => r.nature === 'expense' && !r.is_direct);
+  const ledgerIncome = ledgerTotalsUtil.sum(incomeLedgers);
+  const ledgerDirect = ledgerTotalsUtil.sum(directLedgers);
+  const ledgerIndirect = ledgerTotalsUtil.sum(indirectLedgers);
+
   // ── CALCULATIONS ───────────────────────────────────────────────────────────
-  const totalIncome = parseFloat(revenueTotal.rows[0].total_collected);
+  const invoiceIncome = parseFloat(revenueTotal.rows[0].total_collected);
+  const totalIncome = invoiceIncome + ledgerIncome;
   const totalBilled = parseFloat(revenueTotal.rows[0].total_billed);
-  const totalPayroll = parseFloat(payrollTotal.rows[0].total_gross);
-  const totalExpenses = parseFloat(expenseTotal.rows[0].total_expenses);
+  const payrollGross = parseFloat(payrollTotal.rows[0].total_gross);
+  const totalPayroll = payrollGross + ledgerDirect;
+  const expenseModuleTotal = parseFloat(expenseTotal.rows[0].total_expenses);
+  const totalExpenses = expenseModuleTotal + ledgerIndirect;
   const grossProfit = totalIncome - totalPayroll;
   const grossMargin = totalIncome > 0 ? parseFloat((grossProfit / totalIncome * 100).toFixed(2)) : 0;
   const netProfit = grossProfit - totalExpenses;
@@ -239,6 +254,9 @@ async function buildPeriodData(fromDate, toDate) {
     period: { from: fromDate, to: toDate },
     income: {
       total: totalIncome,
+      invoice_total: invoiceIncome,
+      ledger_total: ledgerIncome,
+      ledgers: ledgerTotalsUtil.lineItems(incomeLedgers),
       total_billed: totalBilled,
       invoice_count: parseInt(revenueTotal.rows[0].invoice_count),
       by_client: revenueByClient.rows.map(r => ({
@@ -250,7 +268,9 @@ async function buildPeriodData(fromDate, toDate) {
     },
     cost_of_services: {
       total: totalPayroll,
-      gross_payroll: parseFloat(payrollTotal.rows[0].total_gross),
+      ledger_total: ledgerDirect,
+      ledgers: ledgerTotalsUtil.lineItems(directLedgers),
+      gross_payroll: payrollGross,
       pf_total: parseFloat(payrollTotal.rows[0].total_pf),
       esi_total: parseFloat(payrollTotal.rows[0].total_esi),
       tax_total: parseFloat(payrollTotal.rows[0].total_tax),
@@ -265,6 +285,9 @@ async function buildPeriodData(fromDate, toDate) {
     },
     operating_expenses: {
       total: totalExpenses,
+      expense_module_total: expenseModuleTotal,
+      ledger_total: ledgerIndirect,
+      ledgers: ledgerTotalsUtil.lineItems(indirectLedgers),
       expense_count: parseInt(expenseTotal.rows[0].expense_count),
       by_category: expenseByCategory.rows.map(r => ({
         name: r.name,
@@ -335,6 +358,9 @@ async function buildMonthlyTrend(startYear, endYear) {
   );
   const expMap = new Map(expRes.rows.map(r => [r.ym, parseFloat(r.expenses)]));
 
+  // Custom ledger income / expense by month
+  const ledgerMap = await ledgerTotalsUtil.ledgerMonthly(startMonthStr, endMonthStr);
+
   const trend = [];
   for (let i = 0; i < 12; i++) {
     const monthIdx = (i + 3) % 12; // April=3 → March=2
@@ -343,10 +369,11 @@ async function buildMonthlyTrend(startYear, endYear) {
     const ym = `${year}-${String(monthNum).padStart(2, '0')}`;
 
     const revRow = revMap.get(ym);
-    const revenue = revRow ? parseFloat(revRow.revenue) : 0;
+    const led = ledgerMap.get(ym) || { income: 0, expense: 0 };
+    const revenue = (revRow ? parseFloat(revRow.revenue) : 0) + led.income;
     const billed = revRow ? parseFloat(revRow.billed) : 0;
     const payroll = payMap.get(ym) || 0;
-    const expenses = expMap.get(ym) || 0;
+    const expenses = (expMap.get(ym) || 0) + led.expense;
 
     const totalCosts = payroll + expenses;
     const profit = revenue - totalCosts;

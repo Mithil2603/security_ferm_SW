@@ -8,6 +8,7 @@ import { toast, confirmDialog } from '../context/ToastContext';
 import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
 import TaxRateSelect from '../components/TaxRateSelect';
+import Select from '../components/ui/Select';
 
 const PAYMENT_METHODS = [
   { value: 'cash', label: 'Cash' },
@@ -683,14 +684,14 @@ export default function Expenses() {
               {/* Convert from an existing Purchase Order, instead of entering a bill manually */}
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Create from Purchase Order (Optional)</label>
-                <select value={selectedPoId} onChange={e => setSelectedPoId(e.target.value)} className={inputCls}>
+                <Select value={selectedPoId} onChange={e => setSelectedPoId(e.target.value)} className={inputCls}>
                   <option value="">-- Enter Bill Manually --</option>
                   {purchaseOrders.map(po => (
                     <option key={po.id} value={po.id}>
                       {po.po_number} — {po.vendor_name} (₹{parseFloat(po.total_amount).toLocaleString('en-IN')})
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
 
               {selectedPoId && (() => {
@@ -713,19 +714,19 @@ export default function Expenses() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Payment Method *</label>
-                  <select required name="payment_method" value={formData.payment_method} onChange={handleInputChange} className={inputCls}>
+                  <Select required name="payment_method" value={formData.payment_method} onChange={handleInputChange} className={inputCls}>
                     {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-                  </select>
+                  </Select>
                 </div>
               </div>
 
               {!selectedPoId && <>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Category *</label>
-                <select required name="category" value={formData.category} onChange={handleInputChange} className={inputCls}>
+                <Select required name="category" value={formData.category} onChange={handleInputChange} className={inputCls}>
                   <option value="">-- Select Category --</option>
                   {categories.map(c => <option key={c.id} value={c.name}>{c.name.replace('_', ' ').toUpperCase()}</option>)}
-                </select>
+                </Select>
               </div>
 
               <div>
@@ -787,10 +788,10 @@ export default function Expenses() {
                   </button>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <select name="vendor_id" value={formData.vendor_id} onChange={handleInputChange} className={inputCls}>
+                  <Select name="vendor_id" value={formData.vendor_id} onChange={handleInputChange} className={inputCls}>
                     <option value="">-- No Vendor --</option>
                     {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
-                  </select>
+                  </Select>
                   <input type="text" name="receipt_number" value={formData.receipt_number} onChange={handleInputChange} className={inputCls} placeholder="Receipt / Bill No." />
                 </div>
               </div>
@@ -965,9 +966,9 @@ export default function Expenses() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Payment Method *</label>
-                  <select required value={payFormData.payment_method} onChange={e => setPayFormData(prev => ({ ...prev, payment_method: e.target.value }))} className={inputCls}>
+                  <Select required value={payFormData.payment_method} onChange={e => setPayFormData(prev => ({ ...prev, payment_method: e.target.value }))} className={inputCls}>
                     {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-                  </select>
+                  </Select>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Date *</label>

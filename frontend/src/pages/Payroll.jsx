@@ -6,6 +6,7 @@ import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
 import { format } from 'date-fns';
 import { formatAadhar } from '../utils/formatters';
+import Select from '../components/ui/Select';
 
 const STATUS_STYLES = {
   draft: 'bg-slate-100 text-slate-700 border border-slate-300',
@@ -352,7 +353,7 @@ export default function Payroll() {
 
           <div className="flex items-center gap-1.5">
             <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Status:</span>
-            <select 
+            <Select 
               value={filterStatus} 
               onChange={e => { setFilterStatus(e.target.value); setPage(1); }}
               className="bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-slate-800 text-sm font-semibold focus:ring-2 focus:ring-teal-500 focus:border-transparent"
@@ -363,7 +364,7 @@ export default function Payroll() {
               <option value="approved">Approved</option>
               <option value="paid">Paid</option>
               <option value="cancelled">Cancelled</option>
-            </select>
+            </Select>
           </div>
         </div>
 
@@ -472,7 +473,7 @@ export default function Payroll() {
                 <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
                   Employee *
                 </label>
-                <select 
+                <Select 
                   required
                   value={singleGenForm.employee_id} 
                   onChange={e => setSingleGenForm(prev => ({ ...prev, employee_id: e.target.value }))}
@@ -484,7 +485,7 @@ export default function Payroll() {
                       {emp.full_name} ({emp.employee_id} • {emp.designation || 'Guard'})
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
 
               <div>
@@ -878,7 +879,7 @@ export default function Payroll() {
                 <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
                   Payment Method *
                 </label>
-                <select
+                <Select
                   value={payForm.payment_method}
                   onChange={e => setPayForm(prev => ({ ...prev, payment_method: e.target.value }))}
                   className={inputCls}
@@ -887,7 +888,7 @@ export default function Payroll() {
                   <option value="upi">UPI</option>
                   <option value="cheque">Cheque</option>
                   <option value="cash">Cash</option>
-                </select>
+                </Select>
               </div>
 
               <div>

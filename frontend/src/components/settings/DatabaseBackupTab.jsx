@@ -12,6 +12,7 @@ import { useAuth } from '../../context/AuthContext';
 import { getApiBaseUrl } from '../../utils/apiUrl';
 import Toast from '../Toast';
 import { toast, confirmDialog } from '../../context/ToastContext';
+import Select from '../ui/Select';
 
 export default function DatabaseBackupTab() {
   const { user } = useAuth();
@@ -523,14 +524,14 @@ export default function DatabaseBackupTab() {
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Frequency</label>
-                <select
+                <Select
                   value={settings.auto_backup_frequency || 'daily'}
                   onChange={(e) => setSettings({ ...settings, auto_backup_frequency: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:outline-none"
                 >
                   <option value="daily">Daily (Every Day)</option>
                   <option value="weekly">Weekly (Every Sunday)</option>
-                </select>
+                </Select>
                 <span className="text-[11px] text-slate-400 mt-2 block">
                   Automatic backups run in the background at this time.
                 </span>

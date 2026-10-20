@@ -13,6 +13,7 @@ import Pagination from '../components/Pagination';
 import TableSkeleton from '../components/TableSkeleton';
 import { toast, confirmDialog } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
+import Select from '../components/ui/Select';
 
 function formatDateSafe(val) {
   if (!val) return '—';
@@ -404,7 +405,7 @@ export default function Vendors() {
         <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
           <div className="flex items-center gap-2">
             <Filter className="w-4 h-4 text-slate-400 shrink-0" />
-            <select
+            <Select
               value={statusFilter}
               onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
               className="px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-teal-500 outline-none transition-all cursor-pointer"
@@ -412,7 +413,7 @@ export default function Vendors() {
               <option value="">All Statuses</option>
               <option value="true">Active Only</option>
               <option value="false">Inactive Only</option>
-            </select>
+            </Select>
           </div>
 
           <button
@@ -720,7 +721,7 @@ export default function Vendors() {
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-slate-700 mb-1">Default Expense Ledger</label>
-                    <select
+                    <Select
                       name="default_account_id"
                       value={formData.default_account_id}
                       onChange={handleFormChange}
@@ -730,7 +731,7 @@ export default function Vendors() {
                       {expenseCategories.map(cat => (
                         <option key={cat.id} value={cat.id}>{cat.name}</option>
                       ))}
-                    </select>
+                    </Select>
                   </div>
                 </div>
               </div>
@@ -885,7 +886,7 @@ export default function Vendors() {
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div>
                         <label className="block text-xs font-medium text-slate-700 mb-1">Document Type *</label>
-                        <select
+                        <Select
                           value={uploadDocType}
                           onChange={(e) => setUploadDocType(e.target.value)}
                           className={inputCls}
@@ -897,7 +898,7 @@ export default function Vendors() {
                           <option value="Vendor Agreement">Vendor Agreement</option>
                           <option value="W-9 / Tax Declaration">W-9 / Tax Declaration</option>
                           <option value="Other">Other Certificate</option>
-                        </select>
+                        </Select>
                       </div>
 
                       <div>

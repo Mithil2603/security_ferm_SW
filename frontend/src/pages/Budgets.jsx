@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Target, TrendingUp, AlertTriangle, Plus, Trash2, X } from 'lucide-react';
 import api from '../services/api';
 import { toast, confirmDialog } from '../context/ToastContext';
+import Select from '../components/ui/Select';
 
 export default function Budgets() {
   const [budgets, setBudgets] = useState([]);
@@ -178,19 +179,19 @@ export default function Budgets() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Entity Type</label>
-                  <select value={form.entity_type} onChange={e => setForm({...form, entity_type: e.target.value})} className="w-full text-sm border-slate-200 rounded-lg p-2.5 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-slate-50" required>
+                  <Select value={form.entity_type} onChange={e => setForm({...form, entity_type: e.target.value})} className="w-full text-sm border-slate-200 rounded-lg p-2.5 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-slate-50" required>
                     <option value="client">Client</option>
                     <option value="vendor">Vendor</option>
                     <option value="internal">Internal / General</option>
-                  </select>
+                  </Select>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Specific Entity (Optional)</label>
-                  <select value={form.entity_id} onChange={e => setForm({...form, entity_id: e.target.value})} className="w-full text-sm border-slate-200 rounded-lg p-2.5 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-slate-50">
+                  <Select value={form.entity_id} onChange={e => setForm({...form, entity_id: e.target.value})} className="w-full text-sm border-slate-200 rounded-lg p-2.5 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-slate-50">
                     <option value="">-- All --</option>
                     {form.entity_type === 'client' && clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     {form.entity_type === 'vendor' && vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
-                  </select>
+                  </Select>
                 </div>
               </div>
 

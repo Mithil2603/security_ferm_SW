@@ -24,6 +24,9 @@ const voucherSchema = Joi.object({
   amount: Joi.number().positive().precision(2).required(),
   debit_account_id: Joi.number().integer().positive().allow(null).optional(),
   credit_account_id: Joi.number().integer().positive().allow(null).optional(),
+  debit_ledger_id: Joi.number().integer().positive().allow(null).optional(),
+  credit_ledger_id: Joi.number().integer().positive().allow(null).optional(),
+  party_side: Joi.string().valid('debit', 'credit').allow(null, '').optional(),
   party_type: Joi.string().valid('client', 'employee', 'vendor', 'other').allow(null, '').optional(),
   party_id: Joi.number().integer().positive().allow(null).optional(),
   party_name: Joi.string().max(255).allow('', null).optional(),
@@ -36,6 +39,58 @@ const voucherSchema = Joi.object({
   transaction_ref: Joi.string().max(100).allow('', null).optional(),
   category: Joi.string().max(100).allow('', null).optional()
 });
+
+// Display name for each voucher side: bank/cash account, else custom ledger,
+// else the party when it sits on that side (party_side).
+const SIDE_NAME_SQL = `
+             COALESCE(da.account_name, dl.name, CASE WHEN v.party_side = 'debit' THEN v.party_name END) as debit_account_name,
+             COALESCE(ca.account_name, cl.name, CASE WHEN v.party_side = 'credit' THEN v.party_name END) as credit_account_name,
+             dl.name as debit_ledger_name,
+             cl.name as credit_ledger_name`;
+const SIDE_JOINS_SQL = `
+      LEFT JOIN bank_accounts da ON v.debit_account_id = da.id
+      LEFT JOIN bank_accounts ca ON v.credit_account_id = ca.id
+      LEFT JOIN ledgers dl ON v.debit_ledger_id = dl.id
+      LEFT JOIN ledgers cl ON v.credit_ledger_id = cl.id`;
+
+// Each side is at most one of: bank/cash account, custom ledger, or the party.
+// Checks the referenced rows exist and are active; fills party_name when the
+// party is a client/vendor side. Returns an error message or null.
+async function validateVoucherSides(value) {
+  const partySide = value.party_side || null;
+  for (const side of ['debit', 'credit']) {
+    const picked = [value[`${side}_account_id`], value[`${side}_ledger_id`], partySide === side ? 1 : null].filter(Boolean);
+    if (picked.length > 1) return `Pick only one ${side} ledger`;
+  }
+  const hasDebit = value.debit_account_id || value.debit_ledger_id || partySide === 'debit';
+  const hasCredit = value.credit_account_id || value.credit_ledger_id || partySide === 'credit';
+  if (!hasDebit && !hasCredit) return 'Select a debit or credit ledger';
+
+  if (partySide) {
+    if (!['client', 'vendor'].includes(value.party_type) || !value.party_id) {
+      return 'A customer or vendor is required when the party is a voucher side';
+    }
+    const table = value.party_type === 'client' ? 'clients' : 'vendors';
+    const p = await query(`SELECT name FROM ${table} WHERE id = $1`, [value.party_id]);
+    if (p.rows.length === 0) return `${value.party_type === 'client' ? 'Customer' : 'Vendor'} not found`;
+    if (!value.party_name) value.party_name = p.rows[0].name;
+  }
+
+  for (const side of ['debit', 'credit']) {
+    const label = side === 'debit' ? 'Debit' : 'Credit';
+    const accId = value[`${side}_account_id`];
+    if (accId) {
+      const a = await query('SELECT id FROM bank_accounts WHERE id = $1 AND is_active = 1', [accId]);
+      if (a.rows.length === 0) return `${label} account not found or inactive`;
+    }
+    const ledId = value[`${side}_ledger_id`];
+    if (ledId) {
+      const l = await query('SELECT id FROM ledgers WHERE id = $1 AND is_active = 1', [ledId]);
+      if (l.rows.length === 0) return `${label} ledger not found or inactive`;
+    }
+  }
+  return null;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/vouchers — List vouchers with filters
@@ -91,14 +146,10 @@ router.get('/', async (req, res) => {
 
     // Get vouchers with joined account names
     const result = await query(`
-      SELECT v.*,
-             da.account_name as debit_account_name,
-             ca.account_name as credit_account_name,
+      SELECT v.*,${SIDE_NAME_SQL},
              cu.full_name as created_by_name,
              au.full_name as approved_by_name
-      FROM vouchers v
-      LEFT JOIN bank_accounts da ON v.debit_account_id = da.id
-      LEFT JOIN bank_accounts ca ON v.credit_account_id = ca.id
+      FROM vouchers v${SIDE_JOINS_SQL}
       LEFT JOIN users cu ON v.created_by = cu.id
       LEFT JOIN users au ON v.approved_by = au.id
       ${where}
@@ -150,10 +201,8 @@ router.get('/export', async (req, res) => {
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const result = await query(`
-      SELECT v.*, da.account_name as debit_account_name, ca.account_name as credit_account_name
-      FROM vouchers v
-      LEFT JOIN bank_accounts da ON v.debit_account_id = da.id
-      LEFT JOIN bank_accounts ca ON v.credit_account_id = ca.id
+      SELECT v.*,${SIDE_NAME_SQL}
+      FROM vouchers v${SIDE_JOINS_SQL}
       ${where}
       ORDER BY v.voucher_date ASC, v.voucher_number ASC, v.id ASC
     `, params);
@@ -359,14 +408,10 @@ router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const result = await query(`
-      SELECT v.*,
-             da.account_name as debit_account_name,
-             ca.account_name as credit_account_name,
+      SELECT v.*,${SIDE_NAME_SQL},
              cu.full_name as created_by_name,
              au.full_name as approved_by_name
-      FROM vouchers v
-      LEFT JOIN bank_accounts da ON v.debit_account_id = da.id
-      LEFT JOIN bank_accounts ca ON v.credit_account_id = ca.id
+      FROM vouchers v${SIDE_JOINS_SQL}
       LEFT JOIN users cu ON v.created_by = cu.id
       LEFT JOIN users au ON v.approved_by = au.id
       WHERE v.id = $1
@@ -393,9 +438,15 @@ router.post('/', requirePermission('manage_vouchers', 'create_vouchers', 'manage
       return res.status(400).json({ success: false, message: error.details[0].message });
     }
 
+    const sideError = await validateVoucherSides(value);
+    if (sideError) {
+      return res.status(400).json({ success: false, message: sideError });
+    }
+
     const {
       voucher_date, amount,
       debit_account_id, credit_account_id,
+      debit_ledger_id, credit_ledger_id, party_side,
       party_type, party_id, party_name,
       reference_type, reference_id,
       narration, cheque_number, cheque_date, transaction_ref, category
@@ -404,20 +455,6 @@ router.post('/', requirePermission('manage_vouchers', 'create_vouchers', 'manage
     // Normalize alias types to canonical types
     const TYPE_ALIASES = { payment: 'bank_payment', receipt: 'bank_receipt' };
     const voucher_type = TYPE_ALIASES[value.voucher_type] || value.voucher_type;
-
-    // Validate accounts exist
-    if (debit_account_id) {
-      const da = await query('SELECT id FROM bank_accounts WHERE id = $1 AND is_active = 1', [debit_account_id]);
-      if (da.rows.length === 0) {
-        return res.status(400).json({ success: false, message: 'Debit account not found or inactive' });
-      }
-    }
-    if (credit_account_id) {
-      const ca = await query('SELECT id FROM bank_accounts WHERE id = $1 AND is_active = 1', [credit_account_id]);
-      if (ca.rows.length === 0) {
-        return res.status(400).json({ success: false, message: 'Credit account not found or inactive' });
-      }
-    }
 
     // Generate voucher number
     const voucher_number = await getNextVoucherNumber(voucher_type, voucher_date);
@@ -443,8 +480,9 @@ router.post('/', requirePermission('manage_vouchers', 'create_vouchers', 'manage
         party_type, party_id, party_name,
         reference_type, reference_id,
         narration, cheque_number, cheque_date, transaction_ref,
-        status, created_by, category, due_date
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+        status, created_by, category, due_date,
+        debit_ledger_id, credit_ledger_id, party_side
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
       RETURNING *
     `, [
       voucher_number, voucher_type, voucher_date, amount,
@@ -452,7 +490,8 @@ router.post('/', requirePermission('manage_vouchers', 'create_vouchers', 'manage
       party_type || null, party_id || null, party_name || null,
       reference_type || null, reference_id || null,
       narration || null, cheque_number || null, cheque_date || null, transaction_ref || null,
-      initialStatus, req.user.userId, category || null, due_date
+      initialStatus, req.user.userId, category || null, due_date,
+      debit_ledger_id || null, credit_ledger_id || null, party_side || null
     ]);
 
     res.status(201).json({
@@ -488,13 +527,21 @@ router.put('/:id', requirePermission('manage_vouchers', 'edit_vouchers'), async 
       return res.status(400).json({ success: false, message: error.details[0].message });
     }
 
+    const sideError = await validateVoucherSides(value);
+    if (sideError) {
+      return res.status(400).json({ success: false, message: sideError });
+    }
+
     const {
-      voucher_type, voucher_date, amount,
+      voucher_date, amount,
       debit_account_id, credit_account_id,
+      debit_ledger_id, credit_ledger_id, party_side,
       party_type, party_id, party_name,
       reference_type, reference_id,
       narration, cheque_number, cheque_date, transaction_ref
     } = value;
+    const TYPE_ALIASES = { payment: 'bank_payment', receipt: 'bank_receipt' };
+    const voucher_type = TYPE_ALIASES[value.voucher_type] || value.voucher_type;
 
     const result = await query(`
       UPDATE vouchers SET
@@ -503,8 +550,9 @@ router.put('/:id', requirePermission('manage_vouchers', 'edit_vouchers'), async 
         party_type = $6, party_id = $7, party_name = $8,
         reference_type = $9, reference_id = $10,
         narration = $11, cheque_number = $12, cheque_date = $13, transaction_ref = $14,
+        debit_ledger_id = $15, credit_ledger_id = $16, party_side = $17,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $15
+      WHERE id = $18
       RETURNING *
     `, [
       voucher_type, voucher_date, amount,
@@ -512,6 +560,7 @@ router.put('/:id', requirePermission('manage_vouchers', 'edit_vouchers'), async 
       party_type || null, party_id || null, party_name || null,
       reference_type || null, reference_id || null,
       narration || null, cheque_number || null, cheque_date || null, transaction_ref || null,
+      debit_ledger_id || null, credit_ledger_id || null, party_side || null,
       id
     ]);
 
@@ -627,21 +676,37 @@ router.post('/bulk-approve', requirePermission('manage_vouchers', 'approve_vouch
       return res.status(400).json({ success: false, message: 'No voucher IDs provided' });
     }
 
-    const placeholders = voucher_ids.map((_, i) => `$${i + 1}`).join(', ');
-    const result = await query(`
-      UPDATE vouchers
-      SET status = 'posted',
-          approved_by = $${voucher_ids.length + 1},
-          approval_date = CURRENT_TIMESTAMP,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id IN (${placeholders}) AND status = 'pending_approval'
-      RETURNING id, voucher_number
-    `, [...voucher_ids, req.user.userId]);
+    const ids = voucher_ids.map((id) => parseInt(id)).filter((id) => Number.isInteger(id) && id > 0);
+    if (ids.length === 0) {
+      return res.status(400).json({ success: false, message: 'No valid voucher IDs provided' });
+    }
+    const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
 
+    // Which of these are still pending (others may have been approved/cancelled meanwhile).
+    // No RETURNING here: the MySQL adapter only emulates it for `WHERE id = ?`,
+    // so with IN (...) it came back empty and the message always said 0.
+    const pending = await query(
+      `SELECT id, voucher_number FROM vouchers WHERE id IN (${placeholders}) AND status = 'pending_approval'`,
+      ids
+    );
+    if (pending.rows.length > 0) {
+      const pendingIds = pending.rows.map((r) => r.id);
+      const ph = pendingIds.map((_, i) => `$${i + 1}`).join(', ');
+      await query(`
+        UPDATE vouchers
+        SET status = 'posted',
+            approved_by = $${pendingIds.length + 1},
+            approval_date = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id IN (${ph}) AND status = 'pending_approval'
+      `, [...pendingIds, req.user.userId]);
+    }
+
+    const skipped = ids.length - pending.rows.length;
     res.json({
       success: true,
-      message: `${result.rows.length} voucher(s) approved and posted`,
-      data: result.rows
+      message: `${pending.rows.length} voucher(s) approved and posted${skipped > 0 ? ` (${skipped} skipped — no longer pending)` : ''}`,
+      data: pending.rows
     });
   } catch (error) {
     logError(error, req, { feature: 'vouchers' });

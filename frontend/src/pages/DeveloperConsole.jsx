@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './DeveloperConsole.css';
+import Select from '../components/ui/Select';
 
 const DeveloperConsole = () => {
   console.log('Developer Console Loaded - Passcode included');
@@ -142,7 +143,7 @@ const DeveloperConsole = () => {
 
       {/* Filters */}
       <div className="filters">
-        <select 
+        <Select 
           value={filter.severity}
           onChange={(e) => setFilter({...filter, severity: e.target.value})}
         >
@@ -151,16 +152,16 @@ const DeveloperConsole = () => {
           <option value="high">High</option>
           <option value="medium">Medium</option>
           <option value="low">Low</option>
-        </select>
+        </Select>
 
-        <select 
+        <Select 
           value={filter.is_resolved}
           onChange={(e) => setFilter({...filter, is_resolved: e.target.value})}
         >
           <option value="unresolved">Unresolved</option>
           <option value="resolved">Resolved</option>
           <option value="all">All</option>
-        </select>
+        </Select>
 
         <input 
           type="text"
