@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Landmark, CheckCircle, XCircle, Calendar, RefreshCw, FileText, AlertCircle, Download, Trash2 } from 'lucide-react';
+import { Landmark, CheckCircle, XCircle, Calendar, RefreshCw, FileText, AlertCircle, Download, Trash2, Pencil } from 'lucide-react';
 
 import api from '../services/api';
 import { getApiBaseUrl } from '../utils/apiUrl';
@@ -25,6 +25,7 @@ export default function BankReconciliation() {
 
   // Bank account management
   const [showAddAccount, setShowAddAccount] = useState(false);
+  const [editingAccount, setEditingAccount] = useState(null); // null = creating, account object = editing
   const [accountForm, setAccountForm] = useState({
     account_name: '', account_type: 'bank', account_number: '',
     bank_name: '', ifsc_code: '', branch: '', opening_balance: 0, opening_balance_date: ''
@@ -178,21 +179,61 @@ export default function BankReconciliation() {
     window.open(`${getApiBaseUrl()}/bank-reconciliation/${path}?${params.toString()}`, '_blank');
   };
 
-  const handleAddAccount = async (e) => {
+  const openAddAccount = () => {
+    setEditingAccount(null);
+    setAccountForm({ account_name: '', account_type: 'bank', account_number: '', bank_name: '', ifsc_code: '', branch: '', opening_balance: 0, opening_balance_date: '' });
+    setShowAddAccount(true);
+  };
+
+  const openEditAccount = (account) => {
+    setEditingAccount(account);
+    setAccountForm({
+      account_name: account.account_name || '',
+      account_type: account.account_type || 'bank',
+      account_number: account.account_number || '',
+      bank_name: account.bank_name || '',
+      ifsc_code: account.ifsc_code || '',
+      branch: account.branch || '',
+      opening_balance: account.opening_balance || 0,
+      opening_balance_date: account.opening_balance_date || '',
+    });
+    setShowAddAccount(true);
+  };
+
+  const handleSaveAccount = async (e) => {
     e.preventDefault();
     try {
-      const res = await api.post(`/bank-accounts`, {
-        ...accountForm,
-        opening_balance: parseFloat(accountForm.opening_balance) || 0
-      });
-      const data = res;
-      if (data.success) {
-        setSuccess('Bank account added');
+      const body = { ...accountForm, opening_balance: parseFloat(accountForm.opening_balance) || 0 };
+      const res = editingAccount
+        ? await api.put(`/bank-accounts/${editingAccount.id}`, body)
+        : await api.post(`/bank-accounts`, body);
+      if (res.success) {
+        setSuccess(editingAccount ? 'Bank account updated' : 'Bank account added');
         setShowAddAccount(false);
+        setEditingAccount(null);
         setAccountForm({ account_name: '', account_type: 'bank', account_number: '', bank_name: '', ifsc_code: '', branch: '', opening_balance: 0, opening_balance_date: '' });
         fetchAccounts();
-      } else setError(data.message);
-    } catch (e) { setError('Failed to add account'); }
+      } else setError(res.message);
+    } catch (e) { setError(e.response?.data?.message || e.message || 'Failed to save account'); }
+    setTimeout(() => setSuccess(''), 3000);
+  };
+
+  const handleDeleteAccount = async (account) => {
+    const confirmed = await confirmDialog({
+      title: 'Delete bank account?',
+      message: `Delete "${account.bank_name || account.account_name}"${account.account_number ? ` (${account.account_number})` : ''}? If it has posted vouchers it will be deactivated (hidden, history kept) instead of removed.`,
+      confirmText: 'Delete',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    try {
+      const res = await api.delete(`/bank-accounts/${account.id}`);
+      if (res.success) {
+        setSuccess(res.message);
+        if (String(selectedAccount) === String(account.id)) setSelectedAccount('');
+        fetchAccounts();
+      } else setError(res.message);
+    } catch (e) { setError(e.response?.data?.message || e.message || 'Failed to delete account'); }
     setTimeout(() => setSuccess(''), 3000);
   };
 
@@ -212,8 +253,8 @@ export default function BankReconciliation() {
             Match book entries with bank statement
           </p>
         </div>
-        <button 
-          onClick={() => setShowAddAccount(true)} 
+        <button
+          onClick={openAddAccount}
           className="px-4 py-2 rounded-lg border-none cursor-pointer bg-teal-600 hover:bg-teal-700 text-white font-semibold flex items-center gap-2 transition-colors text-sm"
         >
           + Add Bank Account
@@ -232,11 +273,23 @@ export default function BankReconciliation() {
           <option value="">Select Bank Account</option>
           {accounts.map(a => (
             <option key={a.id} value={a.id}>
-              {a.account_type === 'bank' ? '🏦' : '💰'} {a.account_name} {a.account_number ? `(${a.account_number})` : ''}
+              {a.account_type === 'bank' ? '🏦' : '💰'} {a.bank_name || a.account_name} {a.account_number ? `(${a.account_number})` : ''}
               — Bal: {fmt(a.current_balance)}
             </option>
           ))}
         </Select>
+        {currentAccount && (
+          <div style={{ display: 'flex', gap: '4px' }}>
+            <button onClick={() => openEditAccount(currentAccount)} title="Edit bank account"
+              style={{ padding: '8px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#fff', color: '#2563eb', cursor: 'pointer', display: 'flex' }}>
+              <Pencil size={15} />
+            </button>
+            <button onClick={() => handleDeleteAccount(currentAccount)} title="Delete bank account"
+              style={{ padding: '8px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#fff', color: '#dc2626', cursor: 'pointer', display: 'flex' }}>
+              <Trash2 size={15} />
+            </button>
+          </div>
+        )}
         <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} placeholder="From"
           style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '13px' }} />
         <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} placeholder="To"
@@ -492,12 +545,12 @@ export default function BankReconciliation() {
         </div>
       )}
 
-      {/* Add Bank Account Modal */}
+      {/* Add / Edit Bank Account Modal */}
       {showAddAccount && (
         <div style={overlayStyle} onClick={() => setShowAddAccount(false)}>
           <div style={modalStyle} onClick={e => e.stopPropagation()}>
-            <h2 style={{ margin: '0 0 16px', fontSize: '18px', color: '#1e293b' }}>Add Bank/Cash Account</h2>
-            <form onSubmit={handleAddAccount}>
+            <h2 style={{ margin: '0 0 16px', fontSize: '18px', color: '#1e293b' }}>{editingAccount ? 'Edit Bank/Cash Account' : 'Add Bank/Cash Account'}</h2>
+            <form onSubmit={handleSaveAccount}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div>
                   <label style={labelStyle}>Account Name *</label>
@@ -556,17 +609,17 @@ export default function BankReconciliation() {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '10px', marginTop: '20px', justifyContent: 'flex-end' }}>
-                <button 
-                  type="button" 
-                  onClick={() => setShowAddAccount(false)}
+                <button
+                  type="button"
+                  onClick={() => { setShowAddAccount(false); setEditingAccount(null); }}
                   className="px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors text-sm cursor-pointer"
                 >
                   Cancel
                 </button>
-                <button 
-                  type="submit" 
+                <button
+                  type="submit"
                   className="px-5 py-2 rounded-lg border-none cursor-pointer bg-teal-600 hover:bg-teal-700 text-white font-semibold transition-colors text-sm"
-                >Save Account</button>
+                >{editingAccount ? 'Update Account' : 'Save Account'}</button>
               </div>
             </form>
           </div>

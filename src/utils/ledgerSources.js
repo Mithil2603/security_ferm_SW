@@ -82,7 +82,7 @@ async function ensureLinkedLedgers(companyId, { force = false } = {}) {
   if (!force && Date.now() - last < 15000) return;
   lastEnsureByCompany.set(companyId, Date.now());
   try {
-    const groups = (await query('SELECT id, name FROM ledger_groups')).rows;
+    const groups = (await query('SELECT id, name FROM ledger_groups WHERE company_id IS NULL')).rows;
     const gid = (name) => groups.find((g) => g.name === name)?.id;
 
     const wanted = [];

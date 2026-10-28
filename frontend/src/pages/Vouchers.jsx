@@ -699,7 +699,7 @@ export default function Vouchers() {
                             <button onClick={() => handleApprove(v.id)} title="Approve"
                               style={{ ...actionBtnStyle, color: '#22c55e' }}><CheckCircle size={14} /></button>
                           )}
-                          {v.status === 'draft' && canEdit && (
+                          {['draft', 'pending_approval'].includes(v.status) && canEdit && (
                             <button onClick={() => openEditModal(v)} title="Edit"
                               style={{ ...actionBtnStyle, color: '#3b82f6' }}>✏️</button>
                           )}
