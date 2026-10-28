@@ -74,33 +74,39 @@ class PFCalculator {
   // PF Account CRUD
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getAccount(employeeId) {
+  async getAccount(employeeId, companyId) {
     const result = await query(
       `SELECT pa.*, e.full_name, e.employee_id as emp_code, e.date_of_joining,
               e.designation, ss.base_salary
        FROM pf_accounts pa
-       JOIN employees e ON pa.employee_id = e.id
-       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
-       WHERE pa.employee_id = $1`,
-      [employeeId]
+       JOIN employees e ON pa.employee_id = e.id AND e.company_id = pa.company_id
+       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id AND ss.company_id = e.company_id
+       WHERE pa.employee_id = $1 AND pa.company_id = $2`,
+      [employeeId, companyId]
     );
     return result.rows[0] || null;
   }
 
-  async createAccount(employeeId, data = {}) {
-    const existing = await this.getAccount(employeeId);
+  async createAccount(employeeId, data = {}, companyId) {
+    const emp = await query(
+      `SELECT id FROM employees WHERE id = $1 AND company_id = $2`,
+      [employeeId, companyId]
+    );
+    if (emp.rows.length === 0) throw new Error('Employee not found');
+
+    const existing = await this.getAccount(employeeId, companyId);
     if (existing) throw new Error('PF account already exists for this employee');
 
     await query(
-      `INSERT INTO pf_accounts (employee_id, uan_number, pf_number, date_of_enrollment)
-       VALUES ($1, $2, $3, $4)`,
+      `INSERT INTO pf_accounts (employee_id, uan_number, pf_number, date_of_enrollment, company_id)
+       VALUES ($1, $2, $3, $4, $5)`,
       [employeeId, data.uan_number || null, data.pf_number || null,
-       data.date_of_enrollment || new Date().toISOString().split('T')[0]]
+       data.date_of_enrollment || new Date().toISOString().split('T')[0], companyId]
     );
-    return this.getAccount(employeeId);
+    return this.getAccount(employeeId, companyId);
   }
 
-  async updateAccount(employeeId, data) {
+  async updateAccount(employeeId, data, companyId) {
     const fields = [];
     const params = [];
     let pc = 1;
@@ -111,17 +117,17 @@ class PFCalculator {
         pc++;
       }
     }
-    if (fields.length === 0) return this.getAccount(employeeId);
+    if (fields.length === 0) return this.getAccount(employeeId, companyId);
     fields.push('updated_at = CURRENT_TIMESTAMP');
-    params.push(employeeId);
+    params.push(employeeId, companyId);
     await query(
-      `UPDATE pf_accounts SET ${fields.join(', ')} WHERE employee_id = $${pc}`,
+      `UPDATE pf_accounts SET ${fields.join(', ')} WHERE employee_id = $${pc} AND company_id = $${pc + 1}`,
       params
     );
-    return this.getAccount(employeeId);
+    return this.getAccount(employeeId, companyId);
   }
 
-  async listAccounts(filters = {}) {
+  async listAccounts(filters = {}, companyId) {
     const { is_active = 1, page = 1, limit = 50 } = filters;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
@@ -129,16 +135,16 @@ class PFCalculator {
       `SELECT pa.*, e.full_name, e.employee_id as emp_code, e.designation,
               e.date_of_joining, ss.base_salary
        FROM pf_accounts pa
-       JOIN employees e ON pa.employee_id = e.id
-       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
-       WHERE pa.is_active = $1
+       JOIN employees e ON pa.employee_id = e.id AND e.company_id = pa.company_id
+       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id AND ss.company_id = e.company_id
+       WHERE pa.is_active = $1 AND pa.company_id = $2
        ORDER BY e.full_name
-       LIMIT $2 OFFSET $3`,
-      [is_active, parseInt(limit), offset]
+       LIMIT $3 OFFSET $4`,
+      [is_active, companyId, parseInt(limit), offset]
     );
 
     const countResult = await query(
-      `SELECT COUNT(*) as count FROM pf_accounts WHERE is_active = $1`, [is_active]
+      `SELECT COUNT(*) as count FROM pf_accounts WHERE is_active = $1 AND company_id = $2`, [is_active, companyId]
     );
 
     return {
@@ -158,14 +164,14 @@ class PFCalculator {
   /**
    * Process monthly PF contribution for a single employee.
    */
-  async processMonthly(employeeId, payrollMonth, basicSalary, salarySlipId = null) {
-    const account = await this.getAccount(employeeId);
+  async processMonthly(employeeId, payrollMonth, basicSalary, salarySlipId = null, companyId) {
+    const account = await this.getAccount(employeeId, companyId);
     if (!account) throw new Error(`No PF account for employee #${employeeId}`);
 
     // Check duplicate
     const existing = await query(
-      `SELECT id FROM pf_transactions WHERE employee_id = $1 AND payroll_month = $2 AND transaction_type = 'contribution'`,
-      [employeeId, payrollMonth]
+      `SELECT id FROM pf_transactions WHERE employee_id = $1 AND payroll_month = $2 AND transaction_type = 'contribution' AND company_id = $3`,
+      [employeeId, payrollMonth, companyId]
     );
     if (existing.rows.length > 0) {
       throw new Error(`PF contribution already recorded for ${payrollMonth}`);
@@ -177,30 +183,30 @@ class PFCalculator {
 
     // Insert transaction
     await query(
-      `INSERT INTO pf_transactions 
+      `INSERT INTO pf_transactions
         (pf_account_id, employee_id, payroll_month, transaction_type,
          basic_salary, employee_contribution, employer_pf_contribution,
-         employer_eps_contribution, admin_charges, total_amount, running_balance, salary_slip_id)
-       VALUES ($1, $2, $3, 'contribution', $4, $5, $6, $7, $8, $9, $10, $11)`,
+         employer_eps_contribution, admin_charges, total_amount, running_balance, salary_slip_id, company_id)
+       VALUES ($1, $2, $3, 'contribution', $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         account.id, employeeId, payrollMonth,
         contrib.basic_salary, contrib.employee_contribution,
         contrib.employer_pf_contribution, contrib.employer_eps_contribution,
-        contrib.admin_charges, totalDeposit, newBalance, salarySlipId,
+        contrib.admin_charges, totalDeposit, newBalance, salarySlipId, companyId,
       ]
     );
 
     // Update account balances
     await query(
-      `UPDATE pf_accounts SET 
+      `UPDATE pf_accounts SET
          employee_balance = employee_balance + $1,
          employer_balance = employer_balance + $2,
          eps_balance = eps_balance + $3,
          total_balance = $4,
          updated_at = CURRENT_TIMESTAMP
-       WHERE id = $5`,
+       WHERE id = $5 AND company_id = $6`,
       [contrib.employee_contribution, contrib.employer_pf_contribution,
-       contrib.employer_eps_contribution, newBalance, account.id]
+       contrib.employer_eps_contribution, newBalance, account.id, companyId]
     );
 
     return { contribution: contrib, new_balance: newBalance };
@@ -209,13 +215,14 @@ class PFCalculator {
   /**
    * Batch process PF for all active employees for a month.
    */
-  async batchProcess(payrollMonth) {
+  async batchProcess(payrollMonth, companyId) {
     const employees = await query(
       `SELECT e.id, e.full_name, ss.base_salary
        FROM employees e
-       JOIN pf_accounts pa ON e.id = pa.employee_id AND pa.is_active = 1
-       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
-       WHERE e.is_active = 1 AND ss.base_salary IS NOT NULL`
+       JOIN pf_accounts pa ON e.id = pa.employee_id AND pa.is_active = 1 AND pa.company_id = e.company_id
+       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id AND ss.company_id = e.company_id
+       WHERE e.is_active = 1 AND ss.base_salary IS NOT NULL AND e.company_id = $1`,
+      [companyId]
     );
 
     let processed = 0, skipped = 0, errors = 0;
@@ -224,12 +231,12 @@ class PFCalculator {
     for (const emp of employees.rows) {
       try {
         const existing = await query(
-          `SELECT id FROM pf_transactions WHERE employee_id = $1 AND payroll_month = $2 AND transaction_type = 'contribution'`,
-          [emp.id, payrollMonth]
+          `SELECT id FROM pf_transactions WHERE employee_id = $1 AND payroll_month = $2 AND transaction_type = 'contribution' AND company_id = $3`,
+          [emp.id, payrollMonth, companyId]
         );
         if (existing.rows.length > 0) { skipped++; continue; }
 
-        const result = await this.processMonthly(emp.id, payrollMonth, emp.base_salary);
+        const result = await this.processMonthly(emp.id, payrollMonth, emp.base_salary, null, companyId);
         results.push({ employee: emp.full_name, status: 'processed', ...result.contribution });
         processed++;
       } catch (err) {
@@ -245,21 +252,21 @@ class PFCalculator {
   // Transaction History
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getTransactions(employeeId, filters = {}) {
+  async getTransactions(employeeId, filters = {}, companyId) {
     const { page = 1, limit = 24 } = filters;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     const result = await query(
-      `SELECT * FROM pf_transactions 
-       WHERE employee_id = $1 
+      `SELECT * FROM pf_transactions
+       WHERE employee_id = $1 AND company_id = $2
        ORDER BY payroll_month DESC, created_at DESC
-       LIMIT $2 OFFSET $3`,
-      [employeeId, parseInt(limit), offset]
+       LIMIT $3 OFFSET $4`,
+      [employeeId, companyId, parseInt(limit), offset]
     );
 
     const countResult = await query(
-      `SELECT COUNT(*) as count FROM pf_transactions WHERE employee_id = $1`,
-      [employeeId]
+      `SELECT COUNT(*) as count FROM pf_transactions WHERE employee_id = $1 AND company_id = $2`,
+      [employeeId, companyId]
     );
 
     return {
@@ -276,8 +283,8 @@ class PFCalculator {
   // Interest Calculation (annual)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async calculateInterest(employeeId, financialYear) {
-    const account = await this.getAccount(employeeId);
+  async calculateInterest(employeeId, financialYear, companyId) {
+    const account = await this.getAccount(employeeId, companyId);
     if (!account) throw new Error('PF account not found');
 
     const D = (v) => new Decimal(v || 0);
@@ -297,8 +304,8 @@ class PFCalculator {
   // PF Loans
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async createLoan(employeeId, data) {
-    const account = await this.getAccount(employeeId);
+  async createLoan(employeeId, data, companyId) {
+    const account = await this.getAccount(employeeId, companyId);
     if (!account) throw new Error('PF account not found');
 
     // Max loan: 75% of employee balance
@@ -309,30 +316,30 @@ class PFCalculator {
 
     await query(
       `INSERT INTO pf_loans (pf_account_id, employee_id, loan_amount, outstanding_balance,
-       monthly_repayment, interest_rate, purpose, status, start_month)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8)`,
+       monthly_repayment, interest_rate, purpose, status, start_month, company_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9)`,
       [account.id, employeeId, data.loan_amount, data.loan_amount,
        data.monthly_repayment, data.interest_rate || 1,
-       data.purpose || 'other', data.start_month]
+       data.purpose || 'other', data.start_month, companyId]
     );
 
-    return this.getLoans(employeeId);
+    return this.getLoans(employeeId, companyId);
   }
 
-  async approveLoan(loanId, userId) {
+  async approveLoan(loanId, userId, companyId) {
     await query(
       `UPDATE pf_loans SET status = 'active', approved_by = $1, approved_at = CURRENT_TIMESTAMP,
-       updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND status = 'pending'`,
-      [userId, loanId]
+       updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND status = 'pending' AND company_id = $3`,
+      [userId, loanId, companyId]
     );
-    const result = await query(`SELECT * FROM pf_loans WHERE id = $1`, [loanId]);
+    const result = await query(`SELECT * FROM pf_loans WHERE id = $1 AND company_id = $2`, [loanId, companyId]);
     return result.rows[0];
   }
 
-  async getLoans(employeeId) {
+  async getLoans(employeeId, companyId) {
     const result = await query(
-      `SELECT * FROM pf_loans WHERE employee_id = $1 ORDER BY created_at DESC`,
-      [employeeId]
+      `SELECT * FROM pf_loans WHERE employee_id = $1 AND company_id = $2 ORDER BY created_at DESC`,
+      [employeeId, companyId]
     );
     return result.rows;
   }

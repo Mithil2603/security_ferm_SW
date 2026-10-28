@@ -2,7 +2,7 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const { validate, schemas } = require('../middleware/validators');
 const multer = require('multer');
 const csv = require('csv-parser');
@@ -18,15 +18,16 @@ const upload = multer({
 });
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('manage_employees', 'manage_payroll'));
 
 // GET /api/attendance
 router.get('/', async (req, res) => {
   try {
     const { employee_id, client_id, from_date, to_date, status, page = 1, limit = 100 } = req.query;
-    let conditions = [];
-    let params = [];
-    let pc = 1;
+    let conditions = ['a.company_id = $1'];
+    let params = [req.companyId];
+    let pc = 2;
 
     if (employee_id) { conditions.push(`a.employee_id = $${pc}`); params.push(employee_id); pc++; }
     if (client_id) { conditions.push(`a.client_id = $${pc}`); params.push(client_id); pc++; }
@@ -40,8 +41,8 @@ router.get('/', async (req, res) => {
     const result = await query(
       `SELECT a.*, e.full_name as employee_name, e.employee_id as emp_id, c.name as client_name
        FROM attendance a
-       JOIN employees e ON a.employee_id = e.id
-       LEFT JOIN clients c ON a.client_id = c.id
+       JOIN employees e ON a.employee_id = e.id AND e.company_id = a.company_id
+       LEFT JOIN clients c ON a.client_id = c.id AND c.company_id = a.company_id
        ${where}
        ORDER BY a.attendance_date DESC, e.full_name ASC
        LIMIT $${pc} OFFSET $${pc + 1}`,
@@ -82,19 +83,24 @@ router.post('/', validate(schemas.markAttendance), async (req, res) => {
       hours_worked = parseFloat((diff / 60).toFixed(2));
     }
 
+    const empCheck = await query('SELECT id FROM employees WHERE id = $1 AND company_id = $2', [employee_id, req.companyId]);
+    if (empCheck.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Employee not found' });
+    }
+
     const result = await query(
-      `INSERT INTO attendance (employee_id, client_id, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO attendance (employee_id, client_id, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, created_by, company_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        ON DUPLICATE KEY UPDATE
          client_id=VALUES(client_id), check_in_time=VALUES(check_in_time), check_out_time=VALUES(check_out_time),
          hours_worked=VALUES(hours_worked), status=VALUES(status), notes=VALUES(notes), updated_at=CURRENT_TIMESTAMP`,
-      [employee_id, client_id || null, attendance_date, check_in_time || null, check_out_time || null, hours_worked, status, notes, req.user.userId]
+      [employee_id, client_id || null, attendance_date, check_in_time || null, check_out_time || null, hours_worked, status, notes, req.user.userId, req.companyId]
     );
 
     // Fetch the inserted/updated row
     const fetched = await query(
-      'SELECT * FROM attendance WHERE employee_id = $1 AND attendance_date = $2',
-      [employee_id, attendance_date]
+      'SELECT * FROM attendance WHERE employee_id = $1 AND attendance_date = $2 AND company_id = $3',
+      [employee_id, attendance_date, req.companyId]
     );
     res.status(201).json({ success: true, data: fetched.rows[0] });
   } catch (error) {
@@ -126,11 +132,17 @@ router.post('/bulk', validate(schemas.bulkAttendance), async (req, res) => {
           if (diff < 0) diff += 24 * 60;
           hours_worked = parseFloat((diff / 60).toFixed(2));
         }
+        const empCheck = await query('SELECT id FROM employees WHERE id = $1 AND company_id = $2', [employee_id, req.companyId]);
+        if (empCheck.rows.length === 0) {
+          errors.push({ record, error: 'Employee not found' });
+          continue;
+        }
+
         await query(
-          `INSERT INTO attendance (employee_id, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, created_by)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+          `INSERT INTO attendance (employee_id, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, created_by, company_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
            ON DUPLICATE KEY UPDATE status=VALUES(status)`,
-          [employee_id, attendance_date, check_in_time || null, check_out_time || null, hours_worked, status, notes, req.user.userId]
+          [employee_id, attendance_date, check_in_time || null, check_out_time || null, hours_worked, status, notes, req.user.userId, req.companyId]
         );
         successCount++;
       } catch (err) {
@@ -164,8 +176,8 @@ router.get('/summary/:employee_id/:month', async (req, res) => {
         COALESCE(SUM(hours_worked), 0) as total_hours,
         COUNT(*) as total_records
        FROM attendance
-       WHERE employee_id = $1 AND attendance_date BETWEEN $2 AND $3`,
-      [employee_id, startDate, endDate]
+       WHERE employee_id = $1 AND attendance_date BETWEEN $2 AND $3 AND company_id = $4`,
+      [employee_id, startDate, endDate, req.companyId]
     );
 
     res.json({ success: true, data: { ...result.rows[0], month, employee_id, start_date: startDate, end_date: endDate } });
@@ -354,7 +366,7 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
     const rawRows = await parseAttendanceRows(req.file.path, req.file.originalname);
     
     // Fetch all employees for resilient matching across ID, normalized ID, and full name
-    const employeesRes = await query('SELECT id, employee_id, full_name FROM employees');
+    const employeesRes = await query('SELECT id, employee_id, full_name FROM employees WHERE company_id = $1', [req.companyId]);
     
     const byId = new Map();
     const byExactCode = new Map();
@@ -456,12 +468,12 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
         }
 
         await query(
-          `INSERT INTO attendance (employee_id, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, created_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          `INSERT INTO attendance (employee_id, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, created_by, company_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            ON DUPLICATE KEY UPDATE
              check_in_time=VALUES(check_in_time), check_out_time=VALUES(check_out_time),
              hours_worked=VALUES(hours_worked), status=VALUES(status), notes=VALUES(notes), updated_at=CURRENT_TIMESTAMP`,
-          [matchedEmpId, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, req.user?.userId || null]
+          [matchedEmpId, attendance_date, check_in_time, check_out_time, hours_worked, status, notes, req.user?.userId || null, req.companyId]
         );
 
         successCount++;

@@ -26,7 +26,8 @@ import {
   Truck,
   Building2,
   CreditCard,
-  ChevronDown
+  ChevronDown,
+  Briefcase
 } from 'lucide-react';
 import classNames from 'classnames';
 
@@ -107,6 +108,7 @@ const navGroups = [
     label: 'System',
     icon: Settings,
     children: [
+      { name: 'Companies', path: '/companies', icon: Briefcase, roles: ['admin'] },
       { name: 'Workflows', path: '/workflows', icon: Zap, roles: ['admin'] },
       { name: 'Audit Logs', path: '/audit-logs', icon: Activity, roles: ['admin'], permission: 'manage_settings' },
       { name: 'Settings', path: '/settings', icon: Settings, roles: ['admin'], permission: 'manage_settings' },

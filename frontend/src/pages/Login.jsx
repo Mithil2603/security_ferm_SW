@@ -266,8 +266,12 @@ export default function Login() {
     setIsSubmitting(true);
 
     try {
-      await login(email, password);
-      navigate('/');
+      const result = await login(email, password);
+      if (result?.requiresCompanySelection) {
+        navigate('/select-company', { state: { companies: result.companies } });
+      } else {
+        navigate('/');
+      }
     } catch (err) {
       const categorizedError = categorizeError(err);
       setError(categorizedError);
@@ -445,6 +449,13 @@ export default function Login() {
                 )}
               </button>
             </form>
+
+            <p className="text-center text-sm text-slate-500 mt-6">
+              New business?{' '}
+              <Link to="/signup" className="font-medium text-teal-600 hover:text-teal-500">
+                Create an account
+              </Link>
+            </p>
           </div>
 
           {/* Footer */}

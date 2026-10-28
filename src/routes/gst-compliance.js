@@ -11,10 +11,11 @@ const express = require('express');
 const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/errorLogger');
 const router = express.Router();
 const Joi = require('joi');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const gstService = require('../services/gst/gstComplianceService');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // GST Configuration
@@ -22,7 +23,7 @@ router.use(authMiddleware);
 
 router.get('/config', async (req, res) => {
   try {
-    const config = await gstService.getConfig();
+    const config = await gstService.getConfig(req.companyId);
     res.json({ success: true, data: config });
   } catch (err) {
     logError({
@@ -52,7 +53,7 @@ router.post('/config', requirePermission('manage_settings'), async (req, res) =>
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await gstService.saveConfig(value);
+    const result = await gstService.saveConfig(value, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -250,7 +251,7 @@ router.post('/gstr1/generate', requirePermission('manage_payroll'), async (req, 
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await gstService.generateGSTR1(value.return_period);
+    const result = await gstService.generateGSTR1(value.return_period, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     if (err.message.includes('GST configuration not found')) {
@@ -281,7 +282,7 @@ router.post('/gstr3b/generate', requirePermission('manage_payroll'), async (req,
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await gstService.generateGSTR3B(value.return_period);
+    const result = await gstService.generateGSTR3B(value.return_period, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -309,7 +310,7 @@ router.get('/gstr1/preview', async (req, res) => {
     const { error, value } = schema.validate(req.query);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await gstService.previewGSTR1A(value.from_date, value.to_date);
+    const result = await gstService.previewGSTR1A(value.from_date, value.to_date, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     if (err.message.includes('GST configuration not found')) {
@@ -340,7 +341,7 @@ router.get('/gstr2b', async (req, res) => {
     const { error, value } = schema.validate(req.query);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await gstService.getGSTR2B(value.from_date, value.to_date);
+    const result = await gstService.getGSTR2B(value.from_date, value.to_date, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -361,7 +362,7 @@ router.get('/gstr2b', async (req, res) => {
 
 router.get('/filings', async (req, res) => {
   try {
-    const filings = await gstService.getFilings(req.query);
+    const filings = await gstService.getFilings(req.query, req.companyId);
     res.json({ success: true, data: filings });
   } catch (err) {
     logError({
@@ -378,7 +379,7 @@ router.get('/filings', async (req, res) => {
 
 router.get('/filings/:id', async (req, res) => {
   try {
-    const filing = await gstService.getFiling(parseInt(req.params.id));
+    const filing = await gstService.getFiling(parseInt(req.params.id), req.companyId);
     if (!filing) return res.status(404).json({ success: false, message: 'Filing not found' });
     res.json({ success: true, data: filing });
   } catch (err) {
@@ -400,7 +401,7 @@ router.post('/filings/:id/mark-filed', requirePermission('manage_settings'), asy
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await gstService.markFiled(parseInt(req.params.id), value.arn_number);
+    const result = await gstService.markFiled(parseInt(req.params.id), value.arn_number, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -421,7 +422,7 @@ router.post('/filings/:id/mark-filed', requirePermission('manage_settings'), asy
 
 router.get('/filings/:id/download', async (req, res) => {
   try {
-    const filing = await gstService.getFiling(parseInt(req.params.id));
+    const filing = await gstService.getFiling(parseInt(req.params.id), req.companyId);
     if (!filing) return res.status(404).json({ success: false, message: 'Filing not found' });
 
     const filename = `${filing.return_type}_${filing.return_period}_${filing.gstin}.json`;
@@ -447,7 +448,7 @@ router.get('/filings/:id/download', async (req, res) => {
 
 router.get('/filings/:id/download/excel', async (req, res) => {
   try {
-    const filing = await gstService.getFiling(parseInt(req.params.id));
+    const filing = await gstService.getFiling(parseInt(req.params.id), req.companyId);
     if (!filing) return res.status(404).json({ success: false, message: 'Filing not found' });
 
     const ExcelJS = require('exceljs');
@@ -484,14 +485,13 @@ router.get('/filings/:id/download/excel', async (req, res) => {
 
 router.get('/filings/:id/download/pdf', async (req, res) => {
   try {
-    const filing = await gstService.getFiling(parseInt(req.params.id));
+    const filing = await gstService.getFiling(parseInt(req.params.id), req.companyId);
     if (!filing) return res.status(404).json({ success: false, message: 'Filing not found' });
 
-    const { query } = require('../database/connection');
     const { generateMultiSectionReportPDF } = require('../utils/paymentsPdfGenerator');
+    const { getCompanyProfile } = require('../utils/companyProfile');
     const { sections } = gstService._flattenFilingForExport(filing);
-    const agencySetting = await query("SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'");
-    const agencySettings = agencySetting.rows.length > 0 ? JSON.parse(agencySetting.rows[0].setting_value) : null;
+    const agencySettings = await getCompanyProfile(req.companyId);
 
     const chunks = [];
     generateMultiSectionReportPDF(

@@ -2,12 +2,13 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const { saveStatement } = require('../utils/statementSaver');
 const { logError } = require('../utils/errorLogger');
 const ledgerTotalsUtil = require('../utils/ledgerTotals');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('view_pl_account'));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -26,19 +27,19 @@ router.get('/', async (req, res) => {
     const fromDate = from_date || fyStart;
     const toDate = to_date || now.toISOString().split('T')[0];
 
-    const currentPeriod = await buildPeriodData(fromDate, toDate);
+    const currentPeriod = await buildPeriodData(fromDate, toDate, req.companyId);
 
     let previousPeriod = null;
     if (compare === 'true') {
       // Previous year same months
       const prevFrom = shiftYear(fromDate, -1);
       const prevTo = shiftYear(toDate, -1);
-      previousPeriod = await buildPeriodData(prevFrom, prevTo);
+      previousPeriod = await buildPeriodData(prevFrom, prevTo, req.companyId);
     }
 
     // Monthly trend for 12 months of the year containing fromDate
     const trendYear = parseInt(fromDate.substring(0, 4));
-    const monthlyTrend = await buildMonthlyTrend(trendYear, trendYear + 1);
+    const monthlyTrend = await buildMonthlyTrend(trendYear, trendYear + 1, req.companyId);
 
     res.json({
       success: true,
@@ -69,7 +70,7 @@ router.post('/generate', async (req, res) => {
     const fromDate = from_date || fyStart;
     const toDate = to_date || now.toISOString().split('T')[0];
 
-    const periodData = await buildPeriodData(fromDate, toDate);
+    const periodData = await buildPeriodData(fromDate, toDate, req.companyId);
 
     // Save to archive
     saveStatement({
@@ -85,7 +86,8 @@ router.post('/generate', async (req, res) => {
       period_to: toDate,
       party_name: 'Agency P&L',
       party_id: null,
-      generated_by: req.user.userId
+      generated_by: req.user.userId,
+      company_id: req.companyId
     });
 
     res.json({
@@ -114,7 +116,7 @@ function formatDateShort(dateStr) {
   } catch { return dateStr; }
 }
 
-async function buildPeriodData(fromDate, toDate) {
+async function buildPeriodData(fromDate, toDate, companyId) {
   // ── 1. INCOME ──────────────────────────────────────────────────────────────
   const revenueTotal = await query(
     `SELECT COALESCE(SUM(payment_received), 0) as total_collected,
@@ -123,8 +125,9 @@ async function buildPeriodData(fromDate, toDate) {
      FROM invoices
      WHERE status != 'cancelled'
        AND invoice_date >= date($1)
-       AND invoice_date <= date($2)`,
-    [fromDate, toDate]
+       AND invoice_date <= date($2)
+       AND company_id = $3`,
+    [fromDate, toDate, companyId]
   );
 
   const revenueByClient = await query(
@@ -132,13 +135,14 @@ async function buildPeriodData(fromDate, toDate) {
             COALESCE(SUM(i.final_amount), 0) as billed,
             COUNT(i.id) as count
      FROM invoices i
-     JOIN clients c ON i.client_id = c.id
+     JOIN clients c ON i.client_id = c.id AND c.company_id = $3
      WHERE i.status != 'cancelled'
        AND i.invoice_date >= date($1)
        AND i.invoice_date <= date($2)
+       AND i.company_id = $3
      GROUP BY c.name
      ORDER BY collected DESC`,
-    [fromDate, toDate]
+    [fromDate, toDate, companyId]
   );
 
   // ── 2. COST OF SERVICES (Payroll) ──────────────────────────────────────────
@@ -151,8 +155,9 @@ async function buildPeriodData(fromDate, toDate) {
             COUNT(DISTINCT employee_id) as employee_count
      FROM payroll
      WHERE date(payroll_month, 'start of month') <= date($2)
-       AND (date(payroll_month, 'start of month', '+1 month', '-1 day')) >= date($1)`,
-    [fromDate, toDate]
+       AND (date(payroll_month, 'start of month', '+1 month', '-1 day')) >= date($1)
+       AND company_id = $3`,
+    [fromDate, toDate, companyId]
   );
 
   const payrollByEmployee = await query(
@@ -161,12 +166,13 @@ async function buildPeriodData(fromDate, toDate) {
             COALESCE(SUM(p.gross_salary), 0) as gross_salary,
             COUNT(p.id) as months_count
      FROM payroll p
-     JOIN employees e ON p.employee_id = e.id
+     JOIN employees e ON p.employee_id = e.id AND e.company_id = $3
      WHERE date(p.payroll_month, 'start of month') <= date($2)
        AND (date(p.payroll_month, 'start of month', '+1 month', '-1 day')) >= date($1)
+       AND p.company_id = $3
      GROUP BY e.full_name, e.employee_id
      ORDER BY net_salary DESC`,
-    [fromDate, toDate]
+    [fromDate, toDate, companyId]
   );
 
   // ── 3. OPERATING EXPENSES ──────────────────────────────────────────────────
@@ -176,8 +182,9 @@ async function buildPeriodData(fromDate, toDate) {
      FROM expenses
      WHERE status IN ('approved', 'paid')
        AND expense_date >= date($1)
-       AND expense_date <= date($2)`,
-    [fromDate, toDate]
+       AND expense_date <= date($2)
+       AND company_id = $3`,
+    [fromDate, toDate, companyId]
   );
 
   const expenseByCategory = await query(
@@ -186,24 +193,26 @@ async function buildPeriodData(fromDate, toDate) {
      WHERE status IN ('approved', 'paid')
        AND expense_date >= date($1)
        AND expense_date <= date($2)
+       AND company_id = $3
      GROUP BY category
      HAVING SUM(amount) > 0
      ORDER BY amount DESC`,
-    [fromDate, toDate]
+    [fromDate, toDate, companyId]
   );
 
   const expenseByVendor = await query(
     `SELECT COALESCE(v.name, 'Direct Expense') as name,
             COALESCE(SUM(e.amount), 0) as amount, COUNT(e.id) as count
      FROM expenses e
-     LEFT JOIN vendors v ON e.vendor_id = v.id
+     LEFT JOIN vendors v ON e.vendor_id = v.id AND v.company_id = $3
      WHERE e.status IN ('approved', 'paid')
        AND e.expense_date >= date($1)
        AND e.expense_date <= date($2)
+       AND e.company_id = $3
      GROUP BY v.name
      HAVING SUM(e.amount) > 0
      ORDER BY amount DESC`,
-    [fromDate, toDate]
+    [fromDate, toDate, companyId]
   );
 
   // ── 4. TAX SUMMARY ────────────────────────────────────────────────────────
@@ -215,21 +224,23 @@ async function buildPeriodData(fromDate, toDate) {
      FROM invoices
      WHERE status != 'cancelled'
        AND invoice_date >= date($1)
-       AND invoice_date <= date($2)`,
-    [fromDate, toDate]
+       AND invoice_date <= date($2)
+       AND company_id = $3`,
+    [fromDate, toDate, companyId]
   );
 
   const tdsData = await query(
     `SELECT COALESCE(SUM(tds_deducted), 0) as total_tds
      FROM payments
-     WHERE payment_date >= $1 AND payment_date <= $2 AND tds_deducted > 0`,
-    [fromDate, toDate]
+     WHERE payment_date >= $1 AND payment_date <= $2 AND tds_deducted > 0
+       AND company_id = $3`,
+    [fromDate, toDate, companyId]
   );
 
   // ── CUSTOM LEDGERS (posted vouchers) ──────────────────────────────────────
   // Incomes add to income; Direct Expenses to cost of services; Indirect
   // Expenses to operating expenses.
-  const ledgerRows = await ledgerTotalsUtil.ledgerTotals({ from: fromDate, to: toDate });
+  const ledgerRows = await ledgerTotalsUtil.ledgerTotals({ from: fromDate, to: toDate, companyId });
   const incomeLedgers = ledgerRows.filter(r => r.nature === 'income');
   const directLedgers = ledgerRows.filter(r => r.nature === 'expense' && r.is_direct);
   const indirectLedgers = ledgerRows.filter(r => r.nature === 'expense' && !r.is_direct);
@@ -314,7 +325,7 @@ async function buildPeriodData(fromDate, toDate) {
   };
 }
 
-async function buildMonthlyTrend(startYear, endYear) {
+async function buildMonthlyTrend(startYear, endYear, companyId) {
   const months = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
   const startMonthStr = `${startYear}-04`;
   const endMonthStr = `${endYear}-03`;
@@ -328,8 +339,9 @@ async function buildMonthlyTrend(startYear, endYear) {
      WHERE status != 'cancelled'
        AND strftime('%Y-%m', invoice_date) >= $1
        AND strftime('%Y-%m', invoice_date) <= $2
+       AND company_id = $3
      GROUP BY ym`,
-    [startMonthStr, endMonthStr]
+    [startMonthStr, endMonthStr, companyId]
   );
   const revMap = new Map(revRes.rows.map(r => [r.ym, r]));
 
@@ -340,8 +352,9 @@ async function buildMonthlyTrend(startYear, endYear) {
      FROM payroll
      WHERE strftime('%Y-%m', payroll_month) >= $1
        AND strftime('%Y-%m', payroll_month) <= $2
+       AND company_id = $3
      GROUP BY ym`,
-    [startMonthStr, endMonthStr]
+    [startMonthStr, endMonthStr, companyId]
   );
   const payMap = new Map(payRes.rows.map(r => [r.ym, parseFloat(r.payroll)]));
 
@@ -353,13 +366,14 @@ async function buildMonthlyTrend(startYear, endYear) {
      WHERE status IN ('approved', 'paid')
        AND strftime('%Y-%m', expense_date) >= $1
        AND strftime('%Y-%m', expense_date) <= $2
+       AND company_id = $3
      GROUP BY ym`,
-    [startMonthStr, endMonthStr]
+    [startMonthStr, endMonthStr, companyId]
   );
   const expMap = new Map(expRes.rows.map(r => [r.ym, parseFloat(r.expenses)]));
 
   // Custom ledger income / expense by month
-  const ledgerMap = await ledgerTotalsUtil.ledgerMonthly(startMonthStr, endMonthStr);
+  const ledgerMap = await ledgerTotalsUtil.ledgerMonthly(startMonthStr, endMonthStr, companyId);
 
   const trend = [];
   for (let i = 0; i < 12; i++) {

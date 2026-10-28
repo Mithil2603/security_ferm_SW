@@ -2,7 +2,7 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const { validate, schemas } = require('../middleware/validators');
 const { logError } = require('../utils/errorLogger');
 const { logAudit } = require('../middleware/audit');
@@ -39,15 +39,16 @@ const upload = multer({
 });
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('manage_employees'));
 
 // GET /api/employees
 router.get('/', async (req, res) => {
   try {
     const { search, is_active, client_id, sort_by = 'name', order = 'asc', page = 1, limit = 50 } = req.query;
-    let conditions = [];
-    let params = [];
-    let pc = 1;
+    let conditions = ['e.company_id = $1'];
+    let params = [req.companyId];
+    let pc = 2;
 
     if (search) {
       conditions.push(`(e.full_name LIKE $${pc} OR e.employee_id LIKE $${pc} OR e.phone LIKE $${pc})`);
@@ -82,8 +83,8 @@ router.get('/', async (req, res) => {
         c.name as client_name,
         ss.name as salary_structure_name
        FROM employees e
-       LEFT JOIN clients c ON e.assigned_client_id = c.id
-       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
+       LEFT JOIN clients c ON e.assigned_client_id = c.id AND c.company_id = e.company_id
+       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id AND ss.company_id = e.company_id
        ${where}
        ORDER BY ${orderBy}
        LIMIT $${pc} OFFSET $${pc + 1}`,
@@ -149,10 +150,10 @@ router.get('/:id', async (req, res) => {
       `SELECT e.*, c.name as client_name, ss.name as salary_structure_name,
         ss.base_salary, ss.dearness_allowance, ss.house_rent_allowance, ss.other_allowances, ss.pf_percentage
        FROM employees e
-       LEFT JOIN clients c ON e.assigned_client_id = c.id
-       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
-       WHERE e.id = $1`,
-      [req.params.id]
+       LEFT JOIN clients c ON e.assigned_client_id = c.id AND c.company_id = e.company_id
+       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id AND ss.company_id = e.company_id
+       WHERE e.id = $1 AND e.company_id = $2`,
+      [req.params.id, req.companyId]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Employee not found' });
@@ -278,9 +279,9 @@ router.post('/import', upload.single('file'), async (req, res) => {
 
         // Prevent redundant/duplicate records already existing in database
         const existingEmp = await query(
-          `SELECT id, employee_id FROM employees 
-           WHERE phone = $1 OR phone LIKE $2 OR (full_name = $3 AND (phone LIKE $2 OR phone = $1))`,
-          [r.phone, `%${last10}`, r.full_name]
+          `SELECT id, employee_id FROM employees
+           WHERE company_id = $1 AND (phone = $2 OR phone LIKE $3 OR (full_name = $4 AND (phone LIKE $3 OR phone = $2)))`,
+          [req.companyId, r.phone, `%${last10}`, r.full_name]
         );
 
         if (existingEmp.rows.length > 0) {
@@ -290,7 +291,7 @@ router.post('/import', upload.single('file'), async (req, res) => {
         }
 
         if (r.aadhar_number && r.aadhar_number.length === 12) {
-          const existingAadhar = await query('SELECT id FROM employees WHERE aadhar_number = $1', [r.aadhar_number]);
+          const existingAadhar = await query('SELECT id FROM employees WHERE aadhar_number = $1 AND company_id = $2', [r.aadhar_number, req.companyId]);
           if (existingAadhar.rows.length > 0) {
             skippedCount++;
             seenInBatch.add(last10);
@@ -306,15 +307,15 @@ router.post('/import', upload.single('file'), async (req, res) => {
 
         if (r.aadhar_number || r.pan_number) {
           await query(
-            `INSERT INTO employees (employee_id, full_name, phone, email, address, city, date_of_joining, aadhar_number, pan_number)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-            [employee_id, r.full_name, r.phone, r.email || null, r.address || null, r.city || null, date_of_joining, r.aadhar_number || null, r.pan_number || null]
+            `INSERT INTO employees (employee_id, full_name, phone, email, address, city, date_of_joining, aadhar_number, pan_number, company_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [employee_id, r.full_name, r.phone, r.email || null, r.address || null, r.city || null, date_of_joining, r.aadhar_number || null, r.pan_number || null, req.companyId]
           );
         } else {
           await query(
-            `INSERT INTO employees (employee_id, full_name, phone, email, address, city, date_of_joining)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [employee_id, r.full_name, r.phone, r.email || null, r.address || null, r.city || null, date_of_joining]
+            `INSERT INTO employees (employee_id, full_name, phone, email, address, city, date_of_joining, company_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [employee_id, r.full_name, r.phone, r.email || null, r.address || null, r.city || null, date_of_joining, req.companyId]
           );
         }
         importedCount++;
@@ -366,15 +367,15 @@ router.post('/', validate(schemas.createEmployee), async (req, res) => {
     const employee_id = `EMP-${randomHex}`;
 
     const result = await query(
-      `INSERT INTO employees (employee_id, full_name, phone, email, date_of_birth, gender, address, city, 
+      `INSERT INTO employees (employee_id, full_name, phone, email, date_of_birth, gender, address, city,
         aadhar_number, pan_number, bank_account_number, bank_ifsc_code, bank_name, bank_account_holder_name,
-        date_of_joining, designation, salary_structure_id, assigned_client_id, 
-        emergency_contact_name, emergency_contact_phone, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING *`,
+        date_of_joining, designation, salary_structure_id, assigned_client_id,
+        emergency_contact_name, emergency_contact_phone, notes, company_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING *`,
       [employee_id, full_name, phone, email, date_of_birth || null, gender || null, address, city, cleanAadhar, cleanPan,
         bank_account_number, bank_ifsc_code, bank_name, bank_account_holder_name,
         date_of_joining, designation, salary_structure_id || null, assigned_client_id || null,
-        emergency_contact_name, emergency_contact_phone, notes]
+        emergency_contact_name, emergency_contact_phone, notes, req.companyId]
     );
 
     console.log('EMPLOYEES POST RESULT ROWS:', result.rows);
@@ -403,9 +404,12 @@ router.put('/:id', validate(schemas.updateEmployee), async (req, res) => {
     const existingEmpRes = await query(
       `SELECT aadhar_number, pan_number, bank_account_number, bank_ifsc_code, bank_name, bank_account_holder_name,
               previous_bank_account_number, previous_bank_ifsc_code, previous_bank_name, previous_bank_account_holder_name, bank_updated_at
-       FROM employees WHERE id = $1`,
-      [req.params.id]
+       FROM employees WHERE id = $1 AND company_id = $2`,
+      [req.params.id, req.companyId]
     );
+    if (existingEmpRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Employee not found' });
+    }
     const existingEmp = existingEmpRes.rows[0];
 
     const isAdmin = req.user && req.user.role === 'admin';
@@ -471,13 +475,13 @@ router.put('/:id', validate(schemas.updateEmployee), async (req, res) => {
         assigned_client_id=$17, emergency_contact_name=$18, emergency_contact_phone=$19, notes=$20,
         is_active=$21, previous_bank_account_number=$22, previous_bank_ifsc_code=$23, previous_bank_name=$24,
         previous_bank_account_holder_name=$25, bank_updated_at=$26, updated_at=CURRENT_TIMESTAMP
-       WHERE id=$27`,
+       WHERE id=$27 AND company_id=$28`,
       [full_name, phone, email, date_of_birth || null, gender || null, address, city, finalAadhar, finalPan,
         finalBankAccountNumber, finalBankIfsc, finalBankName, finalBankHolderName,
         date_of_joining, designation, salary_structure_id || null, assigned_client_id || null,
         emergency_contact_name, emergency_contact_phone, notes, isActiveBool,
         finalPrevBankAccountNumber, finalPrevBankIfsc, finalPrevBankName, finalPrevBankHolderName, finalBankUpdatedAt,
-        req.params.id]
+        req.params.id, req.companyId]
     );
 
     if (result.rowCount === 0) {
@@ -485,7 +489,7 @@ router.put('/:id', validate(schemas.updateEmployee), async (req, res) => {
     }
 
     // Re-fetch to return complete updated data
-    const updated = await query('SELECT * FROM employees WHERE id = $1', [req.params.id]);
+    const updated = await query('SELECT * FROM employees WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
 
     await logAudit(req, 'employees', req.params.id, 'update', `Updated employee: ${full_name}`);
 
@@ -501,13 +505,13 @@ router.put('/:id', validate(schemas.updateEmployee), async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const result = await query(
-      'UPDATE employees SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-      [req.params.id]
+      'UPDATE employees SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND company_id = $2',
+      [req.params.id, req.companyId]
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Employee not found' });
     }
-    
+
     await logAudit(req, 'employees', req.params.id, 'update', 'Deactivated employee');
     
     res.json({ success: true, message: 'Employee deactivated successfully' });
@@ -521,8 +525,8 @@ router.delete('/:id', async (req, res) => {
 router.patch('/:id/reactivate', async (req, res) => {
   try {
     const result = await query(
-      'UPDATE employees SET is_active = 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-      [req.params.id]
+      'UPDATE employees SET is_active = 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND company_id = $2',
+      [req.params.id, req.companyId]
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Employee not found' });
@@ -540,7 +544,7 @@ router.patch('/:id/reactivate', async (req, res) => {
 // DELETE /api/employees/:id/hard (hard delete)
 router.delete('/:id/hard', async (req, res) => {
   try {
-    const result = await query('DELETE FROM employees WHERE id = $1', [req.params.id]);
+    const result = await query('DELETE FROM employees WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Employee not found' });
     }
@@ -557,7 +561,7 @@ router.delete('/:id/hard', async (req, res) => {
 // GET /api/employees/salary-structures
 router.get('/meta/salary-structures', async (req, res) => {
   try {
-    const result = await query('SELECT * FROM salary_structures WHERE is_active = 1 ORDER BY base_salary ASC');
+    const result = await query('SELECT * FROM salary_structures WHERE is_active = 1 AND company_id = $1 ORDER BY base_salary ASC', [req.companyId]);
     res.json({ success: true, data: result.rows });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'employees' });
@@ -572,6 +576,11 @@ router.post('/:id/upload-doc', upload.single('document'), async (req, res) => {
       return res.status(400).json({ success: false, message: 'No file uploaded' });
     }
 
+    const empCheck = await query('SELECT id FROM employees WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
+    if (empCheck.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Employee not found' });
+    }
+
     const docType = req.body.document_type || req.body.doc_type || 'other';
     const validDocTypes = ['photo', 'aadhar_card', 'pan_card', 'bank_details', 'other'];
     const finalDocType = validDocTypes.includes(docType) ? docType : 'other';
@@ -579,8 +588,8 @@ router.post('/:id/upload-doc', upload.single('document'), async (req, res) => {
     // If single-instance document type, clean up old file and records
     if (['photo', 'aadhar_card', 'pan_card', 'bank_details'].includes(finalDocType)) {
       const oldDocs = await query(
-        'SELECT id, file_path FROM employee_documents WHERE employee_id = $1 AND document_type = $2',
-        [req.params.id, finalDocType]
+        'SELECT id, file_path FROM employee_documents WHERE employee_id = $1 AND document_type = $2 AND company_id = $3',
+        [req.params.id, finalDocType, req.companyId]
       );
       for (const oldDoc of oldDocs.rows) {
         if (oldDoc.file_path) {
@@ -597,8 +606,8 @@ router.post('/:id/upload-doc', upload.single('document'), async (req, res) => {
       }
       if (oldDocs.rows.length > 0) {
         await query(
-          'DELETE FROM employee_documents WHERE employee_id = $1 AND document_type = $2',
-          [req.params.id, finalDocType]
+          'DELETE FROM employee_documents WHERE employee_id = $1 AND document_type = $2 AND company_id = $3',
+          [req.params.id, finalDocType, req.companyId]
         );
       }
     }
@@ -608,14 +617,14 @@ router.post('/:id/upload-doc', upload.single('document'), async (req, res) => {
     const mimeType = req.file.mimetype || null;
 
     const result = await query(
-      `INSERT INTO employee_documents (employee_id, file_name, file_path, document_type, title, file_size, mime_type) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [req.params.id, req.file.originalname, req.file.filename, finalDocType, docTitle, fileSize, mimeType]
+      `INSERT INTO employee_documents (employee_id, file_name, file_path, document_type, title, file_size, mime_type, company_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [req.params.id, req.file.originalname, req.file.filename, finalDocType, docTitle, fileSize, mimeType, req.companyId]
     );
 
     // If doc_type is photo, update photo_url on employees table
     if (finalDocType === 'photo') {
-      await query('UPDATE employees SET photo_url = $1 WHERE id = $2', [req.file.filename, req.params.id]);
+      await query('UPDATE employees SET photo_url = $1 WHERE id = $2 AND company_id = $3', [req.file.filename, req.params.id, req.companyId]);
     }
 
     await logAudit(req, 'employees', req.params.id, 'update', `Uploaded ${finalDocType} document: ${req.file.originalname}`);
@@ -632,17 +641,17 @@ router.post('/:id/upload-doc', upload.single('document'), async (req, res) => {
 router.get('/:id/docs', async (req, res) => {
   try {
     const result = await query(
-      `SELECT id, employee_id, file_name, file_path, document_type, title, file_size, mime_type, uploaded_at 
-       FROM employee_documents WHERE employee_id = $1 
-       ORDER BY 
-         CASE document_type 
-           WHEN 'photo' THEN 1 
-           WHEN 'aadhar_card' THEN 2 
-           WHEN 'pan_card' THEN 3 
-           WHEN 'bank_details' THEN 4 
-           ELSE 5 
+      `SELECT id, employee_id, file_name, file_path, document_type, title, file_size, mime_type, uploaded_at
+       FROM employee_documents WHERE employee_id = $1 AND company_id = $2
+       ORDER BY
+         CASE document_type
+           WHEN 'photo' THEN 1
+           WHEN 'aadhar_card' THEN 2
+           WHEN 'pan_card' THEN 3
+           WHEN 'bank_details' THEN 4
+           ELSE 5
          END, uploaded_at DESC`,
-      [req.params.id]
+      [req.params.id, req.companyId]
     );
      res.json({ success: true, data: result.rows, storage_path: storageConfig.getUploadDir('docs') });
   } catch (error) {
@@ -656,8 +665,8 @@ router.delete('/:id/docs/:docId', async (req, res) => {
   try {
     const { id, docId } = req.params;
     const docRes = await query(
-      'SELECT file_path, document_type FROM employee_documents WHERE id = $1 AND employee_id = $2',
-      [docId, id]
+      'SELECT file_path, document_type FROM employee_documents WHERE id = $1 AND employee_id = $2 AND company_id = $3',
+      [docId, id, req.companyId]
     );
 
     if (docRes.rows.length === 0) {
@@ -666,13 +675,13 @@ router.delete('/:id/docs/:docId', async (req, res) => {
 
     const { file_path: filePath, document_type: docType } = docRes.rows[0];
     await query(
-      'DELETE FROM employee_documents WHERE id = $1 AND employee_id = $2',
-      [docId, id]
+      'DELETE FROM employee_documents WHERE id = $1 AND employee_id = $2 AND company_id = $3',
+      [docId, id, req.companyId]
     );
 
     // If this was the employee photo, clear photo_url
     if (docType === 'photo') {
-      await query('UPDATE employees SET photo_url = NULL WHERE id = $1', [id]);
+      await query('UPDATE employees SET photo_url = NULL WHERE id = $1 AND company_id = $2', [id, req.companyId]);
     }
 
     // Delete file from disk if exists
@@ -703,8 +712,8 @@ router.get('/:id/docs/:docId/download', async (req, res) => {
   try {
     const { id, docId } = req.params;
     const docRes = await query(
-      'SELECT file_name, file_path FROM employee_documents WHERE id = $1 AND employee_id = $2',
-      [docId, id]
+      'SELECT file_name, file_path FROM employee_documents WHERE id = $1 AND employee_id = $2 AND company_id = $3',
+      [docId, id, req.companyId]
     );
 
     if (docRes.rows.length === 0) {

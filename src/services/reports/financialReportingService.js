@@ -24,7 +24,7 @@ class FinancialReportingService {
    * Generate Cash Flow Statement for a period.
    * Uses indirect method: start from net profit, adjust for non-cash items.
    */
-  async generateCashFlow(startDate, endDate) {
+  async generateCashFlow(startDate, endDate, companyId) {
     // Operating Activities
     // Status filters use exclude-lists (not allow-lists) throughout this
     // function — an allow-list of e.g. ('sent','partially_paid','overdue')
@@ -32,16 +32,16 @@ class FinancialReportingService {
     // expenses, understating both sides of the statement.
     const revenue = await query(
       `SELECT COALESCE(SUM(payment_received), 0) as collected
-       FROM invoices WHERE invoice_date BETWEEN $1 AND $2
+       FROM invoices WHERE company_id = $1 AND invoice_date BETWEEN $2 AND $3
        AND status != 'cancelled'`,
-      [startDate, endDate]
+      [companyId, startDate, endDate]
     );
 
     const expenses = await query(
       `SELECT COALESCE(SUM(amount), 0) as paid
-       FROM expenses WHERE expense_date BETWEEN $1 AND $2
+       FROM expenses WHERE company_id = $1 AND expense_date BETWEEN $2 AND $3
        AND status != 'pending'`,
-      [startDate, endDate]
+      [companyId, startDate, endDate]
     );
 
     // Real disbursed salary lives in the legacy `payroll` table (payroll_month
@@ -50,21 +50,21 @@ class FinancialReportingService {
     // `payroll`, but historical paid salary predates that and only exists here.
     const payroll = await query(
       `SELECT COALESCE(SUM(net_salary), 0) as paid
-       FROM payroll WHERE payroll_month BETWEEN $1 AND $2
+       FROM payroll WHERE company_id = $1 AND payroll_month BETWEEN $2 AND $3
        AND payment_status = 'paid'`,
-      [startDate, endDate]
+      [companyId, startDate, endDate]
     );
 
     // Receivables change
     const arStart = await query(
       `SELECT COALESCE(SUM(payment_due), 0) as ar FROM invoices
-       WHERE invoice_date < $1 AND status != 'cancelled' AND payment_due > 0`,
-      [startDate]
+       WHERE company_id = $1 AND invoice_date < $2 AND status != 'cancelled' AND payment_due > 0`,
+      [companyId, startDate]
     );
     const arEnd = await query(
       `SELECT COALESCE(SUM(payment_due), 0) as ar FROM invoices
-       WHERE invoice_date <= $1 AND status != 'cancelled' AND payment_due > 0`,
-      [endDate]
+       WHERE company_id = $1 AND invoice_date <= $2 AND status != 'cancelled' AND payment_due > 0`,
+      [companyId, endDate]
     );
     const arChange = parseFloat(arEnd.rows[0].ar) - parseFloat(arStart.rows[0].ar);
 
@@ -80,9 +80,9 @@ class FinancialReportingService {
     // Financing Activities (PF deposits = outflow, loans = inflow)
     const pfDeposits = await query(
       `SELECT COALESCE(SUM(total_amount), 0) as total
-       FROM pf_transactions WHERE payroll_month >= $1 AND payroll_month <= $2
+       FROM pf_transactions WHERE company_id = $1 AND payroll_month >= $2 AND payroll_month <= $3
        AND transaction_type = 'contribution'`,
-      [startDate.substring(0, 7), endDate.substring(0, 7)]
+      [companyId, startDate.substring(0, 7), endDate.substring(0, 7)]
     );
     const financingCashFlow = -parseFloat(pfDeposits.rows[0].total);
 
@@ -112,8 +112,8 @@ class FinancialReportingService {
   // Variance Analysis (Budget vs Actual)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getVarianceAnalysis(budgetId) {
-    const budget = await query(`SELECT * FROM budgets WHERE id = $1`, [budgetId]);
+  async getVarianceAnalysis(budgetId, companyId) {
+    const budget = await query(`SELECT * FROM budgets WHERE id = $1 AND company_id = $2`, [budgetId, companyId]);
     if (budget.rows.length === 0) throw new Error('Budget not found');
     const b = budget.rows[0];
 
@@ -130,26 +130,26 @@ class FinancialReportingService {
 
     const actualRevenue = await query(
       `SELECT COALESCE(SUM(final_amount), 0) as total
-       FROM invoices WHERE invoice_date BETWEEN $1 AND $2
+       FROM invoices WHERE company_id = $1 AND invoice_date BETWEEN $2 AND $3
        AND status != 'cancelled'`,
-      [startDate, endDate]
+      [companyId, startDate, endDate]
     );
 
     const actualExpenses = await query(
       `SELECT category, COALESCE(SUM(amount), 0) as total
-       FROM expenses WHERE expense_date BETWEEN $1 AND $2
+       FROM expenses WHERE company_id = $1 AND expense_date BETWEEN $2 AND $3
        AND status != 'pending'
        GROUP BY category`,
-      [startDate, endDate]
+      [companyId, startDate, endDate]
     );
 
     // See generateCashFlow above — real paid salary lives in `payroll`, not
     // the largely-draft `salary_slips` table.
     const actualPayroll = await query(
       `SELECT COALESCE(SUM(net_salary), 0) as total
-       FROM payroll WHERE payroll_month BETWEEN $1 AND $2
+       FROM payroll WHERE company_id = $1 AND payroll_month BETWEEN $2 AND $3
        AND payment_status = 'paid'`,
-      [startDate, endDate]
+      [companyId, startDate, endDate]
     );
 
     const expenseMap = {};
@@ -364,57 +364,60 @@ class FinancialReportingService {
   // Budget CRUD
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async createBudget(data) {
+  async createBudget(data, companyId) {
     await query(
       `INSERT INTO budgets (name, financial_year, budget_type, total_revenue_budget,
-       total_expense_budget, notes)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+       total_expense_budget, notes, company_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [data.name, data.financial_year, data.budget_type || 'annual',
-       data.total_revenue_budget || 0, data.total_expense_budget || 0, data.notes || null]
+       data.total_revenue_budget || 0, data.total_expense_budget || 0, data.notes || null, companyId]
     );
-    const result = await query(`SELECT * FROM budgets ORDER BY id DESC LIMIT 1`);
+    const result = await query(`SELECT * FROM budgets WHERE company_id = $1 ORDER BY id DESC LIMIT 1`, [companyId]);
     return result.rows[0];
   }
 
-  async getBudgets(financialYear) {
-    const conditions = financialYear ? 'WHERE financial_year = $1' : '';
-    const params = financialYear ? [financialYear] : [];
+  async getBudgets(financialYear, companyId) {
+    const conditions = financialYear ? 'WHERE company_id = $1 AND financial_year = $2' : 'WHERE company_id = $1';
+    const params = financialYear ? [companyId, financialYear] : [companyId];
     const result = await query(`SELECT * FROM budgets ${conditions} ORDER BY created_at DESC`, params);
     return result.rows;
   }
 
-  async getBudget(id) {
-    const budget = await query(`SELECT * FROM budgets WHERE id = $1`, [id]);
+  async getBudget(id, companyId) {
+    const budget = await query(`SELECT * FROM budgets WHERE id = $1 AND company_id = $2`, [id, companyId]);
     if (budget.rows.length === 0) return null;
     const items = await query(`SELECT * FROM budget_items WHERE budget_id = $1 ORDER BY item_type, category`, [id]);
     return { ...budget.rows[0], items: items.rows };
   }
 
-  async addBudgetItem(budgetId, data) {
+  async addBudgetItem(budgetId, data, companyId) {
+    const owningBudget = await query(`SELECT id FROM budgets WHERE id = $1 AND company_id = $2`, [budgetId, companyId]);
+    if (owningBudget.rows.length === 0) return null;
+
     const total = (data.apr || 0) + (data.may || 0) + (data.jun || 0) + (data.jul || 0) +
       (data.aug || 0) + (data.sep || 0) + (data.oct || 0) + (data.nov || 0) +
       (data.dec_val || 0) + (data.jan || 0) + (data.feb || 0) + (data.mar || 0);
 
     await query(
       `INSERT INTO budget_items (budget_id, category, sub_category, item_type,
-       apr, may, jun, jul, aug, sep, oct, nov, dec_val, jan, feb, mar, annual_total)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+       apr, may, jun, jul, aug, sep, oct, nov, dec_val, jan, feb, mar, annual_total, company_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
       [budgetId, data.category, data.sub_category || null, data.item_type,
        data.apr || 0, data.may || 0, data.jun || 0, data.jul || 0,
        data.aug || 0, data.sep || 0, data.oct || 0, data.nov || 0,
-       data.dec_val || 0, data.jan || 0, data.feb || 0, data.mar || 0, total]
+       data.dec_val || 0, data.jan || 0, data.feb || 0, data.mar || 0, total, companyId]
     );
-    return this.getBudget(budgetId);
+    return this.getBudget(budgetId, companyId);
   }
 
-  async approveBudget(id, userId) {
+  async approveBudget(id, userId, companyId) {
     await query(
       `UPDATE budgets SET status = 'approved', approved_by = $1,
        approved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2 AND status = 'draft'`,
-      [userId, id]
+       WHERE id = $2 AND company_id = $3 AND status = 'draft'`,
+      [userId, id, companyId]
     );
-    return this.getBudget(id);
+    return this.getBudget(id, companyId);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

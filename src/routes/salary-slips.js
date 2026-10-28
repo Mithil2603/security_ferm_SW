@@ -21,11 +21,13 @@ const express = require('express');
 const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/errorLogger');
 const router = express.Router();
 const Joi = require('joi');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const salarySlipService = require('../services/payroll/salarySlipService');
 const { recordSalaryPayment } = require('../services/payments/paymentTransactionService');
+const { getCompanyProfile } = require('../utils/companyProfile');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('manage_payroll'));
 
 // ─── Generate ────────────────────────────────────────────────────────────────
@@ -55,8 +57,9 @@ router.post('/generate', async (req, res) => {
       value.employee_id,
       value.payroll_month,
       value.days_worked,
-      req.user.id,
-      { calculation_basis: value.calculation_basis, cut_off_day: value.cut_off_day }
+      req.user.userId,
+      { calculation_basis: value.calculation_basis, cut_off_day: value.cut_off_day },
+      req.companyId
     );
     logger.info(`✅ Salary slip generated: Employee #${value.employee_id}, Month ${value.payroll_month}`);
     res.status(201).json({ success: true, data: result });
@@ -87,8 +90,9 @@ router.post('/batch-generate', async (req, res) => {
 
     const result = await salarySlipService.batchGenerate(
       value.payroll_month,
-      req.user.id,
-      { calculation_basis: value.calculation_basis, cut_off_day: value.cut_off_day }
+      req.user.userId,
+      { calculation_basis: value.calculation_basis, cut_off_day: value.cut_off_day },
+      req.companyId
     );
     logger.info(`✅ Batch salary slips: ${result.generated} generated, ${result.skipped} skipped, ${result.errors} errors`);
     res.status(201).json({ success: true, data: result });
@@ -109,7 +113,7 @@ router.post('/batch-generate', async (req, res) => {
 
 router.get('/', async (req, res) => {
   try {
-    const result = await salarySlipService.findAll(req.query);
+    const result = await salarySlipService.findAll(req.query, req.companyId);
     res.json({ success: true, ...result });
   } catch (err) {
     logError({
@@ -126,7 +130,7 @@ router.get('/', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   try {
-    const result = await salarySlipService.findById(parseInt(req.params.id));
+    const result = await salarySlipService.findById(parseInt(req.params.id), req.companyId);
     if (!result) return res.status(404).json({ success: false, message: 'Salary slip not found' });
     res.json({ success: true, data: result });
   } catch (err) {
@@ -146,7 +150,7 @@ router.get('/:id', async (req, res) => {
 
 router.post('/:id/submit', async (req, res) => {
   try {
-    const result = await salarySlipService.submitForApproval(parseInt(req.params.id));
+    const result = await salarySlipService.submitForApproval(parseInt(req.params.id), req.companyId);
     logger.info(`📋 Salary slip #${req.params.id} submitted for approval`);
     res.json({ success: true, data: result });
   } catch (err) {
@@ -164,7 +168,7 @@ router.post('/:id/submit', async (req, res) => {
 
 router.post('/:id/approve', async (req, res) => {
   try {
-    const result = await salarySlipService.approve(parseInt(req.params.id), req.user.id);
+    const result = await salarySlipService.approve(parseInt(req.params.id), req.user.userId, req.companyId);
     logger.info(`✅ Salary slip #${req.params.id} approved by ${req.user.userId}`);
     res.json({ success: true, data: result });
   } catch (err) {
@@ -188,7 +192,7 @@ router.post('/bulk-approve', async (req, res) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await salarySlipService.bulkApprove(value.payroll_month, req.user.id);
+    const result = await salarySlipService.bulkApprove(value.payroll_month, req.user.userId, req.companyId);
     logger.info(`✅ Bulk approved ${result.approved} slips for ${value.payroll_month}`);
     res.json({ success: true, data: result });
   } catch (err) {
@@ -218,9 +222,10 @@ router.post('/:id/pay', async (req, res) => {
 
     await recordSalaryPayment(
       { reference_type: 'salary_slip', reference_id: parseInt(req.params.id), ...value },
-      req.user.userId
+      req.user.userId,
+      req.companyId
     );
-    const result = await salarySlipService.findById(parseInt(req.params.id));
+    const result = await salarySlipService.findById(parseInt(req.params.id), req.companyId);
     logger.info(`💰 Salary slip #${req.params.id} marked as paid`);
     res.json({ success: true, data: result });
   } catch (err) {
@@ -238,7 +243,7 @@ router.post('/:id/pay', async (req, res) => {
 
 router.post('/:id/cancel', async (req, res) => {
   try {
-    const result = await salarySlipService.cancel(parseInt(req.params.id));
+    const result = await salarySlipService.cancel(parseInt(req.params.id), req.companyId);
     logger.info(`🗑️ Salary slip #${req.params.id} cancelled`);
     res.json({ success: true, data: result });
   } catch (err) {
@@ -260,7 +265,7 @@ router.get('/:id/pdf', async (req, res) => {
     const { query } = require('../database/connection');
     const { generatePayslipPDF } = require('../utils/payslipGenerator');
 
-    const slip = await salarySlipService.findById(parseInt(req.params.id));
+    const slip = await salarySlipService.findById(parseInt(req.params.id), req.companyId);
     if (!slip) {
       return res.status(404).json({ success: false, message: 'Salary slip not found' });
     }
@@ -293,8 +298,7 @@ router.get('/:id/pdf', async (req, res) => {
       deductions: slip.deductions || []
     };
 
-    const agencySetting = await query("SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'");
-    const agencySettings = agencySetting.rows.length > 0 ? JSON.parse(agencySetting.rows[0].setting_value) : null;
+    const agencySettings = await getCompanyProfile(req.companyId);
 
     res.setHeader('Content-Type', 'application/pdf');
     const safeEmpName = (slip.employee_name || 'Employee').replace(/\s+/g, '_');

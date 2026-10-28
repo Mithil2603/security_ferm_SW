@@ -2,10 +2,11 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requireRole } = require('../middleware/auth');
+const { authMiddleware, requireRole, requireCompanyContext } = require('../middleware/auth');
 const { logError } = require('../utils/errorLogger');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requireRole('admin', 'manager', 'accountant', 'employee'));
 
 // GET /api/dashboard - All KPIs in one call
@@ -37,8 +38,8 @@ router.get('/', async (req, res) => {
           COALESCE(SUM(payment_due), 0) as total_outstanding,
           COUNT(*) as invoice_count,
           COALESCE(SUM(CASE WHEN status = 'overdue' THEN 1 ELSE 0 END), 0) as overdue_count
-         FROM invoices WHERE invoice_date >= $1 AND status != 'cancelled'`,
-        [monthStart]
+         FROM invoices WHERE invoice_date >= $1 AND status != 'cancelled' AND company_id = $2`,
+        [monthStart, req.companyId]
       ),
 
       // 2. Employee stats
@@ -46,7 +47,8 @@ router.get('/', async (req, res) => {
         `SELECT 
           COUNT(*) as total_employees,
           COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) as active_employees
-         FROM employees`
+         FROM employees WHERE company_id = $1`,
+        [req.companyId]
       ),
 
       // 3. Client stats
@@ -54,20 +56,22 @@ router.get('/', async (req, res) => {
         `SELECT 
           COUNT(*) as total_clients,
           COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) as active_clients
-         FROM clients`
+         FROM clients WHERE company_id = $1`,
+        [req.companyId]
       ),
 
       // 4. Expense this month
       query(
         `SELECT COALESCE(SUM(amount), 0) as total_expenses
-         FROM expenses WHERE expense_date >= $1 AND status IN ('approved', 'paid')`,
-        [monthStart]
+         FROM expenses WHERE expense_date >= $1 AND status IN ('approved', 'paid') AND company_id = $2`,
+        [monthStart, req.companyId]
       ),
 
       // 5. Pending payroll
       query(
         `SELECT COUNT(*) as pending_count, COALESCE(SUM(net_salary), 0) as pending_amount
-         FROM payroll WHERE payment_status = 'pending'`
+         FROM payroll WHERE payment_status = 'pending' AND company_id = $1`,
+        [req.companyId]
       ),
 
       // 6. Last 6 months revenue trend
@@ -79,16 +83,19 @@ router.get('/', async (req, res) => {
           COALESCE(SUM(payment_received), 0) as collected,
           COALESCE(SUM(final_amount), 0) as billed
          FROM invoices
-         WHERE invoice_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH) AND status != 'cancelled'
+         WHERE invoice_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH) AND status != 'cancelled' AND company_id = $1
          GROUP BY year, month_num, month
-         ORDER BY year ASC, month_num ASC`
+         ORDER BY year ASC, month_num ASC`,
+        [req.companyId]
       ),
 
       // 7. Recent invoices
       query(
         `SELECT i.invoice_number, i.status, i.final_amount, i.invoice_date, c.name as client_name
-         FROM invoices i JOIN clients c ON i.client_id = c.id
-         ORDER BY i.created_at DESC LIMIT 5`
+         FROM invoices i JOIN clients c ON i.client_id = c.id AND c.company_id = $1
+         WHERE i.company_id = $1
+         ORDER BY i.created_at DESC LIMIT 5`,
+        [req.companyId]
       ),
 
       // 8. Top clients by revenue
@@ -96,17 +103,19 @@ router.get('/', async (req, res) => {
         `SELECT c.name, c.city,
           COALESCE(SUM(i.payment_received), 0) as revenue
          FROM clients c
-         LEFT JOIN invoices i ON c.id = i.client_id AND i.status != 'cancelled'
+         LEFT JOIN invoices i ON c.id = i.client_id AND i.status != 'cancelled' AND i.company_id = $1
+         WHERE c.company_id = $1
          GROUP BY c.id, c.name, c.city
-         ORDER BY revenue DESC LIMIT 5`
+         ORDER BY revenue DESC LIMIT 5`,
+        [req.companyId]
       ),
 
       // 9. Expense by category this month
       query(
         `SELECT category, COALESCE(SUM(amount), 0) as total
-         FROM expenses WHERE expense_date >= $1 AND status IN ('approved', 'paid')
+         FROM expenses WHERE expense_date >= $1 AND status IN ('approved', 'paid') AND company_id = $2
          GROUP BY category ORDER BY total DESC`,
-        [monthStart]
+        [monthStart, req.companyId]
       ),
 
       // 10. Today's attendance summary
@@ -117,7 +126,8 @@ router.get('/', async (req, res) => {
           COALESCE(SUM(CASE WHEN status = 'absent' THEN 1 ELSE 0 END), 0) as absent_count,
           COALESCE(SUM(CASE WHEN status = 'half_day' THEN 1 ELSE 0 END), 0) as half_day_count,
           COALESCE(SUM(CASE WHEN status = 'leave' THEN 1 ELSE 0 END), 0) as leave_count
-         FROM attendance WHERE attendance_date = CURDATE()`
+         FROM attendance WHERE attendance_date = CURDATE() AND company_id = $1`,
+        [req.companyId]
       )
     ]);
 

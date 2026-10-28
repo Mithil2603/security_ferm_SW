@@ -22,10 +22,11 @@ const express = require('express');
 const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/errorLogger');
 const router = express.Router();
 const Joi = require('joi');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const salaryStructureService = require('../services/payroll/salaryStructureService');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('manage_payroll'));
 
 // ─── Validation ──────────────────────────────────────────────────────────────
@@ -79,7 +80,7 @@ const updateSchema = Joi.object({
 
 router.get('/', async (req, res) => {
   try {
-    const result = await salaryStructureService.findAll(req.query);
+    const result = await salaryStructureService.findAll(req.query, req.companyId);
     res.json({ success: true, ...result });
   } catch (err) {
     logError({
@@ -113,7 +114,7 @@ router.get('/components', async (req, res) => {
 
 router.get('/templates/seed', async (req, res) => {
   try {
-    const result = await salaryStructureService.seedTemplates();
+    const result = await salaryStructureService.seedTemplates(req.companyId);
     res.json({ success: true, ...result });
   } catch (err) {
     logError({
@@ -130,7 +131,7 @@ router.get('/templates/seed', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   try {
-    const result = await salaryStructureService.findById(parseInt(req.params.id));
+    const result = await salaryStructureService.findById(parseInt(req.params.id), req.companyId);
     if (!result) return res.status(404).json({ success: false, message: 'Salary structure not found' });
     res.json({ success: true, data: result });
   } catch (err) {
@@ -151,7 +152,7 @@ router.post('/', async (req, res) => {
     const { error, value } = createSchema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await salaryStructureService.create(value);
+    const result = await salaryStructureService.create(value, req.companyId);
     logger.info(`✅ Salary structure created: "${result.name}" (ID: ${result.id})`);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
@@ -172,7 +173,7 @@ router.put('/:id', async (req, res) => {
     const { error, value } = updateSchema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await salaryStructureService.update(parseInt(req.params.id), value);
+    const result = await salaryStructureService.update(parseInt(req.params.id), value, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -190,7 +191,7 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const result = await salaryStructureService.delete(parseInt(req.params.id));
+    const result = await salaryStructureService.delete(parseInt(req.params.id), req.companyId);
     res.json({ success: true, ...result });
   } catch (err) {
     logError({
@@ -208,7 +209,7 @@ router.delete('/:id', async (req, res) => {
 
 router.get('/:id/employees', async (req, res) => {
   try {
-    const employees = await salaryStructureService.getEmployeesByStructure(parseInt(req.params.id));
+    const employees = await salaryStructureService.getEmployeesByStructure(parseInt(req.params.id), req.companyId);
     res.json({ success: true, data: employees });
   } catch (err) {
     logError({
@@ -227,7 +228,7 @@ router.post('/:id/assign', async (req, res) => {
   try {
     const { employee_id } = req.body;
     if (!employee_id) return res.status(400).json({ success: false, message: 'employee_id is required' });
-    const result = await salaryStructureService.assignToEmployee(parseInt(employee_id), parseInt(req.params.id));
+    const result = await salaryStructureService.assignToEmployee(parseInt(employee_id), parseInt(req.params.id), req.companyId);
     res.json({ success: true, ...result });
   } catch (err) {
     logError({
@@ -248,7 +249,7 @@ router.post('/:id/bulk-assign', async (req, res) => {
     if (!Array.isArray(employee_ids) || employee_ids.length === 0) {
       return res.status(400).json({ success: false, message: 'employee_ids array required' });
     }
-    const result = await salaryStructureService.bulkAssign(employee_ids, parseInt(req.params.id));
+    const result = await salaryStructureService.bulkAssign(employee_ids, parseInt(req.params.id), req.companyId);
     res.json({ success: true, ...result });
   } catch (err) {
     logError({

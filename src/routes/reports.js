@@ -2,26 +2,26 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const ExcelJS = require('exceljs');
 const { logError } = require('../utils/errorLogger');
+const { getCompanyProfile } = require('../utils/companyProfile');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('view_reports'));
 
 // GET /api/reports/client-revenue
 router.get('/client-revenue', async (req, res) => {
   try {
     const { from_date, to_date, client_id } = req.query;
-    let conditions = ["i.status != 'cancelled'"];
-    let params = [];
-    let pc = 1;
+    let conditions = ["i.status != 'cancelled'", "i.company_id = $1"];
+    let params = [req.companyId];
+    let pc = 2;
 
     if (from_date) { conditions.push(`i.invoice_date >= $${pc}`); params.push(from_date); pc++; }
     if (to_date) { conditions.push(`i.invoice_date <= $${pc}`); params.push(to_date); pc++; }
     if (client_id) { conditions.push(`i.client_id = $${pc}`); params.push(client_id); pc++; }
-
-    const where = `WHERE ${conditions.join(' AND ')}`;
 
     const result = await query(
       `SELECT c.id, c.name as client_name, c.city,
@@ -31,8 +31,8 @@ router.get('/client-revenue', async (req, res) => {
         COALESCE(SUM(i.payment_due), 0) as total_due,
         ROUND(CASE WHEN SUM(i.final_amount) > 0 THEN SUM(i.payment_received) * 100.0 / SUM(i.final_amount) ELSE 0 END, 2) as collection_rate
        FROM clients c
-       LEFT JOIN invoices i ON c.id = i.client_id ${from_date || to_date || client_id ? `AND ${conditions.filter(c => c !== "i.status != 'cancelled'").join(' AND ')}` : ''}
-       WHERE c.is_active = 1
+       LEFT JOIN invoices i ON c.id = i.client_id AND ${conditions.join(' AND ')}
+       WHERE c.is_active = 1 AND c.company_id = $1
        GROUP BY c.id, c.name, c.city
        ORDER BY total_billed DESC`,
       params
@@ -59,10 +59,10 @@ router.get('/monthly-revenue', async (req, res) => {
         COALESCE(SUM(payment_received), 0) as total_paid,
         COALESCE(SUM(payment_due), 0) as total_due
        FROM invoices
-       WHERE CAST(strftime('%Y', invoice_date) AS INTEGER) = $1 AND status != 'cancelled'
+       WHERE company_id = $1 AND CAST(strftime('%Y', invoice_date) AS INTEGER) = $2 AND status != 'cancelled'
        GROUP BY strftime('%Y-%m', invoice_date), (CASE strftime('%m', invoice_date) WHEN '01' THEN 'Jan ' WHEN '02' THEN 'Feb ' WHEN '03' THEN 'Mar ' WHEN '04' THEN 'Apr ' WHEN '05' THEN 'May ' WHEN '06' THEN 'Jun ' WHEN '07' THEN 'Jul ' WHEN '08' THEN 'Aug ' WHEN '09' THEN 'Sep ' WHEN '10' THEN 'Oct ' WHEN '11' THEN 'Nov ' WHEN '12' THEN 'Dec ' END) || strftime('%Y', invoice_date)
        ORDER BY month ASC`,
-      [year]
+      [req.companyId, year]
     );
 
     res.json({ success: true, data: result.rows });
@@ -81,20 +81,20 @@ router.get('/expense-summary', async (req, res) => {
     // Use precise parameterized date range if provided, else fall back to current year
     let categoryParams, categoryWhere;
     if (from_date && to_date) {
-      categoryWhere = `AND expense_date >= date($1) AND expense_date <= date($2)`;
-      categoryParams = [from_date, to_date];
+      categoryWhere = `AND expense_date >= date($2) AND expense_date <= date($3)`;
+      categoryParams = [req.companyId, from_date, to_date];
     } else if (from_date) {
-      categoryWhere = `AND expense_date >= date($1)`;
-      categoryParams = [from_date];
+      categoryWhere = `AND expense_date >= date($2)`;
+      categoryParams = [req.companyId, from_date];
     } else {
-      categoryWhere = `AND CAST(strftime('%Y', expense_date) AS INTEGER) = $1`;
-      categoryParams = [year];
+      categoryWhere = `AND CAST(strftime('%Y', expense_date) AS INTEGER) = $2`;
+      categoryParams = [req.companyId, year];
     }
 
     const byCategory = await query(
       `SELECT category, COUNT(*) as count, COALESCE(SUM(amount), 0) as total
        FROM expenses
-       WHERE status IN ('approved', 'paid') ${categoryWhere}
+       WHERE company_id = $1 AND status IN ('approved', 'paid') ${categoryWhere}
        GROUP BY category ORDER BY total DESC`,
       categoryParams
     );
@@ -102,11 +102,11 @@ router.get('/expense-summary', async (req, res) => {
     // Monthly breakdown always shows data for the date range
     let monthlyParams, monthlyWhere;
     if (from_date && to_date) {
-      monthlyWhere = `AND expense_date >= date($1) AND expense_date <= date($2)`;
-      monthlyParams = [from_date, to_date];
+      monthlyWhere = `AND expense_date >= date($2) AND expense_date <= date($3)`;
+      monthlyParams = [req.companyId, from_date, to_date];
     } else {
-      monthlyWhere = `AND CAST(strftime('%Y', expense_date) AS INTEGER) = $1`;
-      monthlyParams = [year];
+      monthlyWhere = `AND CAST(strftime('%Y', expense_date) AS INTEGER) = $2`;
+      monthlyParams = [req.companyId, year];
     }
 
     const monthly = await query(
@@ -114,7 +114,7 @@ router.get('/expense-summary', async (req, res) => {
         (CASE strftime('%m', expense_date) WHEN '01' THEN 'Jan ' WHEN '02' THEN 'Feb ' WHEN '03' THEN 'Mar ' WHEN '04' THEN 'Apr ' WHEN '05' THEN 'May ' WHEN '06' THEN 'Jun ' WHEN '07' THEN 'Jul ' WHEN '08' THEN 'Aug ' WHEN '09' THEN 'Sep ' WHEN '10' THEN 'Oct ' WHEN '11' THEN 'Nov ' WHEN '12' THEN 'Dec ' END) || strftime('%Y', expense_date) as month_label,
         COALESCE(SUM(amount), 0) as total
        FROM expenses
-       WHERE status IN ('approved', 'paid') ${monthlyWhere}
+       WHERE company_id = $1 AND status IN ('approved', 'paid') ${monthlyWhere}
        GROUP BY strftime('%Y-%m', expense_date), (CASE strftime('%m', expense_date) WHEN '01' THEN 'Jan ' WHEN '02' THEN 'Feb ' WHEN '03' THEN 'Mar ' WHEN '04' THEN 'Apr ' WHEN '05' THEN 'May ' WHEN '06' THEN 'Jun ' WHEN '07' THEN 'Jul ' WHEN '08' THEN 'Aug ' WHEN '09' THEN 'Sep ' WHEN '10' THEN 'Oct ' WHEN '11' THEN 'Nov ' WHEN '12' THEN 'Dec ' END) || strftime('%Y', expense_date)
        ORDER BY month ASC`,
       monthlyParams
@@ -132,11 +132,11 @@ router.get('/payroll-summary', async (req, res) => {
   try {
     const { month, year = new Date().getFullYear() } = req.query;
 
-    let whereClause = `WHERE CAST(strftime('%Y', payroll_month) AS INTEGER) = $1`;
-    let params = [year];
+    let whereClause = `WHERE company_id = $1 AND CAST(strftime('%Y', payroll_month) AS INTEGER) = $2`;
+    let params = [req.companyId, year];
 
     if (month) {
-      whereClause += ` AND CAST(strftime('%m', payroll_month) AS INTEGER) = $2`;
+      whereClause += ` AND CAST(strftime('%m', payroll_month) AS INTEGER) = $3`;
       params.push(month);
     }
 
@@ -175,20 +175,22 @@ router.get('/profit-loss', requirePermission('view_reports', 'view_pl_account'),
       `SELECT COALESCE(SUM(payment_received), 0) as total_revenue,
               COALESCE(SUM(final_amount),     0) as total_billed
        FROM invoices
-       WHERE status != 'cancelled'
+       WHERE company_id = $3
+         AND status != 'cancelled'
          AND invoice_date >= date($1)
          AND invoice_date <= date($2)`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
 
     // ── Expenses: filter by exact expense date ───────────────────────────────
     const expenses = await query(
       `SELECT COALESCE(SUM(amount), 0) as total_expenses
        FROM expenses
-       WHERE status IN ('approved', 'paid')
+       WHERE company_id = $3
+         AND status IN ('approved', 'paid')
          AND expense_date >= date($1)
          AND expense_date <= date($2)`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
 
     // ── Payroll: any payroll month that overlaps the selected date range ─────
@@ -198,9 +200,10 @@ router.get('/profit-loss', requirePermission('view_reports', 'view_pl_account'),
     const payroll = await query(
       `SELECT COALESCE(SUM(net_salary), 0) as total_payroll
        FROM payroll
-       WHERE date(payroll_month, 'start of month') <= date($2)
+       WHERE company_id = $3
+         AND date(payroll_month, 'start of month') <= date($2)
          AND (date(payroll_month, 'start of month', '+1 month', '-1 day')) >= date($1)`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
 
     const totalRevenue  = parseFloat(revenue.rows[0].total_revenue);
@@ -214,40 +217,43 @@ router.get('/profit-loss', requirePermission('view_reports', 'view_pl_account'),
     const revenueDetails = await query(
       `SELECT c.name, COALESCE(SUM(i.payment_received), 0) as amount
        FROM invoices i
-       JOIN clients c ON i.client_id = c.id
-       WHERE i.status != 'cancelled'
+       JOIN clients c ON i.client_id = c.id AND c.company_id = i.company_id
+       WHERE i.company_id = $3
+         AND i.status != 'cancelled'
          AND i.invoice_date >= date($1)
          AND i.invoice_date <= date($2)
        GROUP BY c.name
        HAVING SUM(i.payment_received) > 0
        ORDER BY amount DESC`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
 
     // ── Expense breakdown by category ────────────────────────────────────────
     const expenseDetails = await query(
       `SELECT category as name, COALESCE(SUM(amount), 0) as amount
        FROM expenses
-       WHERE status IN ('approved', 'paid')
+       WHERE company_id = $3
+         AND status IN ('approved', 'paid')
          AND expense_date >= date($1)
          AND expense_date <= date($2)
        GROUP BY category
        HAVING SUM(amount) > 0
        ORDER BY amount DESC`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
 
     // ── Payroll breakdown by employee (same month-overlap logic) ─────────────
     const payrollDetails = await query(
       `SELECT e.full_name as name, COALESCE(SUM(p.net_salary), 0) as amount
        FROM payroll p
-       JOIN employees e ON p.employee_id = e.id
-       WHERE date(p.payroll_month, 'start of month') <= date($2)
+       JOIN employees e ON p.employee_id = e.id AND e.company_id = p.company_id
+       WHERE p.company_id = $3
+         AND date(p.payroll_month, 'start of month') <= date($2)
          AND (date(p.payroll_month, 'start of month', '+1 month', '-1 day')) >= date($1)
        GROUP BY e.full_name
        HAVING SUM(p.net_salary) > 0
        ORDER BY amount DESC`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
 
     res.json({
@@ -292,10 +298,11 @@ router.get('/advanced-metrics', async (req, res) => {
          COALESCE(SUM(payment_due), 0)   AS total_due,
          COALESCE(SUM(final_amount), 0)  AS total_billed
        FROM invoices
-       WHERE status != 'cancelled'
+       WHERE company_id = $3
+         AND status != 'cancelled'
          AND invoice_date >= date($1)
          AND invoice_date <= date($2)`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
     const totalDue    = parseFloat(dsoData.rows[0].total_due);
     const totalBilled = parseFloat(dsoData.rows[0].total_billed);
@@ -319,25 +326,27 @@ router.get('/advanced-metrics', async (req, res) => {
                 COALESCE(SUM(final_amount), 0)     AS total_billed,
                 COALESCE(SUM(payment_received), 0) AS total_collected
          FROM invoices
-         WHERE status != 'cancelled'
+         WHERE company_id = $3
+           AND status != 'cancelled'
            AND invoice_date >= date($1)
            AND invoice_date <= date($2)
          GROUP BY client_id
        ) inv ON c.id = inv.client_id
-       LEFT JOIN employees e ON e.assigned_client_id = c.id AND e.is_active = 1
+       LEFT JOIN employees e ON e.assigned_client_id = c.id AND e.is_active = 1 AND e.company_id = c.company_id
        LEFT JOIN (
          SELECT emp.assigned_client_id,
                 COALESCE(SUM(p.net_salary), 0) AS guard_cost
          FROM payroll p
-         JOIN employees emp ON p.employee_id = emp.id
-         WHERE date(p.payroll_month, 'start of month') <= date($2)
+         JOIN employees emp ON p.employee_id = emp.id AND emp.company_id = p.company_id
+         WHERE p.company_id = $3
+           AND date(p.payroll_month, 'start of month') <= date($2)
            AND (date(p.payroll_month, 'start of month', '+1 month', '-1 day')) >= date($1)
          GROUP BY emp.assigned_client_id
        ) pay ON c.id = pay.assigned_client_id
-       WHERE c.is_active = 1
+       WHERE c.is_active = 1 AND c.company_id = $3
        GROUP BY c.id, c.name, c.monthly_rate, inv.total_billed, inv.total_collected, pay.guard_cost
        ORDER BY total_collected DESC`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
 
     const clientData = clientProfit.rows.map(r => {
@@ -381,9 +390,10 @@ router.get('/outstanding-invoices', async (req, res) => {
         c.contact_person,
         date('now', 'localtime') - i.due_date as days_overdue
        FROM invoices i
-       JOIN clients c ON i.client_id = c.id
-       WHERE i.status IN ('sent', 'partially_paid', 'overdue') AND i.payment_due > 0
-       ORDER BY i.due_date ASC`
+       JOIN clients c ON i.client_id = c.id AND c.company_id = i.company_id
+       WHERE i.company_id = $1 AND i.status IN ('sent', 'partially_paid', 'overdue') AND i.payment_due > 0
+       ORDER BY i.due_date ASC`,
+      [req.companyId]
     );
 
     res.json({ success: true, data: result.rows });
@@ -406,11 +416,12 @@ router.get('/alerts', async (req, res) => {
               (contract_end_date - date('now', 'localtime')) AS days_left,
               monthly_rate
        FROM clients
-       WHERE is_active = 1
+       WHERE company_id = $1 AND is_active = 1
          AND contract_end_date IS NOT NULL
          AND contract_end_date >= date('now', 'localtime')
          AND contract_end_date <= date('now', 'localtime', '+60 days')
-       ORDER BY days_left ASC`
+       ORDER BY days_left ASC`,
+      [req.companyId]
     );
     expiring.rows.forEach(r => {
       const days = parseInt(r.days_left);
@@ -430,12 +441,14 @@ router.get('/alerts', async (req, res) => {
               c.name AS client_name,
               (date('now', 'localtime') - i.due_date) AS days_overdue
        FROM invoices i
-       JOIN clients c ON i.client_id = c.id
-       WHERE i.payment_due > 0
+       JOIN clients c ON i.client_id = c.id AND c.company_id = i.company_id
+       WHERE i.company_id = $1
+         AND i.payment_due > 0
          AND i.status NOT IN ('paid','cancelled')
          AND i.due_date < date('now', 'localtime')
        ORDER BY i.due_date ASC
-       LIMIT 5`
+       LIMIT 5`,
+      [req.companyId]
     );
     overdue.rows.forEach(r => {
       const days = parseInt(r.days_overdue);
@@ -453,8 +466,9 @@ router.get('/alerts', async (req, res) => {
     const payrollPending = await query(
       `SELECT COUNT(*) AS pending_count, COALESCE(SUM(net_salary),0) AS pending_amount
        FROM payroll
-       WHERE payment_status = 'pending'
-         AND payroll_month >= date('now', 'localtime', 'start of month')`
+       WHERE company_id = $1 AND payment_status = 'pending'
+         AND payroll_month >= date('now', 'localtime', 'start of month')`,
+      [req.companyId]
     );
     if (parseInt(payrollPending.rows[0].pending_count) > 0) {
       alerts.push({
@@ -471,10 +485,12 @@ router.get('/alerts', async (req, res) => {
       `SELECT
          COALESCE(SUM(p.net_salary), 0) AS payroll,
          COALESCE((SELECT SUM(payment_received) FROM invoices
-                   WHERE invoice_date >= date('now', 'localtime', '-30 days')), 0) AS revenue
+                   WHERE company_id = $1 AND invoice_date >= date('now', 'localtime', '-30 days')), 0) AS revenue
        FROM payroll p
-       WHERE p.payroll_month >= date('now', 'localtime', 'start of month', '-30 days')
-         AND p.payroll_month <= date('now', 'localtime', 'start of month')`
+       WHERE p.company_id = $1
+         AND p.payroll_month >= date('now', 'localtime', 'start of month', '-30 days')
+         AND p.payroll_month <= date('now', 'localtime', 'start of month')`,
+      [req.companyId]
     );
     const lPayroll = parseFloat(labourCheck.rows[0].payroll);
     const lRevenue = parseFloat(labourCheck.rows[0].revenue);
@@ -495,8 +511,9 @@ router.get('/alerts', async (req, res) => {
          COALESCE(SUM(final_amount), 0) AS billed,
          COALESCE(SUM(payment_received), 0) AS collected
        FROM invoices
-       WHERE status != 'cancelled'
-         AND invoice_date >= date('now', 'localtime', '-60 days')`
+       WHERE company_id = $1 AND status != 'cancelled'
+         AND invoice_date >= date('now', 'localtime', '-60 days')`,
+      [req.companyId]
     );
     const cBilled    = parseFloat(collectionCheck.rows[0].billed);
     const cCollected = parseFloat(collectionCheck.rows[0].collected);
@@ -541,12 +558,13 @@ router.get('/monthly-trend', async (req, res) => {
          COALESCE(SUM(payment_received), 0) AS collected,
          COALESCE(SUM(final_amount), 0) AS billed
        FROM invoices
-       WHERE status != 'cancelled'
+       WHERE company_id = $3
+         AND status != 'cancelled'
          AND invoice_date >= $1
          AND invoice_date <= $2
        GROUP BY ym
        ORDER BY ym`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
 
     // Monthly payroll costs within range (MySQL-compatible)
@@ -555,10 +573,11 @@ router.get('/monthly-trend', async (req, res) => {
          DATE_FORMAT(payroll_month, '%Y-%m') AS ym,
          COALESCE(SUM(net_salary), 0) AS payroll_cost
        FROM payroll
-       WHERE DATE_FORMAT(payroll_month, '%Y-%m') >= DATE_FORMAT($1, '%Y-%m')
+       WHERE company_id = $3
+         AND DATE_FORMAT(payroll_month, '%Y-%m') >= DATE_FORMAT($1, '%Y-%m')
          AND DATE_FORMAT(payroll_month, '%Y-%m') <= DATE_FORMAT($2, '%Y-%m')
        GROUP BY ym`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
     const costMap = {};
     costs.rows.forEach(r => { costMap[r.ym] = parseFloat(r.payroll_cost); });
@@ -568,11 +587,12 @@ router.get('/monthly-trend', async (req, res) => {
          DATE_FORMAT(expense_date, '%Y-%m') AS ym,
          COALESCE(SUM(amount), 0) AS exp_cost
        FROM expenses
-       WHERE status IN ('approved', 'paid')
+       WHERE company_id = $3
+         AND status IN ('approved', 'paid')
          AND expense_date >= $1
          AND expense_date <= $2
        GROUP BY ym`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
     expCosts.rows.forEach(r => {
       costMap[r.ym] = (costMap[r.ym] || 0) + parseFloat(r.exp_cost);
@@ -653,10 +673,12 @@ router.get('/receivables-aging', async (req, res) => {
            ELSE '90_plus'
          END AS bucket
        FROM invoices i
-       JOIN clients c ON i.client_id = c.id
-       WHERE i.payment_due > 0
+       JOIN clients c ON i.client_id = c.id AND c.company_id = i.company_id
+       WHERE i.company_id = $1
+         AND i.payment_due > 0
          AND i.status NOT IN ('paid', 'cancelled')
-       ORDER BY i.due_date ASC`
+       ORDER BY i.due_date ASC`,
+      [req.companyId]
     );
 
     const rows = result.rows;
@@ -719,8 +741,8 @@ router.get('/business-analytics', async (req, res) => {
          SUM(CASE WHEN status = 'half_day' THEN 1 ELSE 0 END) AS half_day,
          SUM(CASE WHEN status = 'holiday' THEN 1 ELSE 0 END)  AS holidays
        FROM attendance
-       WHERE attendance_date >= date($1) AND attendance_date <= date($2)`,
-      [fromDate, toDate]
+       WHERE company_id = $3 AND attendance_date >= date($1) AND attendance_date <= date($2)`,
+      [fromDate, toDate, req.companyId]
     );
     const att = attendance.rows[0];
     const totalWorking = parseInt(att.total_records) - parseInt(att.holidays);
@@ -734,33 +756,35 @@ router.get('/business-analytics', async (req, res) => {
          SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) AS present,
          SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END)  AS absent
        FROM attendance a
-       JOIN clients c ON a.client_id = c.id
-       WHERE a.attendance_date >= date($1) AND a.attendance_date <= date($2)
+       JOIN clients c ON a.client_id = c.id AND c.company_id = a.company_id
+       WHERE a.company_id = $3 AND a.attendance_date >= date($1) AND a.attendance_date <= date($2)
        GROUP BY c.name
        ORDER BY present DESC`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
 
     // Absenteeism cost estimate
     const absentCost = await query(
       `SELECT COALESCE(SUM(p.base_salary / 30.0 * p.days_absent), 0) AS cost
        FROM payroll p
-       WHERE p.payroll_month >= date($1, 'start of month')
+       WHERE p.company_id = $3
+         AND p.payroll_month >= date($1, 'start of month')
          AND p.payroll_month <= date($2)`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
 
     // ── 2. Revenue Per Employee ───────────────────────────────────────────
     const revenuePerEmp = await query(
       `SELECT
          COALESCE(SUM(i.payment_received), 0) AS total_revenue,
-         (SELECT COUNT(*) FROM employees WHERE is_active = 1) AS active_employees,
-         (SELECT COALESCE(AVG(net_salary), 0) FROM payroll 
-          WHERE payroll_month >= date($1, 'start of month') AND payroll_month <= date($2)) AS avg_salary
+         (SELECT COUNT(*) FROM employees WHERE is_active = 1 AND company_id = $3) AS active_employees,
+         (SELECT COALESCE(AVG(net_salary), 0) FROM payroll
+          WHERE company_id = $3 AND payroll_month >= date($1, 'start of month') AND payroll_month <= date($2)) AS avg_salary
        FROM invoices i
-       WHERE i.status != 'cancelled'
+       WHERE i.company_id = $3
+         AND i.status != 'cancelled'
          AND i.invoice_date >= date($1) AND i.invoice_date <= date($2)`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
     const rpe = revenuePerEmp.rows[0];
     const empCount = parseInt(rpe.active_employees) || 1;
@@ -776,12 +800,13 @@ router.get('/business-analytics', async (req, res) => {
       `SELECT c.name AS client_name,
          COALESCE(SUM(i.payment_received), 0) AS revenue
        FROM invoices i
-       JOIN clients c ON i.client_id = c.id
-       WHERE i.status != 'cancelled'
+       JOIN clients c ON i.client_id = c.id AND c.company_id = i.company_id
+       WHERE i.company_id = $3
+         AND i.status != 'cancelled'
          AND i.invoice_date >= date($1) AND i.invoice_date <= date($2)
        GROUP BY c.name
        ORDER BY revenue DESC`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
     const totalConcentrationRev = concentration.rows.reduce((s, r) => s + parseFloat(r.revenue), 0);
     const concentrationData = concentration.rows.map(r => ({
@@ -796,14 +821,14 @@ router.get('/business-analytics', async (req, res) => {
     // ── 4. Burn Rate & Runway ─────────────────────────────────────────────
     const burnData = await query(
       `SELECT
-         COALESCE((SELECT SUM(net_salary) FROM payroll 
-                   WHERE payroll_month >= date($1, 'start of month') AND payroll_month <= date($2)), 0) AS payroll_cost,
-         COALESCE((SELECT SUM(amount) FROM expenses 
-                   WHERE status IN ('approved','paid') AND expense_date >= date($1) AND expense_date <= date($2)), 0) AS expense_cost,
-         COALESCE((SELECT SUM(payment_received) FROM invoices 
-                   WHERE status != 'cancelled' AND invoice_date >= date($1) AND invoice_date <= date($2)), 0) AS cash_in
+         COALESCE((SELECT SUM(net_salary) FROM payroll
+                   WHERE company_id = $3 AND payroll_month >= date($1, 'start of month') AND payroll_month <= date($2)), 0) AS payroll_cost,
+         COALESCE((SELECT SUM(amount) FROM expenses
+                   WHERE company_id = $3 AND status IN ('approved','paid') AND expense_date >= date($1) AND expense_date <= date($2)), 0) AS expense_cost,
+         COALESCE((SELECT SUM(payment_received) FROM invoices
+                   WHERE company_id = $3 AND status != 'cancelled' AND invoice_date >= date($1) AND invoice_date <= date($2)), 0) AS cash_in
        `,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
     const bd = burnData.rows[0];
     const totalCosts  = parseFloat(bd.payroll_cost) + parseFloat(bd.expense_cost);
@@ -820,14 +845,14 @@ router.get('/business-analytics', async (req, res) => {
 
     const growthData = await query(
       `SELECT
-         COALESCE((SELECT SUM(payment_received) FROM invoices WHERE status != 'cancelled' AND invoice_date >= date($1) AND invoice_date < date($3)), 0) AS rev_first,
-         COALESCE((SELECT SUM(payment_received) FROM invoices WHERE status != 'cancelled' AND invoice_date >= date($3) AND invoice_date <= date($2)), 0) AS rev_second,
-         COALESCE((SELECT SUM(amount) FROM expenses WHERE status IN ('approved','paid') AND expense_date >= date($1) AND expense_date < date($3)), 0) AS exp_first,
-         COALESCE((SELECT SUM(amount) FROM expenses WHERE status IN ('approved','paid') AND expense_date >= date($3) AND expense_date <= date($2)), 0) AS exp_second,
-         COALESCE((SELECT SUM(net_salary) FROM payroll WHERE payroll_month >= date($1, 'start of month') AND payroll_month < date($3)), 0) AS pay_first,
-         COALESCE((SELECT SUM(net_salary) FROM payroll WHERE payroll_month >= date($3) AND payroll_month <= date($2)), 0) AS pay_second
+         COALESCE((SELECT SUM(payment_received) FROM invoices WHERE company_id = $4 AND status != 'cancelled' AND invoice_date >= date($1) AND invoice_date < date($3)), 0) AS rev_first,
+         COALESCE((SELECT SUM(payment_received) FROM invoices WHERE company_id = $4 AND status != 'cancelled' AND invoice_date >= date($3) AND invoice_date <= date($2)), 0) AS rev_second,
+         COALESCE((SELECT SUM(amount) FROM expenses WHERE company_id = $4 AND status IN ('approved','paid') AND expense_date >= date($1) AND expense_date < date($3)), 0) AS exp_first,
+         COALESCE((SELECT SUM(amount) FROM expenses WHERE company_id = $4 AND status IN ('approved','paid') AND expense_date >= date($3) AND expense_date <= date($2)), 0) AS exp_second,
+         COALESCE((SELECT SUM(net_salary) FROM payroll WHERE company_id = $4 AND payroll_month >= date($1, 'start of month') AND payroll_month < date($3)), 0) AS pay_first,
+         COALESCE((SELECT SUM(net_salary) FROM payroll WHERE company_id = $4 AND payroll_month >= date($3) AND payroll_month <= date($2)), 0) AS pay_second
        `,
-      [fromDate, toDate, midStr]
+      [fromDate, toDate, midStr, req.companyId]
     );
     const gd = growthData.rows[0];
     const revFirst  = parseFloat(gd.rev_first);
@@ -854,15 +879,15 @@ router.get('/business-analytics', async (req, res) => {
       `SELECT
          COALESCE(SUM(amount), 0) AS total_advanced
        FROM expenses
-       WHERE category = 'salary_advance' AND status IN ('approved','paid')
+       WHERE company_id = $3 AND category = 'salary_advance' AND status IN ('approved','paid')
          AND expense_date >= date($1) AND expense_date <= date($2)`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
     const deductions = await query(
       `SELECT COALESCE(SUM(other_deductions), 0) AS total_recovered
        FROM payroll
-       WHERE payroll_month >= date($1, 'start of month') AND payroll_month <= date($2)`,
-      [fromDate, toDate]
+       WHERE company_id = $3 AND payroll_month >= date($1, 'start of month') AND payroll_month <= date($2)`,
+      [fromDate, toDate, req.companyId]
     );
     const totalAdvanced  = parseFloat(advances.rows[0].total_advanced);
     const totalRecovered = parseFloat(deductions.rows[0].total_recovered);
@@ -957,6 +982,7 @@ router.get('/cost-per-guard', async (req, res) => {
            FROM payroll p
            JOIN employees emp ON p.employee_id = emp.id
            WHERE emp.assigned_client_id = c.id
+             AND p.company_id = $3
              AND date(p.payroll_month, 'start of month') <= date($2)
              AND (date(p.payroll_month, 'start of month', '+1 month', '-1 day')) >= date($1)
          ), 0) AS total_guard_cost,
@@ -964,17 +990,18 @@ router.get('/cost-per-guard', async (req, res) => {
            SELECT SUM(final_amount)
            FROM invoices
            WHERE client_id = c.id
+             AND company_id = $3
              AND status != 'cancelled'
              AND invoice_date >= date($1)
              AND invoice_date <= date($2)
          ), 0) AS total_billed
        FROM clients c
-       LEFT JOIN employees e ON e.assigned_client_id = c.id AND e.is_active = 1
-       WHERE c.is_active = 1
+       LEFT JOIN employees e ON e.assigned_client_id = c.id AND e.is_active = 1 AND e.company_id = c.company_id
+       WHERE c.is_active = 1 AND c.company_id = $3
        GROUP BY c.id, c.name, c.monthly_rate
        HAVING COUNT(e.id) > 0
        ORDER BY total_billed DESC`,
-      [fromDate, toDate]
+      [fromDate, toDate, req.companyId]
     );
 
     // Calculate derived metrics
@@ -1042,10 +1069,10 @@ router.get('/export-excel', async (req, res) => {
       const data = await query(
         `SELECT i.invoice_number, i.invoice_date, i.due_date, c.name as client_name, 
           i.amount_subtotal, i.tax_amount, i.final_amount, i.payment_received, i.status
-         FROM invoices i JOIN clients c ON i.client_id = c.id
-         WHERE i.invoice_date >= date($1) AND i.invoice_date <= date($2)
+         FROM invoices i JOIN clients c ON i.client_id = c.id AND c.company_id = i.company_id
+         WHERE i.company_id = $3 AND i.invoice_date >= date($1) AND i.invoice_date <= date($2)
          ORDER BY i.invoice_date ASC`,
-        [fromDate, toDate]
+        [fromDate, toDate, req.companyId]
       );
       worksheet.columns = [
         { header: 'Invoice Number', key: 'invoice_number', width: 20 },
@@ -1063,11 +1090,11 @@ router.get('/export-excel', async (req, res) => {
       const data = await query(
         `SELECT e.employee_id, e.full_name, e.designation, p.payroll_month, 
           p.days_worked, p.gross_salary, p.total_deductions, p.net_salary, p.payment_status
-         FROM payroll p JOIN employees e ON p.employee_id = e.id
-         WHERE p.payroll_month >= date($1, 'start of month') 
+         FROM payroll p JOIN employees e ON p.employee_id = e.id AND e.company_id = p.company_id
+         WHERE p.company_id = $3 AND p.payroll_month >= date($1, 'start of month')
            AND p.payroll_month <= date($2)
          ORDER BY p.payroll_month ASC, e.full_name ASC`,
-        [fromDate, toDate]
+        [fromDate, toDate, req.companyId]
       );
       worksheet.columns = [
         { header: 'Emp ID', key: 'employee_id', width: 15 },
@@ -1085,9 +1112,9 @@ router.get('/export-excel', async (req, res) => {
       const data = await query(
         `SELECT expense_date, category, description, amount, payment_method, status
          FROM expenses
-         WHERE expense_date >= date($1) AND expense_date <= date($2)
+         WHERE company_id = $3 AND expense_date >= date($1) AND expense_date <= date($2)
          ORDER BY expense_date ASC`,
-        [fromDate, toDate]
+        [fromDate, toDate, req.companyId]
       );
       worksheet.columns = [
         { header: 'Date', key: 'expense_date', width: 15 },
@@ -1283,8 +1310,7 @@ router.get('/gst-bifurcation/pdf', async (req, res) => {
   try {
     const { from_date, to_date, type = 'client' } = req.query;
     const rows = await fetchGstBifurcation(type, from_date, to_date);
-    const agencySetting = await query("SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'");
-    const agencySettings = agencySetting.rows.length > 0 ? JSON.parse(agencySetting.rows[0].setting_value) : null;
+    const agencySettings = await getCompanyProfile(req.companyId);
 
     let sumTaxable = 0, sumCgst = 0, sumSgst = 0, sumIgst = 0, sumTotal = 0;
     const tableRows = rows.map((r) => {
@@ -1342,8 +1368,7 @@ router.get('/tds/pdf', async (req, res) => {
   try {
     const { from_date, to_date, type = 'client' } = req.query;
     const rows = await fetchTdsReport(type, from_date, to_date);
-    const agencySetting = await query("SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'");
-    const agencySettings = agencySetting.rows.length > 0 ? JSON.parse(agencySetting.rows[0].setting_value) : null;
+    const agencySettings = await getCompanyProfile(req.companyId);
 
     let sumPaid = 0, sumTds = 0;
     const tableRows = rows.map((r) => {

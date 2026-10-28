@@ -1,14 +1,17 @@
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requireCompanyContext } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
+router.use(authMiddleware);
+router.use(requireCompanyContext);
+
 // 1. Create a Budget
-router.post('/', authMiddleware, async (req, res) => {
+router.post('/', async (req, res) => {
   try {
     const { entity_type, entity_id, budget_category, amount, period_start, period_end } = req.body;
-    
+
     if (!entity_type || !amount || !period_start || !period_end) {
       return res.status(400).json({ success: false, message: 'Missing required budget fields' });
     }
@@ -19,11 +22,11 @@ router.post('/', authMiddleware, async (req, res) => {
     const name = `Budget (${entity_type.toUpperCase()}) ${budget_category ? '- ' + budget_category : ''}`;
 
     const insertResult = await query(`
-      INSERT INTO budgets (name, financial_year, entity_type, entity_id, budget_category, amount, period_start, period_end, total_expense_budget)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-    `, [name, fy, entity_type, entity_id ? parseInt(entity_id) : null, budget_category || null, numAmount, period_start, period_end, numAmount]);
+      INSERT INTO budgets (name, financial_year, entity_type, entity_id, budget_category, amount, period_start, period_end, total_expense_budget, company_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `, [name, fy, entity_type, entity_id ? parseInt(entity_id) : null, budget_category || null, numAmount, period_start, period_end, numAmount, req.companyId]);
 
-    const newBudget = await query('SELECT * FROM budgets WHERE id = $1', [insertResult.insertId]);
+    const newBudget = await query('SELECT * FROM budgets WHERE id = $1 AND company_id = $2', [insertResult.insertId, req.companyId]);
 
     res.status(201).json({ success: true, data: newBudget.rows[0] || {}, message: 'Budget created successfully' });
   } catch (err) {
@@ -33,13 +36,13 @@ router.post('/', authMiddleware, async (req, res) => {
 });
 
 // 2. Get Budgets vs Actuals
-router.get('/vs-actual', authMiddleware, async (req, res) => {
+router.get('/vs-actual', async (req, res) => {
   try {
     const { entity_type, entity_id, period_start, period_end } = req.query;
-    
-    let budgetQuery = 'SELECT * FROM budgets WHERE 1=1';
-    const params = [];
-    let pIdx = 1;
+
+    let budgetQuery = 'SELECT * FROM budgets WHERE company_id = $1';
+    const params = [req.companyId];
+    let pIdx = 2;
 
     if (entity_type) {
       budgetQuery += ` AND entity_type = $${pIdx++}`;
@@ -75,13 +78,14 @@ router.get('/vs-actual', authMiddleware, async (req, res) => {
 
       // Find vouchers that match this budget
       let actualQuery = `
-        SELECT SUM(amount) as actual_amount 
-        FROM vouchers 
-        WHERE status = 'posted' 
-        AND voucher_date >= $1 AND voucher_date <= $2
+        SELECT SUM(amount) as actual_amount
+        FROM vouchers
+        WHERE status = 'posted'
+        AND company_id = $1
+        AND voucher_date >= $2 AND voucher_date <= $3
       `;
-      const actualParams = [b.period_start, b.period_end];
-      let aIdx = 3;
+      const actualParams = [req.companyId, b.period_start, b.period_end];
+      let aIdx = 4;
 
       if (b.entity_type === 'client' && b.entity_id) {
         actualQuery += ` AND party_type = 'client' AND party_id = $${aIdx++}`;
@@ -115,9 +119,9 @@ router.get('/vs-actual', authMiddleware, async (req, res) => {
 });
 
 // 3. Delete a Budget
-router.delete('/:id', authMiddleware, async (req, res, next) => {
+router.delete('/:id', async (req, res, next) => {
   try {
-    const result = await query('DELETE FROM budgets WHERE id = $1', [req.params.id]);
+    const result = await query('DELETE FROM budgets WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Budget not found' });
     }

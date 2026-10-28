@@ -22,12 +22,13 @@ const express = require('express');
 const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/errorLogger');
 const router = express.Router();
 const Joi = require('joi');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const taxCalculator = require('../services/payroll/taxCalculator');
 const { query } = require('../database/connection');
 const { getIndianFinancialYear } = require('../services/utils/dateCalculator');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 
 // ─── Tax Computation (pure calculation, no DB) ──────────────────────────────
 
@@ -140,7 +141,7 @@ router.get('/professional-tax/:state', async (req, res) => {
 
 router.get('/declaration/:empId/:fy', async (req, res) => {
   try {
-    const decl = await taxCalculator.getDeclaration(parseInt(req.params.empId), req.params.fy);
+    const decl = await taxCalculator.getDeclaration(parseInt(req.params.empId), req.params.fy, req.companyId);
     res.json({ success: true, data: decl });
   } catch (err) {
     logError({
@@ -180,7 +181,7 @@ router.post('/declaration/:empId/:fy', requirePermission('manage_payroll'), asyn
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await taxCalculator.saveDeclaration(parseInt(req.params.empId), req.params.fy, value);
+    const result = await taxCalculator.saveDeclaration(parseInt(req.params.empId), req.params.fy, value, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -197,7 +198,7 @@ router.post('/declaration/:empId/:fy', requirePermission('manage_payroll'), asyn
 
 router.post('/declaration/:empId/:fy/submit', async (req, res) => {
   try {
-    const result = await taxCalculator.submitDeclaration(parseInt(req.params.empId), req.params.fy);
+    const result = await taxCalculator.submitDeclaration(parseInt(req.params.empId), req.params.fy, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -214,7 +215,7 @@ router.post('/declaration/:empId/:fy/submit', async (req, res) => {
 
 router.post('/declaration/:empId/:fy/verify', requirePermission('manage_payroll'), async (req, res) => {
   try {
-    const result = await taxCalculator.verifyDeclaration(parseInt(req.params.empId), req.params.fy, req.user.id);
+    const result = await taxCalculator.verifyDeclaration(parseInt(req.params.empId), req.params.fy, req.user.userId, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -233,7 +234,7 @@ router.post('/declaration/:empId/:fy/verify', requirePermission('manage_payroll'
 
 router.get('/history/:empId/:fy', requirePermission('manage_payroll'), async (req, res) => {
   try {
-    const history = await taxCalculator.getTaxHistory(parseInt(req.params.empId), req.params.fy);
+    const history = await taxCalculator.getTaxHistory(parseInt(req.params.empId), req.params.fy, req.companyId);
     res.json({ success: true, data: history });
   } catch (err) {
     logError({
@@ -261,15 +262,15 @@ router.get('/employee-summary/:empId', requirePermission('manage_payroll'), asyn
       `SELECT e.*, ss.base_salary, ss.dearness_allowance, ss.house_rent_allowance,
               ss.other_allowances, ss.pf_percentage
        FROM employees e
-       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
-       WHERE e.id = $1`,
-      [empId]
+       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id AND ss.company_id = e.company_id
+       WHERE e.id = $1 AND e.company_id = $2`,
+      [empId, req.companyId]
     );
     if (empResult.rows.length === 0) return res.status(404).json({ success: false, message: 'Employee not found' });
     const emp = empResult.rows[0];
 
     // Get declaration
-    const decl = await taxCalculator.getDeclaration(empId, fy) || {};
+    const decl = await taxCalculator.getDeclaration(empId, fy, req.companyId) || {};
     const regime = decl.tax_regime || emp.tax_regime || 'new';
 
     // Calculate gross annual
@@ -278,9 +279,9 @@ router.get('/employee-summary/:empId', requirePermission('manage_payroll'), asyn
 
     // Get YTD TDS
     const tdsResult = await query(
-      `SELECT COALESCE(SUM(monthly_tds), 0) as ytd_tds FROM tax_computation_log 
-       WHERE employee_id = $1 AND financial_year = $2`,
-      [empId, fy]
+      `SELECT COALESCE(SUM(monthly_tds), 0) as ytd_tds FROM tax_computation_log
+       WHERE employee_id = $1 AND financial_year = $2 AND company_id = $3`,
+      [empId, fy, req.companyId]
     );
 
     const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;

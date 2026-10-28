@@ -1,21 +1,25 @@
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/enhancedErrorLogger');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('manage_settings')); // Only admins/settings managers can view audit logs
 
 // GET /api/audit-logs
 router.get('/', async (req, res) => {
   try {
     const { page = 1, limit = 50, action, table_name } = req.query;
-    
-    let whereConditions = [];
-    let params = [];
-    let paramCount = 1;
+
+    // Rows written before company scoping existed (or logged outside any
+    // company context, e.g. login) have company_id NULL — still only ever
+    // show the caller's own company's rows plus those, never another company's.
+    let whereConditions = ['(a.company_id = $1 OR a.company_id IS NULL)'];
+    let params = [req.companyId];
+    let paramCount = 2;
 
     if (action) {
       whereConditions.push(`a.action = $${paramCount}`);

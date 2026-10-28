@@ -3,28 +3,30 @@ const express = require('express');
 const router = express.Router();
 const Decimal = require('decimal.js');
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const { validate, schemas } = require('../middleware/validators');
 const { generatePayslipPDF } = require('../utils/payslipGenerator');
 const { saveStatement } = require('../utils/statementSaver');
 const { logError } = require('../utils/errorLogger');
 const { resolvePfPercentage } = require('../services/payroll/statutory');
+const { getCompanyProfile } = require('../utils/companyProfile');
 const { recordSalaryPayment } = require('../services/payments/paymentTransactionService');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('manage_payroll'));
 
 const { resolveAttendanceDays, getMissingAttendancePolicy } = require('../services/payroll/attendanceCalculator');
 
-async function calculatePayroll(employee_id, payroll_month, manual_days_worked, options = {}) {
+async function calculatePayroll(employee_id, payroll_month, manual_days_worked, options = {}, companyId) {
   // Get employee with salary structure
   const empResult = await query(
-    `SELECT e.*, ss.base_salary, ss.dearness_allowance, ss.house_rent_allowance, 
+    `SELECT e.*, ss.base_salary, ss.dearness_allowance, ss.house_rent_allowance,
       ss.other_allowances, ss.pf_percentage, ss.esi_applicable
      FROM employees e
-     LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
-     WHERE e.id = $1 AND e.is_active = 1`,
-    [employee_id]
+     LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id AND ss.company_id = e.company_id
+     WHERE e.id = $1 AND e.is_active = 1 AND e.company_id = $2`,
+    [employee_id, companyId]
   );
 
   if (empResult.rows.length === 0) throw new Error(`Employee ${employee_id} not found or inactive`);
@@ -50,7 +52,7 @@ async function calculatePayroll(employee_id, payroll_month, manual_days_worked, 
     absentDays = Math.max(0, periodDays - effectiveDays);
   } else {
     const missingPolicy = await getMissingAttendancePolicy(query);
-    const att = await resolveAttendanceDays(query, employee_id, payroll_month, missingPolicy, cutOffDate);
+    const att = await resolveAttendanceDays(query, employee_id, payroll_month, missingPolicy, cutOffDate, companyId);
     effectiveDays = att.payableDays;
     absentDays = Math.max(0, periodDays - effectiveDays);
     leaveDays = att.leaveDays;
@@ -58,8 +60,8 @@ async function calculatePayroll(employee_id, payroll_month, manual_days_worked, 
 
   // Fetch unsettled ledger entries
   const ledgerResult = await query(
-    `SELECT * FROM employee_ledger WHERE employee_id = $1 AND payroll_id IS NULL`,
-    [employee_id]
+    `SELECT * FROM employee_ledger WHERE employee_id = $1 AND payroll_id IS NULL AND company_id = $2`,
+    [employee_id, companyId]
   );
   const adjustments = ledgerResult.rows;
 
@@ -146,9 +148,9 @@ async function calculatePayroll(employee_id, payroll_month, manual_days_worked, 
 router.get('/', async (req, res) => {
   try {
     const { employee_id, month, status, page = 1, limit = 50 } = req.query;
-    let conditions = [];
-    let params = [];
-    let pc = 1;
+    let conditions = ['p.company_id = $1'];
+    let params = [req.companyId];
+    let pc = 2;
 
     if (employee_id) { conditions.push(`p.employee_id = $${pc}`); params.push(employee_id); pc++; }
     if (month) { conditions.push(`strftime('%Y-%m', p.payroll_month) = $${pc}`); params.push(month); pc++; }
@@ -161,7 +163,7 @@ router.get('/', async (req, res) => {
       `SELECT p.*, e.full_name as employee_name, e.employee_id as emp_id, e.designation,
         e.bank_account_number, e.bank_ifsc_code, e.bank_name
        FROM payroll p
-       JOIN employees e ON p.employee_id = e.id
+       JOIN employees e ON p.employee_id = e.id AND e.company_id = p.company_id
        ${where}
        ORDER BY p.payroll_month DESC, e.full_name ASC
        LIMIT $${pc} OFFSET $${pc + 1}`,
@@ -212,8 +214,8 @@ router.post('/calculate', validate(schemas.generatePayroll), async (req, res) =>
       try {
         // Check if payroll already exists
         const existing = await query(
-          "SELECT id, payment_status FROM payroll WHERE employee_id = $1 AND strftime('%Y-%m', payroll_month) = $2",
-          [empId, month.substring(0, 7)]
+          "SELECT id, payment_status FROM payroll WHERE employee_id = $1 AND strftime('%Y-%m', payroll_month) = $2 AND company_id = $3",
+          [empId, month.substring(0, 7), req.companyId]
         );
         if (existing.rows.length > 0) {
           if (existing.rows[0].payment_status === 'paid') {
@@ -221,31 +223,31 @@ router.post('/calculate', validate(schemas.generatePayroll), async (req, res) =>
             continue;
           } else {
             // Recalculate: delete the pending payroll
-            await query("UPDATE employee_ledger SET payroll_id = NULL WHERE payroll_id = $1", [existing.rows[0].id]);
-            await query("DELETE FROM payroll WHERE id = $1", [existing.rows[0].id]);
+            await query("UPDATE employee_ledger SET payroll_id = NULL WHERE payroll_id = $1 AND company_id = $2", [existing.rows[0].id, req.companyId]);
+            await query("DELETE FROM payroll WHERE id = $1 AND company_id = $2", [existing.rows[0].id, req.companyId]);
           }
         }
 
         const data = await calculatePayroll(empId, month, days_worked, {
           calculation_basis: req.body.calculation_basis,
           cut_off_day: req.body.cut_off_day
-        });
+        }, req.companyId);
         const inserted = await query(
           `INSERT INTO payroll (employee_id, payroll_month, days_in_month, days_worked, days_absent, days_leave,
             base_salary, da_amount, hra_amount, other_allowances, gross_salary, pf_deduction, esi_deduction,
-            tax_deduction, other_deductions, total_deductions, net_salary, created_by, adjustments)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,
+            tax_deduction, other_deductions, total_deductions, net_salary, created_by, adjustments, company_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
           [data.employee_id, data.payroll_month, data.days_in_month, data.days_worked, data.days_absent,
             data.days_leave, data.base_salary, data.da_amount, data.hra_amount, data.other_allowances,
             data.gross_salary, data.pf_deduction, data.esi_deduction, data.tax_deduction, data.other_deductions,
-            data.total_deductions, data.net_salary, req.user.userId, data.adjustments]
+            data.total_deductions, data.net_salary, req.user.userId, data.adjustments, req.companyId]
         );
-        
+
         // Mark ledger entries as settled
         if (data.adjustments && JSON.parse(data.adjustments).length > 0) {
           await query(
-            `UPDATE employee_ledger SET payroll_id = $1 WHERE employee_id = $2 AND payroll_id IS NULL`,
-            [inserted.rows[0].id, empId]
+            `UPDATE employee_ledger SET payroll_id = $1 WHERE employee_id = $2 AND payroll_id IS NULL AND company_id = $3`,
+            [inserted.rows[0].id, empId, req.companyId]
           );
         }
         
@@ -258,7 +260,7 @@ router.post('/calculate', validate(schemas.generatePayroll), async (req, res) =>
 
     // Auto-save payroll statements for each processed employee
     for (const payroll of results) {
-      const empRes = await query('SELECT full_name, employee_id as emp_id FROM employees WHERE id = $1', [payroll.employee_id]);
+      const empRes = await query('SELECT full_name, employee_id as emp_id FROM employees WHERE id = $1 AND company_id = $2', [payroll.employee_id, req.companyId]);
       const empName = empRes.rows.length > 0 ? empRes.rows[0].full_name : `Employee #${payroll.employee_id}`;
       const monthStr = new Date(payroll.payroll_month).toLocaleString('default', { month: 'short', year: 'numeric' });
 
@@ -274,7 +276,8 @@ router.post('/calculate', validate(schemas.generatePayroll), async (req, res) =>
         period_to: payroll.payroll_month,
         party_name: empName,
         party_id: payroll.employee_id,
-        generated_by: req.user.userId
+        generated_by: req.user.userId,
+        company_id: req.companyId
       });
     }
 
@@ -302,7 +305,8 @@ router.put('/:id/mark-paid', async (req, res) => {
           reference_type: 'payroll', reference_id: req.params.id,
           payment_date, payment_method, transaction_reference, bank_account_id, attachment_url
         },
-        req.user.userId
+        req.user.userId,
+        req.companyId
       );
     } catch (serviceErr) {
       if (serviceErr.message === 'Payroll record not found') {
@@ -313,9 +317,9 @@ router.put('/:id/mark-paid', async (req, res) => {
 
     const updated = await query(
       `SELECT p.*, e.full_name as employee_name, e.employee_id as emp_id
-       FROM payroll p JOIN employees e ON p.employee_id = e.id
-       WHERE p.id = $1`,
-      [req.params.id]
+       FROM payroll p JOIN employees e ON p.employee_id = e.id AND e.company_id = p.company_id
+       WHERE p.id = $1 AND p.company_id = $2`,
+      [req.params.id, req.companyId]
     );
     const payroll = updated.rows[0];
     const monthStr = new Date(payroll.payroll_month).toLocaleString('default', { month: 'short', year: 'numeric' });
@@ -333,7 +337,8 @@ router.put('/:id/mark-paid', async (req, res) => {
       period_to: payroll.payroll_month,
       party_name: payroll.employee_name,
       party_id: payroll.employee_id,
-      generated_by: req.user.userId
+      generated_by: req.user.userId,
+      company_id: req.companyId
     });
 
     res.json({ success: true, data: payroll, message: 'Payroll marked as paid' });
@@ -352,13 +357,13 @@ router.post('/preview', async (req, res) => {
     if (entries && Array.isArray(entries)) {
       // Batch preview mode
       const previews = await Promise.all(
-        entries.map(e => calculatePayroll(e.employee_id, month, e.days_worked))
+        entries.map(e => calculatePayroll(e.employee_id, month, e.days_worked, {}, req.companyId))
       );
       return res.json({ success: true, data: previews });
     }
 
     // Single employee mode
-    const data = await calculatePayroll(employee_id, month);
+    const data = await calculatePayroll(employee_id, month, undefined, {}, req.companyId);
     res.json({ success: true, data });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'payroll' });
@@ -374,10 +379,10 @@ router.get('/:id/pdf', async (req, res) => {
         e.pan_number, e.bank_account_number, e.bank_ifsc_code, e.bank_name,
         c.name as client_name
        FROM payroll p
-       JOIN employees e ON p.employee_id = e.id
-       LEFT JOIN clients c ON e.assigned_client_id = c.id
-       WHERE p.id = $1`,
-      [req.params.id]
+       JOIN employees e ON p.employee_id = e.id AND e.company_id = p.company_id
+       LEFT JOIN clients c ON e.assigned_client_id = c.id AND c.company_id = p.company_id
+       WHERE p.id = $1 AND p.company_id = $2`,
+      [req.params.id, req.companyId]
     );
 
     if (result.rows.length === 0) {
@@ -400,8 +405,7 @@ router.get('/:id/pdf', async (req, res) => {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="Payslip-${employee.full_name.replace(/\s+/g, '_')}-${new Date(payroll.payroll_month).toLocaleString('default', { month: 'short', year: 'numeric' })}.pdf"`);
 
-    const agencySetting = await query("SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'");
-    const agencySettings = agencySetting.rows.length > 0 ? JSON.parse(agencySetting.rows[0].setting_value) : null;
+    const agencySettings = await getCompanyProfile(req.companyId);
 
     generatePayslipPDF(payroll, employee, client, agencySettings,
       (chunk) => res.write(chunk),

@@ -41,30 +41,31 @@ function getFinancialYear(dateStr) {
   return `${year - 1}-${String(year).slice(2)}`;
 }
 
-async function getNextVoucherNumber(voucherType, voucherDate) {
+async function getNextVoucherNumber(voucherType, voucherDate, companyId) {
+  if (!companyId) throw new Error('getNextVoucherNumber requires companyId');
   const fy = getFinancialYear(voucherDate);
   const prefix = VOUCHER_PREFIXES[voucherType];
 
   // Upsert the counter
   await query(`
-    INSERT INTO voucher_counters (voucher_type, financial_year, last_number)
-    VALUES ($1, $2, 0)
+    INSERT INTO voucher_counters (company_id, voucher_type, financial_year, last_number)
+    VALUES ($1, $2, $3, 0)
     ON CONFLICT DO NOTHING
-  `, [voucherType, fy]);
+  `, [companyId, voucherType, fy]);
 
   // Increment
   await query(`
     UPDATE voucher_counters
     SET last_number = last_number + 1
-    WHERE voucher_type = $1 AND financial_year = $2
-  `, [voucherType, fy]);
+    WHERE company_id = $1 AND voucher_type = $2 AND financial_year = $3
+  `, [companyId, voucherType, fy]);
 
   // Return
   const result = await query(`
     SELECT last_number
     FROM voucher_counters
-    WHERE voucher_type = $1 AND financial_year = $2
-  `, [voucherType, fy]);
+    WHERE company_id = $1 AND voucher_type = $2 AND financial_year = $3
+  `, [companyId, voucherType, fy]);
 
   const num = result.rows[0].last_number;
   return `${prefix}/${fy}/${String(num).padStart(4, '0')}`;

@@ -1,12 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const { logError } = require('../utils/errorLogger');
 const { ensureLinkedLedgers, linkedEntries } = require('../utils/ledgerSources');
+const { getCompanyProfile } = require('../utils/companyProfile');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('manage_invoices', 'manage_expenses', 'view_reports', 'manage_payroll', 'view_vouchers'));
 
 /**
@@ -99,28 +101,29 @@ router.get('/parties', async (req, res) => {
     // Auto-sync any unlinked vendor names from expenses into the vendors table
     try {
       const unlinkedVendors = await query(`
-        SELECT DISTINCT TRIM(vendor_name) as vname 
-        FROM expenses 
-        WHERE vendor_name IS NOT NULL AND TRIM(vendor_name) != ''
-      `);
+        SELECT DISTINCT TRIM(vendor_name) as vname
+        FROM expenses
+        WHERE vendor_name IS NOT NULL AND TRIM(vendor_name) != '' AND company_id = $1
+      `, [req.companyId]);
       for (const row of (unlinkedVendors.rows || [])) {
         if (row.vname) {
-          const existing = await query(`SELECT id FROM vendors WHERE LOWER(TRIM(name)) = LOWER(TRIM($1))`, [row.vname]);
+          const existing = await query(`SELECT id FROM vendors WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND company_id = $2`, [row.vname, req.companyId]);
           if (existing.rows.length === 0) {
-            await query(`INSERT INTO vendors (name, is_active) VALUES ($1, 1)`, [row.vname]);
+            await query(`INSERT INTO vendors (name, is_active, company_id) VALUES ($1, 1, $2)`, [row.vname, req.companyId]);
           }
         }
       }
     } catch (_) {}
 
-    await ensureLinkedLedgers();
+    await ensureLinkedLedgers(req.companyId);
     const [clientsRes, vendorsRes, bankRes, ledgerRes] = await Promise.all([
-      query(`SELECT id, name, phone, email, address, city, state, postal_code, gst_number, is_active FROM clients ORDER BY name ASC`),
-      query(`SELECT id, name, contact_info, payment_terms_days, is_active FROM vendors ORDER BY name ASC`),
-      query(`SELECT id, account_name, account_type, account_number, bank_name, ifsc_code, is_active FROM bank_accounts ORDER BY account_name ASC`),
+      query(`SELECT id, name, phone, email, address, city, state, postal_code, gst_number, is_active FROM clients WHERE company_id = $1 ORDER BY name ASC`, [req.companyId]),
+      query(`SELECT id, name, contact_info, payment_terms_days, is_active FROM vendors WHERE company_id = $1 ORDER BY name ASC`, [req.companyId]),
+      query(`SELECT id, account_name, account_type, account_number, bank_name, ifsc_code, is_active FROM bank_accounts WHERE company_id = $1 ORDER BY account_name ASC`, [req.companyId]),
       query(`SELECT l.id, l.name, l.is_active, g.name AS group_name, g.nature
                FROM ledgers l JOIN ledger_groups g ON g.id = l.group_id
-              ORDER BY g.sort_order, l.name`).catch(() => ({ rows: [] }))
+              WHERE l.company_id = $1
+              ORDER BY g.sort_order, l.name`, [req.companyId]).catch(() => ({ rows: [] }))
     ]);
 
     res.json({
@@ -146,6 +149,7 @@ router.get('/parties', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const { party_type, party_id, from_date, to_date } = req.query;
+    const companyId = req.companyId;
 
     if (!party_type || !party_id) {
       return res.status(400).json({ success: false, message: 'party_type and party_id are required' });
@@ -162,9 +166,8 @@ router.get('/', async (req, res) => {
       gstin: '24AVYPP2011K1ZB'
     };
     try {
-      const agencyRes = await query(`SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'`);
-      if (agencyRes.rows.length > 0 && agencyRes.rows[0].setting_value) {
-        const parsed = JSON.parse(agencyRes.rows[0].setting_value);
+      const parsed = await getCompanyProfile(companyId);
+      if (parsed) {
         agency = {
           ...agency,
           name: parsed.agency_name || agency.name,
@@ -179,7 +182,7 @@ router.get('/', async (req, res) => {
 
     let primaryBankName = 'HDFC BANK';
     try {
-      const bankRes = await query(`SELECT account_name, bank_name FROM bank_accounts WHERE account_type = 'bank' AND is_active = 1 LIMIT 1`);
+      const bankRes = await query(`SELECT account_name, bank_name FROM bank_accounts WHERE account_type = 'bank' AND is_active = 1 AND company_id = $1 LIMIT 1`, [companyId]);
       if (bankRes.rows.length > 0) {
         primaryBankName = (bankRes.rows[0].bank_name || bankRes.rows[0].account_name || 'HDFC BANK').toUpperCase();
       }
@@ -188,7 +191,7 @@ router.get('/', async (req, res) => {
     // 2. Fetch Party Metadata
     let party = { id: party_id, name: '', address: '', city: '', phone: '', email: '', gst_number: '' };
     if (party_type === 'client') {
-      const cRes = await query(`SELECT * FROM clients WHERE id = $1`, [party_id]);
+      const cRes = await query(`SELECT * FROM clients WHERE id = $1 AND company_id = $2`, [party_id, companyId]);
       if (cRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Client not found' });
       const c = cRes.rows[0];
       party = {
@@ -205,7 +208,7 @@ router.get('/', async (req, res) => {
         account_type: 'Sundry Debtors (Client)'
       };
     } else if (party_type === 'vendor') {
-      const vRes = await query(`SELECT * FROM vendors WHERE id = $1`, [party_id]);
+      const vRes = await query(`SELECT * FROM vendors WHERE id = $1 AND company_id = $2`, [party_id, companyId]);
       if (vRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Vendor not found' });
       const v = vRes.rows[0];
       party = {
@@ -218,7 +221,7 @@ router.get('/', async (req, res) => {
         account_type: 'Sundry Creditors (Vendor / Supplier)'
       };
     } else if (party_type === 'bank_account') {
-      const bRes = await query(`SELECT * FROM bank_accounts WHERE id = $1`, [party_id]);
+      const bRes = await query(`SELECT * FROM bank_accounts WHERE id = $1 AND company_id = $2`, [party_id, companyId]);
       if (bRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Bank account not found' });
       const b = bRes.rows[0];
       party = {
@@ -235,7 +238,7 @@ router.get('/', async (req, res) => {
       const lRes = await query(`
         SELECT l.*, g.name AS group_name, g.nature
           FROM ledgers l JOIN ledger_groups g ON g.id = l.group_id
-         WHERE l.id = $1`, [party_id]);
+         WHERE l.id = $1 AND l.company_id = $2`, [party_id, companyId]);
       if (lRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Ledger not found' });
       const l = lRes.rows[0];
       party = {
@@ -261,12 +264,12 @@ router.get('/', async (req, res) => {
     if (party_type === 'client') {
       // Invoices (Debits to Client)
       const invRes = await query(`
-        SELECT 
-          id, invoice_number, invoice_date as tx_date, final_amount as amount, 
+        SELECT
+          id, invoice_number, invoice_date as tx_date, final_amount as amount,
           tax_rate, cgst_amount, sgst_amount, igst_amount, notes, created_at
-        FROM invoices 
-        WHERE client_id = $1 AND status != 'cancelled'
-      `, [party_id]);
+        FROM invoices
+        WHERE client_id = $1 AND status != 'cancelled' AND company_id = $2
+      `, [party_id, companyId]);
 
       invRes.rows.forEach(inv => {
         let taxSuffix = '';
@@ -289,15 +292,15 @@ router.get('/', async (req, res) => {
 
       // Payments received from Client (Credits to Client)
       const pmtRes = await query(`
-        SELECT 
-          p.id, p.payment_date as tx_date, p.amount_paid as amount, 
+        SELECT
+          p.id, p.payment_date as tx_date, p.amount_paid as amount,
           p.payment_method, p.transaction_reference, p.created_at, p.tds_deducted,
           ba.account_name as bank_acc_name, ba.bank_name as bank_name
         FROM payments p
         JOIN invoices i ON p.invoice_id = i.id
-        LEFT JOIN bank_accounts ba ON i.bank_account_id = ba.id
-        WHERE i.client_id = $1
-      `, [party_id]);
+        LEFT JOIN bank_accounts ba ON i.bank_account_id = ba.id AND ba.company_id = i.company_id
+        WHERE i.client_id = $1 AND p.company_id = $2
+      `, [party_id, companyId]);
 
       pmtRes.rows.forEach(pmt => {
         let bankName = (pmt.bank_name || pmt.bank_acc_name || primaryBankName).toUpperCase();
@@ -336,20 +339,21 @@ router.get('/', async (req, res) => {
 
       // Vouchers (Direct receipts, credit notes, debit notes, journals)
       const vchRes = await query(`
-        SELECT 
+        SELECT
           v.id, v.voucher_number, v.voucher_date as tx_date, v.voucher_type,
           v.amount, v.narration, v.created_at, v.party_side,
           debit_ba.account_name as debit_acc, debit_ba.bank_name as debit_bank,
           credit_ba.account_name as credit_acc, credit_ba.bank_name as credit_bank,
           dl.name as debit_led, cl.name as credit_led
         FROM vouchers v
-        LEFT JOIN bank_accounts debit_ba ON v.debit_account_id = debit_ba.id
-        LEFT JOIN bank_accounts credit_ba ON v.credit_account_id = credit_ba.id
-        LEFT JOIN ledgers dl ON v.debit_ledger_id = dl.id
-        LEFT JOIN ledgers cl ON v.credit_ledger_id = cl.id
+        LEFT JOIN bank_accounts debit_ba ON v.debit_account_id = debit_ba.id AND debit_ba.company_id = v.company_id
+        LEFT JOIN bank_accounts credit_ba ON v.credit_account_id = credit_ba.id AND credit_ba.company_id = v.company_id
+        LEFT JOIN ledgers dl ON v.debit_ledger_id = dl.id AND dl.company_id = v.company_id
+        LEFT JOIN ledgers cl ON v.credit_ledger_id = cl.id AND cl.company_id = v.company_id
         WHERE v.party_type = 'client' AND v.party_id = $1 AND v.status = 'posted'
           AND (v.reference_type != 'invoice' OR v.reference_id IS NULL)
-      `, [party_id]);
+          AND v.company_id = $2
+      `, [party_id, companyId]);
 
       vchRes.rows.forEach(v => {
         const amt = parseFloat(v.amount) || 0;
@@ -406,13 +410,13 @@ router.get('/', async (req, res) => {
     } else if (party_type === 'vendor') {
       // Expenses / Purchases from Vendor (Credits to Vendor)
       const expRes = await query(`
-        SELECT 
-          id, expense_date as tx_date, amount, category, 
+        SELECT
+          id, expense_date as tx_date, amount, category,
           receipt_number, description, created_at, payment_method
-        FROM expenses 
+        FROM expenses
         WHERE (vendor_id = $1 OR (vendor_id IS NULL AND LOWER(TRIM(vendor_name)) = LOWER(TRIM($2))))
-          AND status != 'rejected'
-      `, [party_id, party.name]);
+          AND status != 'rejected' AND company_id = $3
+      `, [party_id, party.name, companyId]);
 
       expRes.rows.forEach(exp => {
         const cat = (exp.category || 'Purchase').toUpperCase().replace(/_/g, ' ');
@@ -430,12 +434,12 @@ router.get('/', async (req, res) => {
 
       // Vendor Payments (Debits to Vendor)
       const vpRes = await query(`
-        SELECT 
-          vp.id, vp.payment_date as tx_date, vp.amount, 
+        SELECT
+          vp.id, vp.payment_date as tx_date, vp.amount,
           vp.payment_method, vp.reference_number, vp.created_at
         FROM vendor_payments vp
-        WHERE vp.vendor_id = $1
-      `, [party_id]);
+        WHERE vp.vendor_id = $1 AND vp.company_id = $2
+      `, [party_id, companyId]);
 
       vpRes.rows.forEach(vp => {
         let bankName = primaryBankName;
@@ -456,20 +460,21 @@ router.get('/', async (req, res) => {
 
       // Vouchers for Vendor (bank_payment, cash_payment, debit_note, credit_note, journal)
       const vchRes = await query(`
-        SELECT 
+        SELECT
           v.id, v.voucher_number, v.voucher_date as tx_date, v.voucher_type,
           v.amount, v.narration, v.created_at, v.party_side,
           debit_ba.account_name as debit_acc, debit_ba.bank_name as debit_bank,
           credit_ba.account_name as credit_acc, credit_ba.bank_name as credit_bank,
           dl.name as debit_led, cl.name as credit_led
         FROM vouchers v
-        LEFT JOIN bank_accounts debit_ba ON v.debit_account_id = debit_ba.id
-        LEFT JOIN bank_accounts credit_ba ON v.credit_account_id = credit_ba.id
-        LEFT JOIN ledgers dl ON v.debit_ledger_id = dl.id
-        LEFT JOIN ledgers cl ON v.credit_ledger_id = cl.id
+        LEFT JOIN bank_accounts debit_ba ON v.debit_account_id = debit_ba.id AND debit_ba.company_id = v.company_id
+        LEFT JOIN bank_accounts credit_ba ON v.credit_account_id = credit_ba.id AND credit_ba.company_id = v.company_id
+        LEFT JOIN ledgers dl ON v.debit_ledger_id = dl.id AND dl.company_id = v.company_id
+        LEFT JOIN ledgers cl ON v.credit_ledger_id = cl.id AND cl.company_id = v.company_id
         WHERE v.party_type = 'vendor' AND v.party_id = $1 AND v.status = 'posted'
           AND (v.reference_type != 'expense' OR v.reference_id IS NULL)
-      `, [party_id]);
+          AND v.company_id = $2
+      `, [party_id, companyId]);
 
       vchRes.rows.forEach(v => {
         const amt = parseFloat(v.amount) || 0;
@@ -525,19 +530,19 @@ router.get('/', async (req, res) => {
 
     } else if (party_type === 'bank_account') {
       const vchRes = await query(`
-        SELECT 
+        SELECT
           v.id, v.voucher_number, v.voucher_date as tx_date, v.voucher_type,
           v.amount, v.party_name, v.narration, v.created_at,
           v.debit_account_id, v.credit_account_id,
           debit_ba.account_name as debit_acc, credit_ba.account_name as credit_acc,
           dl.name as debit_led, cl.name as credit_led
         FROM vouchers v
-        LEFT JOIN bank_accounts debit_ba ON v.debit_account_id = debit_ba.id
-        LEFT JOIN bank_accounts credit_ba ON v.credit_account_id = credit_ba.id
-        LEFT JOIN ledgers dl ON v.debit_ledger_id = dl.id
-        LEFT JOIN ledgers cl ON v.credit_ledger_id = cl.id
-        WHERE (v.debit_account_id = $1 OR v.credit_account_id = $1) AND v.status = 'posted'
-      `, [party_id]);
+        LEFT JOIN bank_accounts debit_ba ON v.debit_account_id = debit_ba.id AND debit_ba.company_id = v.company_id
+        LEFT JOIN bank_accounts credit_ba ON v.credit_account_id = credit_ba.id AND credit_ba.company_id = v.company_id
+        LEFT JOIN ledgers dl ON v.debit_ledger_id = dl.id AND dl.company_id = v.company_id
+        LEFT JOIN ledgers cl ON v.credit_ledger_id = cl.id AND cl.company_id = v.company_id
+        WHERE (v.debit_account_id = $1 OR v.credit_account_id = $1) AND v.status = 'posted' AND v.company_id = $2
+      `, [party_id, companyId]);
 
       vchRes.rows.forEach(v => {
         const amt = parseFloat(v.amount) || 0;
@@ -545,8 +550,8 @@ router.get('/', async (req, res) => {
         allTransactions.push({
           id: `vch-${v.id}`,
           date: v.tx_date,
-          particulars: isDebit 
-            ? `To ${v.party_name || v.credit_acc || v.credit_led || 'Receipt'}` 
+          particulars: isDebit
+            ? `To ${v.party_name || v.credit_acc || v.credit_led || 'Receipt'}`
             : `By ${v.party_name || v.debit_acc || v.debit_led || 'Payment'}`,
           vch_type: v.voucher_type === 'contra' ? 'Contra' : (isDebit ? 'Receipt' : 'Payment'),
           vch_no: v.voucher_number,
@@ -564,12 +569,12 @@ router.get('/', async (req, res) => {
           debit_ba.account_name as debit_acc, credit_ba.account_name as credit_acc,
           dl.name as debit_led, cl.name as credit_led
         FROM vouchers v
-        LEFT JOIN bank_accounts debit_ba ON v.debit_account_id = debit_ba.id
-        LEFT JOIN bank_accounts credit_ba ON v.credit_account_id = credit_ba.id
-        LEFT JOIN ledgers dl ON v.debit_ledger_id = dl.id
-        LEFT JOIN ledgers cl ON v.credit_ledger_id = cl.id
-        WHERE (v.debit_ledger_id = $1 OR v.credit_ledger_id = $1) AND v.status = 'posted'
-      `, [party_id]);
+        LEFT JOIN bank_accounts debit_ba ON v.debit_account_id = debit_ba.id AND debit_ba.company_id = v.company_id
+        LEFT JOIN bank_accounts credit_ba ON v.credit_account_id = credit_ba.id AND credit_ba.company_id = v.company_id
+        LEFT JOIN ledgers dl ON v.debit_ledger_id = dl.id AND dl.company_id = v.company_id
+        LEFT JOIN ledgers cl ON v.credit_ledger_id = cl.id AND cl.company_id = v.company_id
+        WHERE (v.debit_ledger_id = $1 OR v.credit_ledger_id = $1) AND v.status = 'posted' AND v.company_id = $2
+      `, [party_id, companyId]);
 
       vchRes.rows.forEach(v => {
         const amt = parseFloat(v.amount) || 0;
@@ -590,7 +595,7 @@ router.get('/', async (req, res) => {
       });
 
       // Auto-linked ledgers: entries recorded in Expenses / Payroll / Bank Entries
-      allTransactions.push(...(await linkedEntries(party)));
+      allTransactions.push(...(await linkedEntries(party, companyId)));
     }
 
     // Sort all transactions chronologically
@@ -650,7 +655,7 @@ router.get('/', async (req, res) => {
     sortedFys.forEach((fy) => {
       const rawRows = fyMap.get(fy) || [];
       const segOpeningAmt = Math.abs(rollingBalance);
-      
+
       // Determine Opening side according to account classification:
       let segOpeningSide = 'debit';
       let segOpeningParticulars = 'To Opening Balance';

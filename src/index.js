@@ -150,6 +150,7 @@ const { initCronJobs } = require('./services/cronService');
 
 // Mount Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/companies', require('./routes/companies'));
 app.use('/api/employees', employeesRoutes);
 app.use('/api/clients', clientsRoutes);
 app.use('/api/attendance', attendanceRoutes);

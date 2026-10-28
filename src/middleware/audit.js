@@ -15,11 +15,12 @@ const logger = require('../utils/logger');
 async function logAudit(req, tableName, recordId, action, description, oldValues = null, newValues = null) {
   try {
     const userId = req.user ? req.user.userId : null;
+    const companyId = req.user?.companyId || null;
     const clientIp = req.ip || req.connection?.remoteAddress || null;
-    
+
     await query(
-      `INSERT INTO audit_logs (table_name, record_id, action, old_values, new_values, user_id, ip_address, description)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      `INSERT INTO audit_logs (table_name, record_id, action, old_values, new_values, user_id, ip_address, description, company_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         tableName,
         recordId,
@@ -28,7 +29,8 @@ async function logAudit(req, tableName, recordId, action, description, oldValues
         newValues ? JSON.stringify(newValues) : null,
         userId,
         clientIp,
-        description
+        description,
+        companyId
       ]
     );
   } catch (error) {

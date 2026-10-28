@@ -13,7 +13,7 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const { logError } = require('../utils/errorLogger');
 const gstService = require('../services/gst/gstComplianceService');
 const multer = require('multer');
@@ -41,6 +41,7 @@ const upload = multer({
 });
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('manage_expenses'));
 
 // A rejected/oversized file would otherwise leak a raw HTML error page since
@@ -66,13 +67,13 @@ function getFY(dateStr) {
   return d.getMonth() >= 3 ? `${y}-${String(y + 1).slice(2)}` : `${y - 1}-${String(y).slice(2)}`;
 }
 
-async function nextPoNumber(poDate) {
+async function nextPoNumber(poDate, companyId) {
   const fy = getFY(poDate || new Date());
   // MAX of numeric sequence across both PB- and legacy PO- prefixes
   const maxRes = await query(
     `SELECT MAX(CAST(SUBSTRING_INDEX(po_number, '-', -1) AS UNSIGNED)) as max_seq
-     FROM purchase_orders WHERE po_number LIKE $1 OR po_number LIKE $2`,
-    [`PB-${fy}-%`, `PO-${fy}-%`]
+     FROM purchase_orders WHERE company_id = $1 AND (po_number LIKE $2 OR po_number LIKE $3)`,
+    [companyId, `PB-${fy}-%`, `PO-${fy}-%`]
   );
   const next = (parseInt(maxRes.rows[0].max_seq) || 0) + 1;
   return `PB-${fy}-${String(next).padStart(4, '0')}`;
@@ -129,9 +130,9 @@ function describeBill(items, billRef) {
     : `${items[0]?.description || 'Purchase'} + ${items.length - 1} more item(s) (Bill ${billRef})`;
 }
 
-async function getLinkedExpense(po) {
+async function getLinkedExpense(po, companyId) {
   if (po.status !== 'billed' || !po.expense_id) return null;
-  const res = await query('SELECT * FROM expenses WHERE id = $1', [po.expense_id]);
+  const res = await query('SELECT * FROM expenses WHERE id = $1 AND company_id = $2', [po.expense_id, companyId]);
   return res.rows[0] || null;
 }
 
@@ -234,9 +235,9 @@ router.get('/', async (req, res) => {
   try {
     await ensureColumns();
     const { search, status, vendor_id, page = 1, limit = 20 } = req.query;
-    let conditions = [];
-    let params = [];
-    let pc = 1;
+    let conditions = ['po.company_id = $1'];
+    let params = [req.companyId];
+    let pc = 2;
 
     if (search) {
       conditions.push(`(po.po_number LIKE $${pc} OR po.bill_number LIKE $${pc} OR v.name LIKE $${pc})`);
@@ -280,8 +281,8 @@ router.get('/:id', async (req, res) => {
   try {
     const poRes = await query(
       `SELECT po.*, v.name as vendor_name, v.tax_id as vendor_gstin, v.contact_info as vendor_contact
-       FROM purchase_orders po JOIN vendors v ON po.vendor_id = v.id WHERE po.id = $1`,
-      [req.params.id]
+       FROM purchase_orders po JOIN vendors v ON po.vendor_id = v.id WHERE po.id = $1 AND po.company_id = $2`,
+      [req.params.id, req.companyId]
     );
     if (poRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase bill not found' });
     const items = await query(`SELECT * FROM purchase_order_items WHERE purchase_order_id = $1 ORDER BY id`, [req.params.id]);
@@ -318,11 +319,11 @@ router.post('/', uploadAttachment, async (req, res) => {
       }
     }
 
-    const vendorRes = await query('SELECT id FROM vendors WHERE id = $1', [vendor_id]);
+    const vendorRes = await query('SELECT id FROM vendors WHERE id = $1 AND company_id = $2', [vendor_id, req.companyId]);
     if (vendorRes.rows.length === 0) return res.status(400).json({ success: false, message: 'Vendor not found' });
 
     const totals = computeTotals(items, tax_type, tax_rate, round_off);
-    const poNumber = await nextPoNumber(po_date);
+    const poNumber = await nextPoNumber(po_date, req.companyId);
     const assignedBillNumber = (bill_number && String(bill_number).trim()) ? String(bill_number).trim() : poNumber;
     const attachment_url = req.file ? `/uploads/${req.file.filename}` : null;
 
@@ -330,8 +331,8 @@ router.post('/', uploadAttachment, async (req, res) => {
       `INSERT INTO purchase_orders
         (po_number, vendor_id, po_date, bill_number, state_of_supply, payment_type, payment_details, terms_conditions,
          status, subtotal, tax_type, tax_rate, cgst_amount, sgst_amount, igst_amount,
-         is_rcm_applicable, round_off, discount_amount, total_amount, notes, created_by, tds_rate, attachment_url)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+         is_rcm_applicable, round_off, discount_amount, total_amount, notes, created_by, tds_rate, attachment_url, company_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
        RETURNING *`,
       [
         poNumber, vendor_id, po_date, assignedBillNumber, state_of_supply || null,
@@ -340,7 +341,7 @@ router.post('/', uploadAttachment, async (req, res) => {
         totals.cgst_amount, totals.sgst_amount, totals.igst_amount,
         (is_rcm_applicable === true || is_rcm_applicable === 'true') ? 1 : 0,
         totals.round_off, totals.totalDiscount, totals.total_amount,
-        notes || null, req.user.userId, tds_rate || 0, attachment_url
+        notes || null, req.user.userId, tds_rate || 0, attachment_url, req.companyId
       ]
     );
     const po = poResult.rows[0];
@@ -348,12 +349,12 @@ router.post('/', uploadAttachment, async (req, res) => {
     for (const it of totals.items) {
       await query(
         `INSERT INTO purchase_order_items
-          (purchase_order_id, description, hsn_code, quantity, unit, unit_price, price_type, item_description, discount_percent, discount_amount, tax_rate, tax_amount, amount)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+          (purchase_order_id, description, hsn_code, quantity, unit, unit_price, price_type, item_description, discount_percent, discount_amount, tax_rate, tax_amount, amount, company_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
         [
           po.id, it.description, it.hsn_code || null, it.quantity, it.unit || 'NONE',
           it.unit_price, it.price_type, it.item_description || null,
-          it.discount_percent, it.discount_amount, it.tax_rate, it.tax_amount, it.amount
+          it.discount_percent, it.discount_amount, it.tax_rate, it.tax_amount, it.amount, req.companyId
         ]
       );
     }
@@ -374,12 +375,12 @@ router.post('/', uploadAttachment, async (req, res) => {
 router.put('/:id', uploadAttachment, async (req, res) => {
   try {
     await ensureColumns();
-    const existing = await query('SELECT * FROM purchase_orders WHERE id = $1', [req.params.id]);
+    const existing = await query('SELECT * FROM purchase_orders WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     if (existing.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase bill not found' });
     if (existing.rows[0].status === 'cancelled') {
       return res.status(400).json({ success: false, message: 'A cancelled purchase bill cannot be edited' });
     }
-    const linkedExpense = await getLinkedExpense(existing.rows[0]);
+    const linkedExpense = await getLinkedExpense(existing.rows[0], req.companyId);
 
     const {
       vendor_id, po_date, bill_number, state_of_supply,
@@ -395,6 +396,11 @@ router.put('/:id', uploadAttachment, async (req, res) => {
       if (!it.description || !(parseFloat(it.quantity) > 0) || !(parseFloat(it.unit_price) >= 0)) {
         return res.status(400).json({ success: false, message: 'Each item needs a description, a positive quantity, and a unit price' });
       }
+    }
+
+    if (vendor_id && String(vendor_id) !== String(existing.rows[0].vendor_id)) {
+      const vendorCheck = await query('SELECT id FROM vendors WHERE id = $1 AND company_id = $2', [vendor_id, req.companyId]);
+      if (vendorCheck.rows.length === 0) return res.status(400).json({ success: false, message: 'Vendor not found' });
     }
 
     const totals = computeTotals(items, tax_type, tax_rate, round_off);
@@ -433,7 +439,7 @@ router.put('/:id', uploadAttachment, async (req, res) => {
         is_rcm_applicable=$14, round_off=$15, discount_amount=$16,
         total_amount=$17, notes=$18, tds_rate=$19,
         attachment_url=$20, updated_at=CURRENT_TIMESTAMP
-       WHERE id=$21`,
+       WHERE id=$21 AND company_id=$22`,
       [
         vendor_id || existing.rows[0].vendor_id,
         po_date || existing.rows[0].po_date,
@@ -447,7 +453,7 @@ router.put('/:id', uploadAttachment, async (req, res) => {
         (is_rcm_applicable === true || is_rcm_applicable === 'true') ? 1 : 0,
         totals.round_off, totals.totalDiscount, totals.total_amount,
         notes !== undefined ? notes : existing.rows[0].notes,
-        tds_rate || 0, newAttachmentUrl, req.params.id
+        tds_rate || 0, newAttachmentUrl, req.params.id, req.companyId
       ]
     );
 
@@ -455,20 +461,20 @@ router.put('/:id', uploadAttachment, async (req, res) => {
     for (const it of totals.items) {
       await query(
         `INSERT INTO purchase_order_items
-          (purchase_order_id, description, hsn_code, quantity, unit, unit_price, price_type, item_description, discount_percent, discount_amount, tax_rate, tax_amount, amount)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+          (purchase_order_id, description, hsn_code, quantity, unit, unit_price, price_type, item_description, discount_percent, discount_amount, tax_rate, tax_amount, amount, company_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
         [
           req.params.id, it.description, it.hsn_code || null, it.quantity, it.unit || 'NONE',
           it.unit_price, it.price_type, it.item_description || null,
-          it.discount_percent, it.discount_amount, it.tax_rate, it.tax_amount, it.amount
+          it.discount_percent, it.discount_amount, it.tax_rate, it.tax_amount, it.amount, req.companyId
         ]
       );
     }
 
     const updated = await query(
       `SELECT po.*, v.name as vendor_name, v.tax_id as vendor_gstin, v.contact_info as vendor_contact
-       FROM purchase_orders po JOIN vendors v ON po.vendor_id = v.id WHERE po.id = $1`,
-      [req.params.id]
+       FROM purchase_orders po JOIN vendors v ON po.vendor_id = v.id WHERE po.id = $1 AND po.company_id = $2`,
+      [req.params.id, req.companyId]
     );
 
     if (linkedExpense) {
@@ -480,11 +486,11 @@ router.put('/:id', uploadAttachment, async (req, res) => {
       await query(
         `UPDATE expenses SET description=$1, amount=$2, vendor_id=$3, tax_type=$4, tax_rate=$5,
           cgst_amount=$6, sgst_amount=$7, igst_amount=$8, is_rcm_applicable=$9, tds_rate=$10, status=$11
-         WHERE id=$12`,
+         WHERE id=$12 AND company_id=$13`,
         [
           describeBill(totals.items, po.bill_number || po.po_number), po.total_amount, po.vendor_id,
           po.tax_type, po.tax_rate, po.cgst_amount, po.sgst_amount, po.igst_amount, po.is_rcm_applicable,
-          po.tds_rate || 0, expenseStatus, linkedExpense.id,
+          po.tds_rate || 0, expenseStatus, linkedExpense.id, req.companyId,
         ]
       );
     }
@@ -501,13 +507,13 @@ router.put('/:id', uploadAttachment, async (req, res) => {
 // removes its booked expense, as long as no vendor payment has been made on it.
 router.delete('/:id', async (req, res) => {
   try {
-    const existing = await query('SELECT id, status, expense_id FROM purchase_orders WHERE id = $1', [req.params.id]);
+    const existing = await query('SELECT id, status, expense_id FROM purchase_orders WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     if (existing.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase bill not found' });
-    const linkedExpense = await getLinkedExpense(existing.rows[0]);
+    const linkedExpense = await getLinkedExpense(existing.rows[0], req.companyId);
     if (linkedExpense) {
       const payments = await query(
-        `SELECT COUNT(*) as count FROM payment_transactions WHERE reference_type = 'expense' AND reference_id = $1`,
-        [linkedExpense.id]
+        `SELECT COUNT(*) as count FROM payment_transactions WHERE reference_type = 'expense' AND reference_id = $1 AND company_id = $2`,
+        [linkedExpense.id, req.companyId]
       );
       if ((parseFloat(linkedExpense.amount_paid) || 0) > 0 || parseInt(payments.rows[0].count) > 0) {
         return res.status(400).json({
@@ -516,10 +522,10 @@ router.delete('/:id', async (req, res) => {
         });
       }
     }
-    await query('DELETE FROM purchase_orders WHERE id = $1', [req.params.id]);
+    await query('DELETE FROM purchase_orders WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     if (linkedExpense) {
-      await query('DELETE FROM vendor_payments WHERE expense_id = $1', [linkedExpense.id]);
-      await query('DELETE FROM expenses WHERE id = $1', [linkedExpense.id]);
+      await query('DELETE FROM vendor_payments WHERE expense_id = $1 AND company_id = $2', [linkedExpense.id, req.companyId]);
+      await query('DELETE FROM expenses WHERE id = $1 AND company_id = $2', [linkedExpense.id, req.companyId]);
     }
     res.json({ success: true, message: 'Purchase bill deleted successfully' });
   } catch (error) {
@@ -537,8 +543,8 @@ router.delete('/:id', async (req, res) => {
 router.post('/:id/convert-to-bill', async (req, res) => {
   try {
     const poRes = await query(
-      `SELECT po.*, v.name as vendor_name FROM purchase_orders po JOIN vendors v ON po.vendor_id = v.id WHERE po.id = $1`,
-      [req.params.id]
+      `SELECT po.*, v.name as vendor_name FROM purchase_orders po JOIN vendors v ON po.vendor_id = v.id WHERE po.id = $1 AND po.company_id = $2`,
+      [req.params.id, req.companyId]
     );
     if (poRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase bill not found' });
     const po = poRes.rows[0];
@@ -553,17 +559,17 @@ router.post('/:id/convert-to-bill', async (req, res) => {
 
     const expenseResult = await query(
       `INSERT INTO expenses (expense_date, category, description, amount, payment_method, vendor_id, notes, created_by,
-        tax_type, tax_rate, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable, tds_rate)
-       VALUES ($1,'purchase_order',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+        tax_type, tax_rate, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable, tds_rate, company_id)
+       VALUES ($1,'purchase_order',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
       [expense_date || po.po_date, description, po.total_amount, payment_method || 'bank_transfer', po.vendor_id,
        `Converted from Purchase Bill ${billRef}`, req.user.userId,
-       po.tax_type, po.tax_rate, po.cgst_amount, po.sgst_amount, po.igst_amount, po.is_rcm_applicable, po.tds_rate || 0]
+       po.tax_type, po.tax_rate, po.cgst_amount, po.sgst_amount, po.igst_amount, po.is_rcm_applicable, po.tds_rate || 0, req.companyId]
     );
     const expense = expenseResult.rows[0];
 
     await query(
-      `UPDATE purchase_orders SET status='billed', expense_id=$1, updated_at=CURRENT_TIMESTAMP WHERE id=$2`,
-      [expense.id, po.id]
+      `UPDATE purchase_orders SET status='billed', expense_id=$1, updated_at=CURRENT_TIMESTAMP WHERE id=$2 AND company_id=$3`,
+      [expense.id, po.id, req.companyId]
     );
 
     res.json({ success: true, data: { purchase_order_id: po.id, expense }, message: `Purchase bill booked — now visible as an expense ready for Vendor Payments` });
@@ -577,12 +583,12 @@ router.post('/:id/convert-to-bill', async (req, res) => {
 // POST /api/purchase-orders/:id/cancel
 router.post('/:id/cancel', async (req, res) => {
   try {
-    const existing = await query('SELECT status FROM purchase_orders WHERE id = $1', [req.params.id]);
+    const existing = await query('SELECT status FROM purchase_orders WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     if (existing.rows.length === 0) return res.status(404).json({ success: false, message: 'Purchase bill not found' });
     if (existing.rows[0].status === 'billed') {
       return res.status(400).json({ success: false, message: 'This purchase bill has already been billed and cannot be cancelled' });
     }
-    await query(`UPDATE purchase_orders SET status='cancelled', updated_at=CURRENT_TIMESTAMP WHERE id=$1`, [req.params.id]);
+    await query(`UPDATE purchase_orders SET status='cancelled', updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND company_id=$2`, [req.params.id, req.companyId]);
     res.json({ success: true, message: 'Purchase bill cancelled' });
   } catch (error) {
     logError(error, req, { feature: 'purchase-orders' });

@@ -11,11 +11,12 @@ const express = require('express');
 const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/errorLogger');
 const router = express.Router();
 const Joi = require('joi');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const pfCalculator = require('../services/payroll/pfCalculator');
 const gratuityCalculator = require('../services/payroll/gratuityCalculator');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('manage_payroll'));
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -52,7 +53,7 @@ router.post('/pf/calculate', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════
 router.get('/pf/accounts', async (req, res) => {
   try {
-    const result = await pfCalculator.listAccounts(req.query);
+    const result = await pfCalculator.listAccounts(req.query, req.companyId);
     res.json({ success: true, ...result });
   } catch (err) {
     logError({
@@ -69,7 +70,7 @@ router.get('/pf/accounts', async (req, res) => {
 
 router.get('/pf/accounts/:empId', async (req, res) => {
   try {
-    const account = await pfCalculator.getAccount(parseInt(req.params.empId));
+    const account = await pfCalculator.getAccount(parseInt(req.params.empId), req.companyId);
     if (!account) return res.status(404).json({ success: false, message: 'PF account not found' });
     res.json({ success: true, data: account });
   } catch (err) {
@@ -96,7 +97,7 @@ router.post('/pf/accounts', async (req, res) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await pfCalculator.createAccount(value.employee_id, value);
+    const result = await pfCalculator.createAccount(value.employee_id, value, req.companyId);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -114,7 +115,7 @@ router.post('/pf/accounts', async (req, res) => {
 
 router.put('/pf/accounts/:empId', async (req, res) => {
   try {
-    const result = await pfCalculator.updateAccount(parseInt(req.params.empId), req.body);
+    const result = await pfCalculator.updateAccount(parseInt(req.params.empId), req.body, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -142,7 +143,7 @@ router.post('/pf/process', async (req, res) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await pfCalculator.processMonthly(value.employee_id, value.payroll_month, value.basic_salary);
+    const result = await pfCalculator.processMonthly(value.employee_id, value.payroll_month, value.basic_salary, null, req.companyId);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -165,7 +166,7 @@ router.post('/pf/batch-process', async (req, res) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await pfCalculator.batchProcess(value.payroll_month);
+    const result = await pfCalculator.batchProcess(value.payroll_month, req.companyId);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -182,7 +183,7 @@ router.post('/pf/batch-process', async (req, res) => {
 
 router.get('/pf/transactions/:empId', async (req, res) => {
   try {
-    const result = await pfCalculator.getTransactions(parseInt(req.params.empId), req.query);
+    const result = await pfCalculator.getTransactions(parseInt(req.params.empId), req.query, req.companyId);
     res.json({ success: true, ...result });
   } catch (err) {
     logError({
@@ -199,7 +200,7 @@ router.get('/pf/transactions/:empId', async (req, res) => {
 
 router.get('/pf/interest/:empId', async (req, res) => {
   try {
-    const result = await pfCalculator.calculateInterest(parseInt(req.params.empId), req.query.fy);
+    const result = await pfCalculator.calculateInterest(parseInt(req.params.empId), req.query.fy, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -230,7 +231,7 @@ router.post('/pf/loans', async (req, res) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await pfCalculator.createLoan(value.employee_id, value);
+    const result = await pfCalculator.createLoan(value.employee_id, value, req.companyId);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -247,7 +248,7 @@ router.post('/pf/loans', async (req, res) => {
 
 router.post('/pf/loans/:id/approve', async (req, res) => {
   try {
-    const result = await pfCalculator.approveLoan(parseInt(req.params.id), req.user.id);
+    const result = await pfCalculator.approveLoan(parseInt(req.params.id), req.user.userId, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -264,7 +265,7 @@ router.post('/pf/loans/:id/approve', async (req, res) => {
 
 router.get('/pf/loans/:empId', async (req, res) => {
   try {
-    const result = await pfCalculator.getLoans(parseInt(req.params.empId));
+    const result = await pfCalculator.getLoans(parseInt(req.params.empId), req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -310,7 +311,7 @@ router.post('/gratuity/calculate', async (req, res) => {
 
 router.get('/gratuity/estimate/:empId', async (req, res) => {
   try {
-    const result = await gratuityCalculator.getEmployeeEstimate(parseInt(req.params.empId));
+    const result = await gratuityCalculator.getEmployeeEstimate(parseInt(req.params.empId), req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     if (err.message === 'Employee not found') {
@@ -337,7 +338,7 @@ router.post('/gratuity/accrue', async (req, res) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await gratuityCalculator.processMonthlyAccrual(value.employee_id, value.accrual_month);
+    const result = await gratuityCalculator.processMonthlyAccrual(value.employee_id, value.accrual_month, req.companyId);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -360,7 +361,7 @@ router.post('/gratuity/batch-accrue', async (req, res) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await gratuityCalculator.batchAccrual(value.accrual_month);
+    const result = await gratuityCalculator.batchAccrual(value.accrual_month, req.companyId);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -385,7 +386,7 @@ router.post('/gratuity/payout', async (req, res) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await gratuityCalculator.createPayout(value.employee_id, value.separation_date, value.separation_reason);
+    const result = await gratuityCalculator.createPayout(value.employee_id, value.separation_date, value.separation_reason, req.companyId);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -403,7 +404,7 @@ router.post('/gratuity/payout', async (req, res) => {
 
 router.post('/gratuity/payout/:id/approve', async (req, res) => {
   try {
-    const result = await gratuityCalculator.approvePayout(parseInt(req.params.id), req.user.id);
+    const result = await gratuityCalculator.approvePayout(parseInt(req.params.id), req.user.userId, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -420,7 +421,7 @@ router.post('/gratuity/payout/:id/approve', async (req, res) => {
 
 router.post('/gratuity/payout/:id/pay', async (req, res) => {
   try {
-    const result = await gratuityCalculator.markPayoutPaid(parseInt(req.params.id), req.body);
+    const result = await gratuityCalculator.markPayoutPaid(parseInt(req.params.id), req.body, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -437,7 +438,7 @@ router.post('/gratuity/payout/:id/pay', async (req, res) => {
 
 router.get('/gratuity/payouts', async (req, res) => {
   try {
-    const result = await gratuityCalculator.getPayouts(req.query);
+    const result = await gratuityCalculator.getPayouts(req.query, req.companyId);
     res.json({ success: true, ...result });
   } catch (err) {
     logError({
@@ -454,7 +455,7 @@ router.get('/gratuity/payouts', async (req, res) => {
 
 router.get('/gratuity/liability-report', async (req, res) => {
   try {
-    const result = await gratuityCalculator.getLiabilityReport();
+    const result = await gratuityCalculator.getLiabilityReport(req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({

@@ -2,11 +2,12 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const Joi = require('joi');
 const { logError } = require('../utils/errorLogger');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('manage_bank_accounts', 'manage_payroll', 'manage_expenses', 'manage_invoices'));
 
 // Validation schemas
@@ -27,23 +28,23 @@ const bankAccountSchema = Joi.object({
 router.get('/', async (req, res) => {
   try {
     const { active_only } = req.query;
-    let where = '';
+    let where = 'WHERE ba.company_id = $1';
     if (active_only === 'true') {
-      where = 'WHERE ba.is_active = 1';
+      where += ' AND ba.is_active = 1';
     }
 
     const result = await query(`
       SELECT ba.*,
              u.full_name as created_by_name,
              COALESCE(ba.opening_balance, 0) +
-               COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.debit_account_id = ba.id AND v.status = 'posted'), 0) -
-               COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.credit_account_id = ba.id AND v.status = 'posted'), 0)
+               COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.debit_account_id = ba.id AND v.status = 'posted' AND v.company_id = ba.company_id), 0) -
+               COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.credit_account_id = ba.id AND v.status = 'posted' AND v.company_id = ba.company_id), 0)
                as current_balance
       FROM bank_accounts ba
       LEFT JOIN users u ON ba.created_by = u.id
       ${where}
       ORDER BY ba.account_type ASC, ba.account_name ASC
-    `);
+    `, [req.companyId]);
 
     res.json({ success: true, data: result.rows });
   } catch (error) {
@@ -62,12 +63,12 @@ router.get('/:id', async (req, res) => {
     const result = await query(`
       SELECT ba.*,
              COALESCE(ba.opening_balance, 0) +
-               COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.debit_account_id = ba.id AND v.status = 'posted'), 0) -
-               COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.credit_account_id = ba.id AND v.status = 'posted'), 0)
+               COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.debit_account_id = ba.id AND v.status = 'posted' AND v.company_id = ba.company_id), 0) -
+               COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.credit_account_id = ba.id AND v.status = 'posted' AND v.company_id = ba.company_id), 0)
                as current_balance
       FROM bank_accounts ba
-      WHERE ba.id = $1
-    `, [id]);
+      WHERE ba.id = $1 AND ba.company_id = $2
+    `, [id, req.companyId]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Account not found' });
@@ -97,10 +98,10 @@ router.post('/', async (req, res) => {
     }
 
     const result = await query(`
-      INSERT INTO bank_accounts (account_name, account_type, account_number, bank_name, ifsc_code, branch, opening_balance, opening_balance_date, created_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      INSERT INTO bank_accounts (account_name, account_type, account_number, bank_name, ifsc_code, branch, opening_balance, opening_balance_date, created_by, company_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
-    `, [account_name, account_type, account_number || null, bank_name || null, ifsc_code || null, branch || null, opening_balance, opening_balance_date || null, req.user.userId]);
+    `, [account_name, account_type, account_number || null, bank_name || null, ifsc_code || null, branch || null, opening_balance, opening_balance_date || null, req.user.userId, req.companyId]);
 
     res.status(201).json({ success: true, data: result.rows[0], message: 'Bank account created successfully' });
   } catch (error) {
@@ -131,14 +132,14 @@ router.put('/:id', async (req, res) => {
       UPDATE bank_accounts
       SET account_name = $1, account_type = $2, account_number = $3, bank_name = $4,
           ifsc_code = $5, branch = $6, opening_balance = $7, opening_balance_date = $8
-      WHERE id = $9
-    `, [account_name, account_type, account_number || null, bank_name || null, ifsc_code || null, branch || null, opening_balance, opening_balance_date || null, id]);
+      WHERE id = $9 AND company_id = $10
+    `, [account_name, account_type, account_number || null, bank_name || null, ifsc_code || null, branch || null, opening_balance, opening_balance_date || null, id, req.companyId]);
 
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Account not found' });
     }
 
-    const updated = await query('SELECT * FROM bank_accounts WHERE id=$1', [id]);
+    const updated = await query('SELECT * FROM bank_accounts WHERE id=$1 AND company_id=$2', [id, req.companyId]);
     res.json({ success: true, data: updated.rows[0], message: 'Account updated successfully' });
   } catch (error) {
     logError(error, req, { feature: 'bank-accounts' });
@@ -156,18 +157,18 @@ router.delete('/:id', async (req, res) => {
     // Check if account has posted vouchers
     const voucherCheck = await query(`
       SELECT COUNT(*) as count FROM vouchers
-      WHERE (debit_account_id = $1 OR credit_account_id = $1) AND status = 'posted'
-    `, [id]);
+      WHERE (debit_account_id = $1 OR credit_account_id = $1) AND status = 'posted' AND company_id = $2
+    `, [id, req.companyId]);
 
     const result = await query(`
-      UPDATE bank_accounts SET is_active = 0 WHERE id = $1
-    `, [id]);
+      UPDATE bank_accounts SET is_active = 0 WHERE id = $1 AND company_id = $2
+    `, [id, req.companyId]);
 
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Account not found' });
     }
 
-    const deleted = await query('SELECT * FROM bank_accounts WHERE id=$1', [id]);
+    const deleted = await query('SELECT * FROM bank_accounts WHERE id=$1 AND company_id=$2', [id, req.companyId]);
     const hasVouchers = voucherCheck.rows[0].count > 0;
     res.json({
       success: true,
@@ -191,8 +192,8 @@ router.get('/:id/statement', async (req, res) => {
     const { from_date, to_date } = req.query;
 
     let dateFilter = '';
-    const params = [id, id];
-    let pc = 3;
+    const params = [id, id, req.companyId];
+    let pc = 4;
 
     if (from_date) {
       dateFilter += ` AND v.voucher_date >= $${pc}`;
@@ -206,7 +207,7 @@ router.get('/:id/statement', async (req, res) => {
     }
 
     // Get account info
-    const accountResult = await query('SELECT * FROM bank_accounts WHERE id = $1', [id]);
+    const accountResult = await query('SELECT * FROM bank_accounts WHERE id = $1 AND company_id = $2', [id, req.companyId]);
     if (accountResult.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Account not found' });
     }
@@ -221,6 +222,7 @@ router.get('/:id/statement', async (req, res) => {
       LEFT JOIN users u ON v.created_by = u.id
       WHERE (v.debit_account_id = $1 OR v.credit_account_id = $2)
         AND v.status = 'posted'
+        AND v.company_id = $3
         ${dateFilter}
       ORDER BY v.voucher_date ASC, v.created_at ASC
     `, params);

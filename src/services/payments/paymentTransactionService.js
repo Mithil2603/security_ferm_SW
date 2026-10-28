@@ -15,6 +15,10 @@
  *   3. Updates the existing domain table(s) so current screens/reports are unaffected.
  *   4. Creates a posted `vouchers` row against the chosen bank/cash account, which
  *      is what makes Party Ledger / Vendor Ledger / Balance Sheet reflect it.
+ *
+ * Every exported function takes a trailing `companyId` argument (after `userId`)
+ * and every query against a company-scoped table filters/stamps it — this is the
+ * multi-company boundary for all money-movement writes in the app.
  */
 
 const { query } = require('../../database/connection');
@@ -35,13 +39,14 @@ function firstOfMonth(dateStr) {
 // Resolves a bank account when the caller (an older screen not yet updated with
 // a bank-account picker) doesn't supply one — mirrors the existing default-bank
 // fallback already used in src/routes/invoices.js, so vouchers still get created.
-async function resolveDefaultBankAccountId(paymentMethod) {
+async function resolveDefaultBankAccountId(paymentMethod, companyId) {
   if (paymentMethod === 'cash') {
-    const cash = await query("SELECT id FROM bank_accounts WHERE account_type = 'cash' AND is_active = 1 ORDER BY id ASC LIMIT 1");
+    const cash = await query("SELECT id FROM bank_accounts WHERE account_type = 'cash' AND is_active = 1 AND company_id = $1 ORDER BY id ASC LIMIT 1", [companyId]);
     if (cash.rows.length > 0) return cash.rows[0].id;
   }
   const bank = await query(
-    "SELECT id FROM bank_accounts WHERE account_number = '252528112019' OR (account_type = 'bank' AND is_active = 1) ORDER BY (account_number = '252528112019') DESC, id ASC LIMIT 1"
+    "SELECT id FROM bank_accounts WHERE company_id = $1 AND (account_number = '252528112019' OR (account_type = 'bank' AND is_active = 1)) ORDER BY (account_number = '252528112019') DESC, id ASC LIMIT 1",
+    [companyId]
   );
   return bank.rows.length > 0 ? bank.rows[0].id : null;
 }
@@ -66,7 +71,7 @@ function prorateTax(settlementAmount, remainingBase, remainingTaxable, remaining
   };
 }
 
-async function sumPriorTaxDetail(referenceType, referenceId) {
+async function sumPriorTaxDetail(referenceType, referenceId, companyId) {
   const result = await query(
     `SELECT COALESCE(SUM(ptd.taxable_value),0) as taxable_value,
             COALESCE(SUM(ptd.cgst_amount),0) as cgst_amount,
@@ -74,8 +79,8 @@ async function sumPriorTaxDetail(referenceType, referenceId) {
             COALESCE(SUM(ptd.igst_amount),0) as igst_amount
      FROM payment_tax_details ptd
      JOIN payment_transactions pt ON pt.id = ptd.payment_transaction_id
-     WHERE pt.reference_type = $1 AND pt.reference_id = $2`,
-    [referenceType, referenceId]
+     WHERE pt.reference_type = $1 AND pt.reference_id = $2 AND pt.company_id = $3`,
+    [referenceType, referenceId, companyId]
   );
   const r = result.rows[0] || {};
   return {
@@ -111,50 +116,50 @@ function salaryMonthLabel(month) {
   return new Date(y, m - 1, 1).toLocaleString('en-IN', { month: 'short', year: 'numeric' });
 }
 
-async function insertPaymentTransaction({ transaction_type, party_type, party_id, reference_type, reference_id, amount, payment_method, bank_account_id, payment_date, transaction_reference, attachment_url, notes, created_by, employee_bank_snapshot, salary_month, round_off }) {
+async function insertPaymentTransaction({ transaction_type, party_type, party_id, reference_type, reference_id, amount, payment_method, bank_account_id, payment_date, transaction_reference, attachment_url, notes, created_by, employee_bank_snapshot, salary_month, round_off }, companyId) {
   const result = await query(
     `INSERT INTO payment_transactions
       (transaction_type, party_type, party_id, reference_type, reference_id, amount,
-       payment_method, bank_account_id, payment_date, transaction_reference, attachment_url, notes, created_by, employee_bank_snapshot, salary_month, round_off)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       payment_method, bank_account_id, payment_date, transaction_reference, attachment_url, notes, created_by, employee_bank_snapshot, salary_month, round_off, company_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
      RETURNING *`,
     [transaction_type, party_type, party_id, reference_type || 'none', reference_id || null, amount,
-     payment_method, bank_account_id || null, payment_date, transaction_reference || null, attachment_url || null, notes || null, created_by, employee_bank_snapshot || null, salary_month || null, round_off || 0]
+     payment_method, bank_account_id || null, payment_date, transaction_reference || null, attachment_url || null, notes || null, created_by, employee_bank_snapshot || null, salary_month || null, round_off || 0, companyId]
   );
   return result.rows[0];
 }
 
-async function insertTaxDetail({ payment_transaction_id, party_type, party_id, taxable_value, tax_type, tax_rate, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable, tds_amount, payment_date }) {
+async function insertTaxDetail({ payment_transaction_id, party_type, party_id, taxable_value, tax_type, tax_rate, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable, tds_amount, payment_date }, companyId) {
   const total_gst_amount = Math.round((cgst_amount + sgst_amount + igst_amount) * 100) / 100;
   await query(
     `INSERT INTO payment_tax_details
       (payment_transaction_id, party_type, party_id, taxable_value, tax_type, tax_rate,
-       cgst_amount, sgst_amount, igst_amount, total_gst_amount, is_rcm_applicable, tds_amount, tax_period)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+       cgst_amount, sgst_amount, igst_amount, total_gst_amount, is_rcm_applicable, tds_amount, tax_period, company_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
     [payment_transaction_id, party_type, party_id, taxable_value, tax_type || 'none', tax_rate || 0,
-     cgst_amount, sgst_amount, igst_amount, total_gst_amount, is_rcm_applicable ? 1 : 0, tds_amount || 0, firstOfMonth(payment_date)]
+     cgst_amount, sgst_amount, igst_amount, total_gst_amount, is_rcm_applicable ? 1 : 0, tds_amount || 0, firstOfMonth(payment_date), companyId]
   );
 }
 
 // Creates a posted voucher for a completed payment. Returns the voucher id, or
 // null if there's no positive cash/bank movement to record (e.g. a payment
 // that's entirely TDS, with nothing physically transferred).
-async function createPostedVoucher({ direction, amount, bankAccountId, partyType, partyId, partyName, referenceType, referenceId, voucherDate, narration, createdBy }) {
+async function createPostedVoucher({ direction, amount, bankAccountId, partyType, partyId, partyName, referenceType, referenceId, voucherDate, narration, createdBy }, companyId) {
   if (!amount || amount <= 0 || !bankAccountId) return null;
 
-  const accountRes = await query('SELECT account_type FROM bank_accounts WHERE id = $1', [bankAccountId]);
+  const accountRes = await query('SELECT account_type FROM bank_accounts WHERE id = $1 AND company_id = $2', [bankAccountId, companyId]);
   const isCash = accountRes.rows[0]?.account_type === 'cash';
   const voucherType = direction === 'receipt'
     ? (isCash ? 'cash_receipt' : 'bank_receipt')
     : (isCash ? 'cash_payment' : 'bank_payment');
 
-  const voucherNumber = await getNextVoucherNumber(voucherType, voucherDate);
+  const voucherNumber = await getNextVoucherNumber(voucherType, voucherDate, companyId);
 
   const result = await query(
     `INSERT INTO vouchers
       (voucher_number, voucher_type, voucher_date, amount, debit_account_id, credit_account_id,
-       party_type, party_id, party_name, reference_type, reference_id, narration, status, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'posted',$13)
+       party_type, party_id, party_name, reference_type, reference_id, narration, status, created_by, company_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'posted',$13,$14)
      RETURNING id`,
     [
       voucherNumber, voucherType, voucherDate, amount,
@@ -162,7 +167,7 @@ async function createPostedVoucher({ direction, amount, bankAccountId, partyType
       direction === 'payment' ? bankAccountId : null,
       partyType, partyId || null, partyName || null,
       referenceType || 'none', referenceId || null, narration || null,
-      createdBy
+      createdBy, companyId
     ]
   );
   return result.rows[0].id;
@@ -217,22 +222,22 @@ function bankEntryVoucherFields({ kind, bank_account_id, to_account_id, narratio
   };
 }
 
-async function recordBankEntry(params, userId) {
+async function recordBankEntry(params, userId, companyId) {
   const { kind, bank_account_id, to_account_id, amount, entry_date, narration, transaction_ref } = params;
   const finalAmount = parseFloat(amount);
   if (isNaN(finalAmount) || finalAmount <= 0) throw new Error('A valid amount is required');
   const entryDate = entry_date || todayStr();
   const f = bankEntryVoucherFields({ kind, bank_account_id, to_account_id, narration });
 
-  const voucherNumber = await getNextVoucherNumber(f.voucherType, entryDate);
+  const voucherNumber = await getNextVoucherNumber(f.voucherType, entryDate, companyId);
   const result = await query(
     `INSERT INTO vouchers
       (voucher_number, voucher_type, voucher_date, amount, debit_account_id, credit_account_id,
-       party_type, narration, transaction_ref, status, created_by, category)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'posted',$10,$11)
+       party_type, narration, transaction_ref, status, created_by, category, company_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'posted',$10,$11,$12)
      RETURNING *`,
     [voucherNumber, f.voucherType, entryDate, finalAmount, f.debitAccountId || null, f.creditAccountId || null,
-     'other', f.narration, transaction_ref || null, userId, f.category]
+     'other', f.narration, transaction_ref || null, userId, f.category, companyId]
   );
   return result.rows[0];
 }
@@ -240,15 +245,15 @@ async function recordBankEntry(params, userId) {
 // ─────────────────────────────────────────────────────────────────────────────
 // CLIENT RECEIPT
 // ─────────────────────────────────────────────────────────────────────────────
-async function recordClientReceipt(params, userId) {
+async function recordClientReceipt(params, userId, companyId) {
   const {
     invoice_id, amount_paid, tds_deducted = 0, payment_date, payment_method,
     bank_account_id, transaction_reference, attachment_url, notes, round_off
   } = params;
 
   const invRes = await query(
-    'SELECT i.*, c.name as client_name FROM invoices i JOIN clients c ON i.client_id = c.id WHERE i.id = $1',
-    [invoice_id]
+    'SELECT i.*, c.name as client_name FROM invoices i JOIN clients c ON i.client_id = c.id WHERE i.id = $1 AND i.company_id = $2',
+    [invoice_id, companyId]
   );
   if (invRes.rows.length === 0) throw new Error('Invoice not found');
   const invoice = invRes.rows[0];
@@ -264,7 +269,7 @@ async function recordClientReceipt(params, userId) {
   }
 
   const payDate = payment_date || todayStr();
-  const resolvedBankAccountId = bank_account_id || await resolveDefaultBankAccountId(payment_method);
+  const resolvedBankAccountId = bank_account_id || await resolveDefaultBankAccountId(payment_method, companyId);
 
   // 1. payment_transactions
   const paymentTx = await insertPaymentTransaction({
@@ -272,10 +277,10 @@ async function recordClientReceipt(params, userId) {
     reference_type: 'invoice', reference_id: invoice_id, amount: parseFloat(amount_paid || 0),
     payment_method, bank_account_id: resolvedBankAccountId, payment_date: payDate,
     transaction_reference, attachment_url, notes, created_by: userId, round_off: roundOff
-  });
+  }, companyId);
 
   // 2. payment_tax_details — prorated from the invoice's own fixed GST split
-  const priorTax = await sumPriorTaxDetail('invoice', invoice_id);
+  const priorTax = await sumPriorTaxDetail('invoice', invoice_id, companyId);
   const remainingTaxable = parseFloat(invoice.amount_subtotal || 0) - priorTax.taxable_value;
   const remainingCgst = parseFloat(invoice.cgst_amount || 0) - priorTax.cgst_amount;
   const remainingSgst = parseFloat(invoice.sgst_amount || 0) - priorTax.sgst_amount;
@@ -286,15 +291,15 @@ async function recordClientReceipt(params, userId) {
     taxable_value: prorated.taxable_value, tax_type: invoice.tax_type, tax_rate: invoice.tax_rate,
     cgst_amount: prorated.cgst_amount, sgst_amount: prorated.sgst_amount, igst_amount: prorated.igst_amount,
     is_rcm_applicable: invoice.is_rcm_applicable, tds_amount: parseFloat(tds_deducted || 0), payment_date: payDate
-  });
+  }, companyId);
 
   // 3. legacy payments table — still the source read by the TDS/collections
   // reports and the invoice's payment-history list; keep it in lockstep.
   // Stamped with the payment_transaction_id so a later delete/undo can find
   // this exact row instead of guessing by invoice_id+date+amount.
   await query(
-    'INSERT INTO payments (invoice_id, payment_date, amount_paid, tds_deducted, payment_method, transaction_reference, notes, created_by, payment_transaction_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
-    [invoice_id, payDate, parseFloat(amount_paid || 0), parseFloat(tds_deducted || 0), payment_method, transaction_reference || null, notes || null, userId, paymentTx.id]
+    'INSERT INTO payments (invoice_id, payment_date, amount_paid, tds_deducted, payment_method, transaction_reference, notes, created_by, payment_transaction_id, company_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+    [invoice_id, payDate, parseFloat(amount_paid || 0), parseFloat(tds_deducted || 0), payment_method, transaction_reference || null, notes || null, userId, paymentTx.id, companyId]
   );
 
   // 4. update invoice
@@ -305,8 +310,8 @@ async function recordClientReceipt(params, userId) {
   const isPaid = newDue <= 0.5;
   const newStatus = isPaid ? 'paid' : 'partially_paid';
   await query(
-    'UPDATE invoices SET payment_received=$1, tds_deducted=$2, settlement_round_off=$3, payment_due=$4, status=$5, updated_at=CURRENT_TIMESTAMP WHERE id=$6',
-    [newReceived.toFixed(2), newTds.toFixed(2), newRoundOff.toFixed(2), (isPaid ? 0 : Math.max(0, newDue)).toFixed(2), newStatus, invoice_id]
+    'UPDATE invoices SET payment_received=$1, tds_deducted=$2, settlement_round_off=$3, payment_due=$4, status=$5, updated_at=CURRENT_TIMESTAMP WHERE id=$6 AND company_id=$7',
+    [newReceived.toFixed(2), newTds.toFixed(2), newRoundOff.toFixed(2), (isPaid ? 0 : Math.max(0, newDue)).toFixed(2), newStatus, invoice_id, companyId]
   );
 
   // 5. voucher
@@ -315,14 +320,14 @@ async function recordClientReceipt(params, userId) {
     partyType: 'client', partyId: invoice.client_id, partyName: invoice.client_name,
     referenceType: 'invoice', referenceId: invoice_id, voucherDate: payDate,
     narration: `Payment received - Invoice ${invoice.invoice_number}`, createdBy: userId
-  });
+  }, companyId);
   if (voucherId) {
     await query('UPDATE payment_transactions SET voucher_id = $1 WHERE id = $2', [voucherId, paymentTx.id]);
   }
 
   const updatedInvoice = await query(
-    'SELECT i.*, c.name as client_name, c.gst_number as client_gst FROM invoices i JOIN clients c ON i.client_id = c.id WHERE i.id = $1',
-    [invoice_id]
+    'SELECT i.*, c.name as client_name, c.gst_number as client_gst FROM invoices i JOIN clients c ON i.client_id = c.id WHERE i.id = $1 AND i.company_id = $2',
+    [invoice_id, companyId]
   );
   return { payment_transaction: { ...paymentTx, voucher_id: voucherId }, invoice: updatedInvoice.rows[0] };
 }
@@ -336,13 +341,13 @@ async function recordClientReceipt(params, userId) {
 // existing cancel convention in src/routes/vouchers.js rather than erasing
 // ledger history outright.
 // ─────────────────────────────────────────────────────────────────────────────
-async function deleteClientReceipt(paymentTransactionId, userId) {
-  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+async function deleteClientReceipt(paymentTransactionId, userId, companyId) {
+  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1 AND company_id = $2', [paymentTransactionId, companyId]);
   if (txRes.rows.length === 0) throw new Error('Payment not found');
   const tx = txRes.rows[0];
   if (tx.transaction_type !== 'client_receipt') throw new Error('Only client receipts can be deleted here');
 
-  const invRes = await query('SELECT * FROM invoices WHERE id = $1', [tx.reference_id]);
+  const invRes = await query('SELECT * FROM invoices WHERE id = $1 AND company_id = $2', [tx.reference_id, companyId]);
   if (invRes.rows.length === 0) throw new Error('The linked invoice could not be found');
   const invoice = invRes.rows[0];
 
@@ -361,8 +366,8 @@ async function deleteClientReceipt(paymentTransactionId, userId) {
     : newDue <= 0.5 ? 'paid' : (newReceived > 0.5 || newTds > 0.5 ? 'partially_paid' : 'sent');
 
   await query(
-    'UPDATE invoices SET payment_received=$1, tds_deducted=$2, settlement_round_off=$3, payment_due=$4, status=$5, updated_at=CURRENT_TIMESTAMP WHERE id=$6',
-    [newReceived.toFixed(2), newTds.toFixed(2), newRoundOff.toFixed(2), Math.max(0, newDue).toFixed(2), newStatus, invoice.id]
+    'UPDATE invoices SET payment_received=$1, tds_deducted=$2, settlement_round_off=$3, payment_due=$4, status=$5, updated_at=CURRENT_TIMESTAMP WHERE id=$6 AND company_id=$7',
+    [newReceived.toFixed(2), newTds.toFixed(2), newRoundOff.toFixed(2), Math.max(0, newDue).toFixed(2), newStatus, invoice.id, companyId]
   );
 
   await query('DELETE FROM payment_tax_details WHERE payment_transaction_id = $1', [paymentTransactionId]);
@@ -372,28 +377,28 @@ async function deleteClientReceipt(paymentTransactionId, userId) {
   const linkedDelete = await query('DELETE FROM payments WHERE payment_transaction_id = $1', [paymentTransactionId]);
   if (!linkedDelete.rowCount) {
     await query(
-      `DELETE FROM payments WHERE invoice_id=$1 AND payment_date=$2 AND amount_paid=$3 AND COALESCE(tds_deducted,0)=$4 LIMIT 1`,
-      [tx.reference_id, tx.payment_date, parseFloat(tx.amount || 0), tdsFromTx]
+      `DELETE FROM payments WHERE invoice_id=$1 AND payment_date=$2 AND amount_paid=$3 AND COALESCE(tds_deducted,0)=$4 AND company_id=$5 LIMIT 1`,
+      [tx.reference_id, tx.payment_date, parseFloat(tx.amount || 0), tdsFromTx, companyId]
     );
   }
 
   if (tx.voucher_id) {
     await query(
-      `UPDATE vouchers SET status='cancelled', cancelled_by=$1, cancellation_date=CURRENT_TIMESTAMP, cancellation_reason=$2 WHERE id=$3 AND status != 'cancelled'`,
-      [userId, 'Client receipt deleted', tx.voucher_id]
+      `UPDATE vouchers SET status='cancelled', cancelled_by=$1, cancellation_date=CURRENT_TIMESTAMP, cancellation_reason=$2 WHERE id=$3 AND company_id=$4 AND status != 'cancelled'`,
+      [userId, 'Client receipt deleted', tx.voucher_id, companyId]
     );
   }
 
-  await query('DELETE FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+  await query('DELETE FROM payment_transactions WHERE id = $1 AND company_id = $2', [paymentTransactionId, companyId]);
 
-  const updatedInvoice = await query('SELECT * FROM invoices WHERE id = $1', [invoice.id]);
+  const updatedInvoice = await query('SELECT * FROM invoices WHERE id = $1 AND company_id = $2', [invoice.id, companyId]);
   return { invoice: updatedInvoice.rows[0] };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VENDOR PAYMENT
 // ─────────────────────────────────────────────────────────────────────────────
-async function recordVendorPayment(params, userId) {
+async function recordVendorPayment(params, userId, companyId) {
   const {
     expense_id, amount, payment_date, payment_method, bank_account_id, reference_number,
     attachment_url, notes, tds_amount = 0, round_off,
@@ -401,7 +406,7 @@ async function recordVendorPayment(params, userId) {
     tax_type: manualTaxType, tax_rate: manualTaxRate, is_rcm_applicable: manualRcm
   } = params;
 
-  const expRes = await query('SELECT * FROM expenses WHERE id = $1', [expense_id]);
+  const expRes = await query('SELECT * FROM expenses WHERE id = $1 AND company_id = $2', [expense_id, companyId]);
   if (expRes.rows.length === 0) throw new Error('Expense not found');
   const expense = expRes.rows[0];
   if (expense.status === 'paid') throw new Error('Expense is already fully paid');
@@ -410,7 +415,7 @@ async function recordVendorPayment(params, userId) {
   if (isNaN(paymentAmount) || paymentAmount <= 0) throw new Error('Invalid payment amount');
 
   const payDate = payment_date || todayStr();
-  const resolvedBankAccountId = bank_account_id || await resolveDefaultBankAccountId(payment_method);
+  const resolvedBankAccountId = bank_account_id || await resolveDefaultBankAccountId(payment_method, companyId);
   const currentSettled = parseFloat(expense.amount_paid) || 0;
   const remainingBefore = parseFloat(expense.amount) - currentSettled;
   if (remainingBefore <= 0.5) {
@@ -428,14 +433,14 @@ async function recordVendorPayment(params, userId) {
     reference_type: 'expense', reference_id: expense_id, amount: paymentAmount,
     payment_method: payment_method || 'bank_transfer', bank_account_id: resolvedBankAccountId, payment_date: payDate,
     transaction_reference: reference_number, attachment_url, notes, created_by: userId, round_off: roundOff
-  });
+  }, companyId);
 
   // 2. payment_tax_details
   const hasBillTax = expense.tax_type && expense.tax_type !== 'none';
   let taxDetail;
   if (hasBillTax) {
     const billTaxableTotal = parseFloat(expense.amount) - parseFloat(expense.cgst_amount || 0) - parseFloat(expense.sgst_amount || 0) - parseFloat(expense.igst_amount || 0);
-    const priorTax = await sumPriorTaxDetail('expense', expense_id);
+    const priorTax = await sumPriorTaxDetail('expense', expense_id, companyId);
     const remainingTaxable = billTaxableTotal - priorTax.taxable_value;
     const remainingCgst = parseFloat(expense.cgst_amount || 0) - priorTax.cgst_amount;
     const remainingSgst = parseFloat(expense.sgst_amount || 0) - priorTax.sgst_amount;
@@ -457,29 +462,29 @@ async function recordVendorPayment(params, userId) {
     taxable_value: taxDetail.taxable_value, tax_type: taxDetail.tax_type, tax_rate: taxDetail.tax_rate,
     cgst_amount: taxDetail.cgst_amount, sgst_amount: taxDetail.sgst_amount, igst_amount: taxDetail.igst_amount,
     is_rcm_applicable: taxDetail.is_rcm_applicable, tds_amount: parseFloat(tds_amount || 0), payment_date: payDate
-  });
+  }, companyId);
 
   // 3. vendor_payments + expenses (existing behavior, extended for TDS settlement)
   await query(
-    `INSERT INTO vendor_payments (vendor_id, expense_id, payment_date, amount, payment_method, reference_number, notes, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [expense.vendor_id || 0, expense.id, payDate, paymentAmount, payment_method || 'bank_transfer', reference_number, notes, userId]
+    `INSERT INTO vendor_payments (vendor_id, expense_id, payment_date, amount, payment_method, reference_number, notes, created_by, company_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [expense.vendor_id || 0, expense.id, payDate, paymentAmount, payment_method || 'bank_transfer', reference_number, notes, userId, companyId]
   );
   const newSettled = currentSettled + totalSettlement;
   const newStatus = newSettled >= parseFloat(expense.amount) ? 'paid' : expense.status;
-  await query('UPDATE expenses SET amount_paid = $1, status = $2 WHERE id = $3', [newSettled, newStatus, expense.id]);
-  const updatedExpense = await query('SELECT * FROM expenses WHERE id = $1', [expense.id]);
+  await query('UPDATE expenses SET amount_paid = $1, status = $2 WHERE id = $3 AND company_id = $4', [newSettled, newStatus, expense.id, companyId]);
+  const updatedExpense = await query('SELECT * FROM expenses WHERE id = $1 AND company_id = $2', [expense.id, companyId]);
   const finalExpense = updatedExpense.rows[0];
 
   // 4. voucher (net cash/bank movement only — TDS withheld never physically moves)
-  const vendorRes = await query('SELECT name FROM vendors WHERE id = $1', [expense.vendor_id]);
+  const vendorRes = await query('SELECT name FROM vendors WHERE id = $1 AND company_id = $2', [expense.vendor_id, companyId]);
   const vendorName = vendorRes.rows[0]?.name || expense.vendor_name || 'Unknown';
   const voucherId = await createPostedVoucher({
     direction: 'payment', amount: paymentAmount, bankAccountId: resolvedBankAccountId,
     partyType: 'vendor', partyId: expense.vendor_id, partyName: vendorName,
     referenceType: 'expense', referenceId: expense_id, voucherDate: payDate,
     narration: `Payment to vendor - ${expense.description}`, createdBy: userId
-  });
+  }, companyId);
   if (voucherId) {
     await query('UPDATE payment_transactions SET voucher_id = $1 WHERE id = $2', [voucherId, paymentTx.id]);
   }
@@ -502,7 +507,8 @@ async function recordVendorPayment(params, userId) {
       tax_amount: taxDetail.cgst_amount + taxDetail.sgst_amount + taxDetail.igst_amount,
       party_name: vendorName,
       party_id: expense.vendor_id,
-      generated_by: userId
+      generated_by: userId,
+      company_id: companyId
     });
   } catch (e) {
     logger.error('Failed to archive vendor payment statement:', e);
@@ -514,7 +520,7 @@ async function recordVendorPayment(params, userId) {
 // ─────────────────────────────────────────────────────────────────────────────
 // SALARY PAYMENT
 // ─────────────────────────────────────────────────────────────────────────────
-async function recordSalaryPayment(params, userId) {
+async function recordSalaryPayment(params, userId, companyId) {
   const {
     reference_type, reference_id, employee_id, amount, payment_date, payment_method,
     bank_account_id, transaction_reference, attachment_url, notes, employee_bank_snapshot, salary_month
@@ -532,15 +538,15 @@ async function recordSalaryPayment(params, userId) {
   if (!reference_id) {
     if (!employee_id) throw new Error('employee_id is required for a direct salary payment');
     if (!salaryMonth) throw new Error('Please select the month this salary is for');
-    const empRes = await query('SELECT full_name FROM employees WHERE id = $1', [employee_id]);
+    const empRes = await query('SELECT full_name FROM employees WHERE id = $1 AND company_id = $2', [employee_id, companyId]);
     if (empRes.rows.length === 0) throw new Error('Employee not found');
     employeeId = employee_id;
     employeeName = empRes.rows[0].full_name;
     netSalary = null;
   } else if (reference_type === 'salary_slip') {
     const salarySlipService = require('../payroll/salarySlipService');
-    const slip = await salarySlipService.markPaid(reference_id, { payment_date: payDate, payment_method, transaction_reference });
-    const empRes = await query('SELECT full_name FROM employees WHERE id = $1', [slip.employee_id]);
+    const slip = await salarySlipService.markPaid(reference_id, { payment_date: payDate, payment_method, transaction_reference }, companyId);
+    const empRes = await query('SELECT full_name FROM employees WHERE id = $1 AND company_id = $2', [slip.employee_id, companyId]);
     employeeId = slip.employee_id;
     employeeName = empRes.rows[0]?.full_name || 'Employee';
     payrollId = slip.payroll_id || null;
@@ -552,19 +558,19 @@ async function recordSalaryPayment(params, userId) {
     // reflect the disbursement regardless of which screen recorded it.
     if (payrollId) {
       await query(
-        `UPDATE payroll SET payment_status='paid', payment_date=$1, payment_method=$2, transaction_reference=$3, updated_at=CURRENT_TIMESTAMP WHERE id=$4`,
-        [payDate, payment_method, transaction_reference, payrollId]
+        `UPDATE payroll SET payment_status='paid', payment_date=$1, payment_method=$2, transaction_reference=$3, updated_at=CURRENT_TIMESTAMP WHERE id=$4 AND company_id=$5`,
+        [payDate, payment_method, transaction_reference, payrollId, companyId]
       );
     }
   } else {
-    const payrollRes = await query('SELECT * FROM payroll WHERE id = $1', [reference_id]);
+    const payrollRes = await query('SELECT * FROM payroll WHERE id = $1 AND company_id = $2', [reference_id, companyId]);
     if (payrollRes.rows.length === 0) throw new Error('Payroll record not found');
     const payroll = payrollRes.rows[0];
     await query(
-      `UPDATE payroll SET payment_status='paid', payment_date=$1, payment_method=$2, transaction_reference=$3, updated_at=CURRENT_TIMESTAMP WHERE id=$4`,
-      [payDate, payment_method, transaction_reference, reference_id]
+      `UPDATE payroll SET payment_status='paid', payment_date=$1, payment_method=$2, transaction_reference=$3, updated_at=CURRENT_TIMESTAMP WHERE id=$4 AND company_id=$5`,
+      [payDate, payment_method, transaction_reference, reference_id, companyId]
     );
-    const empRes = await query('SELECT full_name FROM employees WHERE id = $1', [payroll.employee_id]);
+    const empRes = await query('SELECT full_name FROM employees WHERE id = $1 AND company_id = $2', [payroll.employee_id, companyId]);
     employeeId = payroll.employee_id;
     employeeName = empRes.rows[0]?.full_name || 'Employee';
     payrollId = payroll.id;
@@ -572,16 +578,16 @@ async function recordSalaryPayment(params, userId) {
     salaryMonth = normalizeSalaryMonth(payroll.payroll_month) || salaryMonth;
 
     // Keep salary_slips in sync too, if a matching slip exists for this payroll row.
-    const slipRes = await query('SELECT id FROM salary_slips WHERE payroll_id = $1', [payrollId]);
+    const slipRes = await query('SELECT id FROM salary_slips WHERE payroll_id = $1 AND company_id = $2', [payrollId, companyId]);
     if (slipRes.rows.length > 0 && slipRes.rows[0].status !== 'paid') {
       await query(
-        `UPDATE salary_slips SET status='paid', paid_at=$1, payment_method=$2, transaction_reference=$3, updated_at=CURRENT_TIMESTAMP WHERE id=$4`,
-        [payDate, payment_method, transaction_reference, slipRes.rows[0].id]
+        `UPDATE salary_slips SET status='paid', paid_at=$1, payment_method=$2, transaction_reference=$3, updated_at=CURRENT_TIMESTAMP WHERE id=$4 AND company_id=$5`,
+        [payDate, payment_method, transaction_reference, slipRes.rows[0].id, companyId]
       );
     }
   }
 
-  const resolvedBankAccountId = bank_account_id || await resolveDefaultBankAccountId(payment_method);
+  const resolvedBankAccountId = bank_account_id || await resolveDefaultBankAccountId(payment_method, companyId);
   const finalAmount = parseFloat(amount) || parseFloat(netSalary) || 0;
   if (finalAmount <= 0) throw new Error('A valid payment amount is required');
   if (!salaryMonth) salaryMonth = normalizeSalaryMonth(payDate);
@@ -593,14 +599,14 @@ async function recordSalaryPayment(params, userId) {
     reference_type: finalReferenceType, reference_id: finalReferenceId, amount: finalAmount,
     payment_method, bank_account_id: resolvedBankAccountId, payment_date: payDate,
     transaction_reference, attachment_url, notes, created_by: userId, employee_bank_snapshot, salary_month: salaryMonth
-  });
+  }, companyId);
 
   const voucherId = await createPostedVoucher({
     direction: 'payment', amount: finalAmount, bankAccountId: resolvedBankAccountId,
     partyType: 'employee', partyId: employeeId, partyName: employeeName,
     referenceType: finalReferenceType, referenceId: finalReferenceId, voucherDate: payDate,
     narration: `Salary payment - ${employeeName} (${salaryMonthLabel(salaryMonth)})`, createdBy: userId
-  });
+  }, companyId);
   if (voucherId) {
     await query('UPDATE payment_transactions SET voucher_id = $1 WHERE id = $2', [voucherId, paymentTx.id]);
   }
@@ -611,15 +617,15 @@ async function recordSalaryPayment(params, userId) {
 // ─────────────────────────────────────────────────────────────────────────────
 // DELETE VENDOR PAYMENT — reverses vendor payment on expense and cancels voucher
 // ─────────────────────────────────────────────────────────────────────────────
-async function deleteVendorPayment(paymentTransactionId, userId) {
-  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+async function deleteVendorPayment(paymentTransactionId, userId, companyId) {
+  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1 AND company_id = $2', [paymentTransactionId, companyId]);
   if (txRes.rows.length === 0) throw new Error('Payment not found');
   const tx = txRes.rows[0];
   if (tx.transaction_type !== 'vendor_payment') throw new Error('Only vendor payments can be deleted here');
 
   let updatedExpense = null;
   if (tx.reference_id) {
-    const expRes = await query('SELECT * FROM expenses WHERE id = $1', [tx.reference_id]);
+    const expRes = await query('SELECT * FROM expenses WHERE id = $1 AND company_id = $2', [tx.reference_id, companyId]);
     if (expRes.rows.length > 0) {
       const expense = expRes.rows[0];
       const taxRes = await query(
@@ -640,16 +646,16 @@ async function deleteVendorPayment(paymentTransactionId, userId) {
       }
 
       await query(
-        'UPDATE expenses SET amount_paid=$1, status=$2 WHERE id=$3',
-        [newSettled, newStatus, expense.id]
+        'UPDATE expenses SET amount_paid=$1, status=$2 WHERE id=$3 AND company_id=$4',
+        [newSettled, newStatus, expense.id, companyId]
       );
 
       await query(
-        'DELETE FROM vendor_payments WHERE expense_id = $1 AND payment_date = $2 AND amount = $3 LIMIT 1',
-        [tx.reference_id, tx.payment_date, parseFloat(tx.amount || 0)]
+        'DELETE FROM vendor_payments WHERE expense_id = $1 AND payment_date = $2 AND amount = $3 AND company_id = $4 LIMIT 1',
+        [tx.reference_id, tx.payment_date, parseFloat(tx.amount || 0), companyId]
       );
 
-      const expUpdated = await query('SELECT * FROM expenses WHERE id = $1', [expense.id]);
+      const expUpdated = await query('SELECT * FROM expenses WHERE id = $1 AND company_id = $2', [expense.id, companyId]);
       updatedExpense = expUpdated.rows[0];
     }
   }
@@ -658,12 +664,12 @@ async function deleteVendorPayment(paymentTransactionId, userId) {
 
   if (tx.voucher_id) {
     await query(
-      `UPDATE vouchers SET status='cancelled', cancelled_by=$1, cancellation_date=CURRENT_TIMESTAMP, cancellation_reason=$2 WHERE id=$3 AND status != 'cancelled'`,
-      [userId, 'Vendor payment deleted', tx.voucher_id]
+      `UPDATE vouchers SET status='cancelled', cancelled_by=$1, cancellation_date=CURRENT_TIMESTAMP, cancellation_reason=$2 WHERE id=$3 AND company_id=$4 AND status != 'cancelled'`,
+      [userId, 'Vendor payment deleted', tx.voucher_id, companyId]
     );
   }
 
-  await query('DELETE FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+  await query('DELETE FROM payment_transactions WHERE id = $1 AND company_id = $2', [paymentTransactionId, companyId]);
 
   return { expense: updatedExpense };
 }
@@ -671,8 +677,8 @@ async function deleteVendorPayment(paymentTransactionId, userId) {
 // ─────────────────────────────────────────────────────────────────────────────
 // DELETE SALARY PAYMENT — reverses salary payment on payroll/slips and cancels voucher
 // ─────────────────────────────────────────────────────────────────────────────
-async function deleteSalaryPayment(paymentTransactionId, userId) {
-  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+async function deleteSalaryPayment(paymentTransactionId, userId, companyId) {
+  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1 AND company_id = $2', [paymentTransactionId, companyId]);
   if (txRes.rows.length === 0) throw new Error('Payment not found');
   const tx = txRes.rows[0];
   if (tx.transaction_type !== 'salary_payment') throw new Error('Only salary payments can be deleted here');
@@ -680,50 +686,50 @@ async function deleteSalaryPayment(paymentTransactionId, userId) {
   if (tx.reference_id) {
     if (tx.reference_type === 'salary_slip') {
       await query(
-        `UPDATE salary_slips SET status='approved', paid_at=NULL, payment_method=NULL, transaction_reference=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=$1`,
-        [tx.reference_id]
+        `UPDATE salary_slips SET status='approved', paid_at=NULL, payment_method=NULL, transaction_reference=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND company_id=$2`,
+        [tx.reference_id, companyId]
       );
-      const slipRes = await query('SELECT payroll_id FROM salary_slips WHERE id = $1', [tx.reference_id]);
+      const slipRes = await query('SELECT payroll_id FROM salary_slips WHERE id = $1 AND company_id = $2', [tx.reference_id, companyId]);
       const payrollId = slipRes.rows[0]?.payroll_id;
       if (payrollId) {
         await query(
-          `UPDATE payroll SET payment_status='pending', payment_date=NULL, payment_method=NULL, transaction_reference=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=$1`,
-          [payrollId]
+          `UPDATE payroll SET payment_status='pending', payment_date=NULL, payment_method=NULL, transaction_reference=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND company_id=$2`,
+          [payrollId, companyId]
         );
       }
     } else if (tx.reference_type === 'payroll') {
       await query(
-        `UPDATE payroll SET payment_status='pending', payment_date=NULL, payment_method=NULL, transaction_reference=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=$1`,
-        [tx.reference_id]
+        `UPDATE payroll SET payment_status='pending', payment_date=NULL, payment_method=NULL, transaction_reference=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND company_id=$2`,
+        [tx.reference_id, companyId]
       );
       await query(
-        `UPDATE salary_slips SET status='approved', paid_at=NULL, payment_method=NULL, transaction_reference=NULL, updated_at=CURRENT_TIMESTAMP WHERE payroll_id=$1`,
-        [tx.reference_id]
+        `UPDATE salary_slips SET status='approved', paid_at=NULL, payment_method=NULL, transaction_reference=NULL, updated_at=CURRENT_TIMESTAMP WHERE payroll_id=$1 AND company_id=$2`,
+        [tx.reference_id, companyId]
       );
     }
   }
 
   if (tx.voucher_id) {
     await query(
-      `UPDATE vouchers SET status='cancelled', cancelled_by=$1, cancellation_date=CURRENT_TIMESTAMP, cancellation_reason=$2 WHERE id=$3 AND status != 'cancelled'`,
-      [userId, 'Salary payment deleted', tx.voucher_id]
+      `UPDATE vouchers SET status='cancelled', cancelled_by=$1, cancellation_date=CURRENT_TIMESTAMP, cancellation_reason=$2 WHERE id=$3 AND company_id=$4 AND status != 'cancelled'`,
+      [userId, 'Salary payment deleted', tx.voucher_id, companyId]
     );
   }
 
-  await query('DELETE FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+  await query('DELETE FROM payment_transactions WHERE id = $1 AND company_id = $2', [paymentTransactionId, companyId]);
   return { success: true };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // UPDATE CLIENT RECEIPT
 // ─────────────────────────────────────────────────────────────────────────────
-async function updateClientReceipt(paymentTransactionId, params, userId) {
-  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+async function updateClientReceipt(paymentTransactionId, params, userId, companyId) {
+  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1 AND company_id = $2', [paymentTransactionId, companyId]);
   if (txRes.rows.length === 0) throw new Error('Payment not found');
   const tx = txRes.rows[0];
   if (tx.transaction_type !== 'client_receipt') throw new Error('Only client receipts can be updated here');
 
-  const invRes = await query('SELECT i.*, c.name as client_name FROM invoices i JOIN clients c ON i.client_id = c.id WHERE i.id = $1', [tx.reference_id]);
+  const invRes = await query('SELECT i.*, c.name as client_name FROM invoices i JOIN clients c ON i.client_id = c.id WHERE i.id = $1 AND i.company_id = $2', [tx.reference_id, companyId]);
   if (invRes.rows.length === 0) throw new Error('Linked invoice not found');
   const invoice = invRes.rows[0];
 
@@ -758,13 +764,13 @@ async function updateClientReceipt(paymentTransactionId, params, userId) {
     `UPDATE payment_transactions SET
       amount = $1, payment_date = $2, payment_method = $3, bank_account_id = $4,
       transaction_reference = $5, notes = $6, attachment_url = $7, round_off = $8
-     WHERE id = $9`,
-    [newAmount, payDate, payMethod, bankAccId, txRef, notes, attachUrl, newRoundOff, paymentTransactionId]
+     WHERE id = $9 AND company_id = $10`,
+    [newAmount, payDate, payMethod, bankAccId, txRef, notes, attachUrl, newRoundOff, paymentTransactionId, companyId]
   );
 
   // 2. Update payment_tax_details
   await query('DELETE FROM payment_tax_details WHERE payment_transaction_id = $1', [paymentTransactionId]);
-  const priorTax = await sumPriorTaxDetail('invoice', invoice.id);
+  const priorTax = await sumPriorTaxDetail('invoice', invoice.id, companyId);
   const remainingTaxable = parseFloat(invoice.amount_subtotal || 0) - priorTax.taxable_value;
   const remainingCgst = parseFloat(invoice.cgst_amount || 0) - priorTax.cgst_amount;
   const remainingSgst = parseFloat(invoice.sgst_amount || 0) - priorTax.sgst_amount;
@@ -775,23 +781,23 @@ async function updateClientReceipt(paymentTransactionId, params, userId) {
     taxable_value: prorated.taxable_value, tax_type: invoice.tax_type, tax_rate: invoice.tax_rate,
     cgst_amount: prorated.cgst_amount, sgst_amount: prorated.sgst_amount, igst_amount: prorated.igst_amount,
     is_rcm_applicable: invoice.is_rcm_applicable, tds_amount: newTds, payment_date: payDate
-  });
+  }, companyId);
 
   // 3. Update legacy payments table
   const legacyUpdate = await query(
     `UPDATE payments SET
       payment_date = $1, amount_paid = $2, tds_deducted = $3, payment_method = $4,
       transaction_reference = $5, notes = $6
-     WHERE payment_transaction_id = $7`,
-    [payDate, newAmount, newTds, payMethod, txRef, notes, paymentTransactionId]
+     WHERE payment_transaction_id = $7 AND company_id = $8`,
+    [payDate, newAmount, newTds, payMethod, txRef, notes, paymentTransactionId, companyId]
   );
   if (!legacyUpdate.rowCount) {
     await query(
       `UPDATE payments SET
         payment_date = $1, amount_paid = $2, tds_deducted = $3, payment_method = $4,
         transaction_reference = $5, notes = $6, payment_transaction_id = $7
-       WHERE invoice_id = $8 AND amount_paid = $9 LIMIT 1`,
-      [payDate, newAmount, newTds, payMethod, txRef, notes, paymentTransactionId, invoice.id, oldAmount]
+       WHERE invoice_id = $8 AND amount_paid = $9 AND company_id = $10 LIMIT 1`,
+      [payDate, newAmount, newTds, payMethod, txRef, notes, paymentTransactionId, invoice.id, oldAmount, companyId]
     );
   }
 
@@ -803,21 +809,21 @@ async function updateClientReceipt(paymentTransactionId, params, userId) {
   const isPaid = newDue <= 0.5;
   const newStatus = isPaid ? 'paid' : 'partially_paid';
   await query(
-    'UPDATE invoices SET payment_received=$1, tds_deducted=$2, settlement_round_off=$3, payment_due=$4, status=$5, updated_at=CURRENT_TIMESTAMP WHERE id=$6',
-    [newReceived.toFixed(2), newTotalTds.toFixed(2), newTotalRoundOff.toFixed(2), (isPaid ? 0 : Math.max(0, newDue)).toFixed(2), newStatus, invoice.id]
+    'UPDATE invoices SET payment_received=$1, tds_deducted=$2, settlement_round_off=$3, payment_due=$4, status=$5, updated_at=CURRENT_TIMESTAMP WHERE id=$6 AND company_id=$7',
+    [newReceived.toFixed(2), newTotalTds.toFixed(2), newTotalRoundOff.toFixed(2), (isPaid ? 0 : Math.max(0, newDue)).toFixed(2), newStatus, invoice.id, companyId]
   );
 
   // 5. Update or recreate Voucher
   if (tx.voucher_id) {
-    const accountRes = bankAccId ? await query('SELECT account_type FROM bank_accounts WHERE id = $1', [bankAccId]) : { rows: [] };
+    const accountRes = bankAccId ? await query('SELECT account_type FROM bank_accounts WHERE id = $1 AND company_id = $2', [bankAccId, companyId]) : { rows: [] };
     const isCash = accountRes.rows[0]?.account_type === 'cash';
     const voucherType = isCash ? 'cash_receipt' : 'bank_receipt';
     await query(
       `UPDATE vouchers SET
         voucher_date = $1, amount = $2, debit_account_id = $3, voucher_type = $4,
         narration = $5, transaction_ref = $6, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $7`,
-      [payDate, newAmount, bankAccId, voucherType, `Payment received - Invoice ${invoice.invoice_number}`, txRef, tx.voucher_id]
+       WHERE id = $7 AND company_id = $8`,
+      [payDate, newAmount, bankAccId, voucherType, `Payment received - Invoice ${invoice.invoice_number}`, txRef, tx.voucher_id, companyId]
     );
   } else if (newAmount > 0 && bankAccId) {
     const voucherId = await createPostedVoucher({
@@ -825,26 +831,26 @@ async function updateClientReceipt(paymentTransactionId, params, userId) {
       partyType: 'client', partyId: invoice.client_id, partyName: invoice.client_name,
       referenceType: 'invoice', referenceId: invoice.id, voucherDate: payDate,
       narration: `Payment received - Invoice ${invoice.invoice_number}`, createdBy: userId
-    });
+    }, companyId);
     if (voucherId) {
       await query('UPDATE payment_transactions SET voucher_id = $1 WHERE id = $2', [voucherId, paymentTransactionId]);
     }
   }
 
-  const updatedTx = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+  const updatedTx = await query('SELECT * FROM payment_transactions WHERE id = $1 AND company_id = $2', [paymentTransactionId, companyId]);
   return updatedTx.rows[0];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // UPDATE VENDOR PAYMENT
 // ─────────────────────────────────────────────────────────────────────────────
-async function updateVendorPayment(paymentTransactionId, params, userId) {
-  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+async function updateVendorPayment(paymentTransactionId, params, userId, companyId) {
+  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1 AND company_id = $2', [paymentTransactionId, companyId]);
   if (txRes.rows.length === 0) throw new Error('Payment not found');
   const tx = txRes.rows[0];
   if (tx.transaction_type !== 'vendor_payment') throw new Error('Only vendor payments can be updated here');
 
-  const expRes = await query('SELECT * FROM expenses WHERE id = $1', [tx.reference_id]);
+  const expRes = await query('SELECT * FROM expenses WHERE id = $1 AND company_id = $2', [tx.reference_id, companyId]);
   if (expRes.rows.length === 0) throw new Error('Expense not found');
   const expense = expRes.rows[0];
 
@@ -879,8 +885,8 @@ async function updateVendorPayment(paymentTransactionId, params, userId) {
     `UPDATE payment_transactions SET
       amount = $1, payment_date = $2, payment_method = $3, bank_account_id = $4,
       transaction_reference = $5, notes = $6, attachment_url = $7, round_off = $8
-     WHERE id = $9`,
-    [newAmount, payDate, payMethod, bankAccId, txRef, notes, attachUrl, newRoundOff, paymentTransactionId]
+     WHERE id = $9 AND company_id = $10`,
+    [newAmount, payDate, payMethod, bankAccId, txRef, notes, attachUrl, newRoundOff, paymentTransactionId, companyId]
   );
 
   // 2. Update payment_tax_details
@@ -889,7 +895,7 @@ async function updateVendorPayment(paymentTransactionId, params, userId) {
   let taxDetail;
   if (hasBillTax) {
     const billTaxableTotal = parseFloat(expense.amount) - parseFloat(expense.cgst_amount || 0) - parseFloat(expense.sgst_amount || 0) - parseFloat(expense.igst_amount || 0);
-    const priorTax = await sumPriorTaxDetail('expense', expense.id);
+    const priorTax = await sumPriorTaxDetail('expense', expense.id, companyId);
     const remainingTaxable = billTaxableTotal - priorTax.taxable_value;
     const remainingCgst = parseFloat(expense.cgst_amount || 0) - priorTax.cgst_amount;
     const remainingSgst = parseFloat(expense.sgst_amount || 0) - priorTax.sgst_amount;
@@ -904,44 +910,44 @@ async function updateVendorPayment(paymentTransactionId, params, userId) {
     taxable_value: taxDetail.taxable_value, tax_type: taxDetail.tax_type, tax_rate: taxDetail.tax_rate,
     cgst_amount: taxDetail.cgst_amount, sgst_amount: taxDetail.sgst_amount, igst_amount: taxDetail.igst_amount,
     is_rcm_applicable: taxDetail.is_rcm_applicable, tds_amount: newTds, payment_date: payDate
-  });
+  }, companyId);
 
   // 3. Update vendor_payments
   await query(
     `UPDATE vendor_payments SET
       payment_date = $1, amount = $2, payment_method = $3, reference_number = $4, notes = $5
-     WHERE expense_id = $6 AND payment_date = $7 AND amount = $8 LIMIT 1`,
-    [payDate, newAmount, payMethod, txRef, notes, expense.id, tx.payment_date, oldAmount]
+     WHERE expense_id = $6 AND payment_date = $7 AND amount = $8 AND company_id = $9 LIMIT 1`,
+    [payDate, newAmount, payMethod, txRef, notes, expense.id, tx.payment_date, oldAmount, companyId]
   );
 
   // 4. Update expenses
   const newSettled = baseSettled + newTotalSettlement;
   const newStatus = newSettled >= parseFloat(expense.amount) - 0.01 ? 'paid' : (expense.approver_id ? 'approved' : 'pending');
-  await query('UPDATE expenses SET amount_paid = $1, status = $2 WHERE id = $3', [newSettled, newStatus, expense.id]);
+  await query('UPDATE expenses SET amount_paid = $1, status = $2 WHERE id = $3 AND company_id = $4', [newSettled, newStatus, expense.id, companyId]);
 
   // 5. Update voucher
   if (tx.voucher_id) {
-    const accountRes = bankAccId ? await query('SELECT account_type FROM bank_accounts WHERE id = $1', [bankAccId]) : { rows: [] };
+    const accountRes = bankAccId ? await query('SELECT account_type FROM bank_accounts WHERE id = $1 AND company_id = $2', [bankAccId, companyId]) : { rows: [] };
     const isCash = accountRes.rows[0]?.account_type === 'cash';
     const voucherType = isCash ? 'cash_payment' : 'bank_payment';
     await query(
       `UPDATE vouchers SET
         voucher_date = $1, amount = $2, credit_account_id = $3, voucher_type = $4,
         narration = $5, transaction_ref = $6, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $7`,
-      [payDate, newAmount, bankAccId, voucherType, `Payment to vendor - ${expense.description}`, txRef, tx.voucher_id]
+       WHERE id = $7 AND company_id = $8`,
+      [payDate, newAmount, bankAccId, voucherType, `Payment to vendor - ${expense.description}`, txRef, tx.voucher_id, companyId]
     );
   }
 
-  const updatedTx = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+  const updatedTx = await query('SELECT * FROM payment_transactions WHERE id = $1 AND company_id = $2', [paymentTransactionId, companyId]);
   return updatedTx.rows[0];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // UPDATE SALARY PAYMENT
 // ─────────────────────────────────────────────────────────────────────────────
-async function updateSalaryPayment(paymentTransactionId, params, userId) {
-  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+async function updateSalaryPayment(paymentTransactionId, params, userId, companyId) {
+  const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1 AND company_id = $2', [paymentTransactionId, companyId]);
   if (txRes.rows.length === 0) throw new Error('Payment not found');
   const tx = txRes.rows[0];
   if (tx.transaction_type !== 'salary_payment') throw new Error('Only salary payments can be updated here');
@@ -967,21 +973,21 @@ async function updateSalaryPayment(paymentTransactionId, params, userId) {
     `UPDATE payment_transactions SET
       amount = $1, payment_date = $2, payment_method = $3, bank_account_id = $4,
       transaction_reference = $5, notes = $6, attachment_url = $7, employee_bank_snapshot = $8, salary_month = $9
-     WHERE id = $10`,
-    [newAmount, payDate, payMethod, bankAccId, txRef, notes, attachUrl, empBankSnap, salaryMonth, paymentTransactionId]
+     WHERE id = $10 AND company_id = $11`,
+    [newAmount, payDate, payMethod, bankAccId, txRef, notes, attachUrl, empBankSnap, salaryMonth, paymentTransactionId, companyId]
   );
 
   // Update voucher
   if (tx.voucher_id) {
-    const accountRes = bankAccId ? await query('SELECT account_type FROM bank_accounts WHERE id = $1', [bankAccId]) : { rows: [] };
+    const accountRes = bankAccId ? await query('SELECT account_type FROM bank_accounts WHERE id = $1 AND company_id = $2', [bankAccId, companyId]) : { rows: [] };
     const isCash = accountRes.rows[0]?.account_type === 'cash';
     const voucherType = isCash ? 'cash_payment' : 'bank_payment';
     await query(
       `UPDATE vouchers SET
         voucher_date = $1, amount = $2, credit_account_id = $3, voucher_type = $4,
         transaction_ref = $5, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $6`,
-      [payDate, newAmount, bankAccId, voucherType, txRef, tx.voucher_id]
+       WHERE id = $6 AND company_id = $7`,
+      [payDate, newAmount, bankAccId, voucherType, txRef, tx.voucher_id, companyId]
     );
   }
 
@@ -989,26 +995,26 @@ async function updateSalaryPayment(paymentTransactionId, params, userId) {
   if (tx.reference_id) {
     if (tx.reference_type === 'payroll') {
       await query(
-        `UPDATE payroll SET payment_date=$1, payment_method=$2, transaction_reference=$3, updated_at=CURRENT_TIMESTAMP WHERE id=$4`,
-        [payDate, payMethod, txRef, tx.reference_id]
+        `UPDATE payroll SET payment_date=$1, payment_method=$2, transaction_reference=$3, updated_at=CURRENT_TIMESTAMP WHERE id=$4 AND company_id=$5`,
+        [payDate, payMethod, txRef, tx.reference_id, companyId]
       );
     } else if (tx.reference_type === 'salary_slip') {
       await query(
-        `UPDATE salary_slips SET paid_at=$1, payment_method=$2, transaction_reference=$3, updated_at=CURRENT_TIMESTAMP WHERE id=$4`,
-        [payDate, payMethod, txRef, tx.reference_id]
+        `UPDATE salary_slips SET paid_at=$1, payment_method=$2, transaction_reference=$3, updated_at=CURRENT_TIMESTAMP WHERE id=$4 AND company_id=$5`,
+        [payDate, payMethod, txRef, tx.reference_id, companyId]
       );
     }
   }
 
-  const updatedTx = await query('SELECT * FROM payment_transactions WHERE id = $1', [paymentTransactionId]);
+  const updatedTx = await query('SELECT * FROM payment_transactions WHERE id = $1 AND company_id = $2', [paymentTransactionId, companyId]);
   return updatedTx.rows[0];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // UPDATE BANK ENTRY (voucher)
 // ─────────────────────────────────────────────────────────────────────────────
-async function updateBankEntry(voucherId, params, userId) {
-  const existingRes = await query('SELECT * FROM vouchers WHERE id = $1', [voucherId]);
+async function updateBankEntry(voucherId, params, userId, companyId) {
+  const existingRes = await query('SELECT * FROM vouchers WHERE id = $1 AND company_id = $2', [voucherId, companyId]);
   if (existingRes.rows.length === 0) throw new Error('Bank entry not found');
   const existing = existingRes.rows[0];
   if (!['journal', 'contra'].includes(existing.voucher_type)) {
@@ -1025,10 +1031,10 @@ async function updateBankEntry(voucherId, params, userId) {
     `UPDATE vouchers SET
       voucher_type = $1, voucher_date = $2, amount = $3, debit_account_id = $4,
       credit_account_id = $5, narration = $6, transaction_ref = $7, category = $8, updated_at = CURRENT_TIMESTAMP
-     WHERE id = $9
+     WHERE id = $9 AND company_id = $10
      RETURNING *`,
     [f.voucherType, entryDate, finalAmount, f.debitAccountId || null, f.creditAccountId || null,
-     f.narration, transaction_ref || null, f.category, voucherId]
+     f.narration, transaction_ref || null, f.category, voucherId, companyId]
   );
   return result.rows[0];
 }
@@ -1036,8 +1042,8 @@ async function updateBankEntry(voucherId, params, userId) {
 // ─────────────────────────────────────────────────────────────────────────────
 // DELETE BANK ENTRY (voucher)
 // ─────────────────────────────────────────────────────────────────────────────
-async function deleteBankEntry(voucherId, userId) {
-  const existing = await query('SELECT * FROM vouchers WHERE id = $1', [voucherId]);
+async function deleteBankEntry(voucherId, userId, companyId) {
+  const existing = await query('SELECT * FROM vouchers WHERE id = $1 AND company_id = $2', [voucherId, companyId]);
   if (existing.rows.length === 0) throw new Error('Bank entry not found');
   if (!['journal', 'contra'].includes(existing.rows[0].voucher_type)) {
     throw new Error('This voucher is not a bank entry');
@@ -1047,8 +1053,8 @@ async function deleteBankEntry(voucherId, userId) {
   }
 
   await query(
-    `UPDATE vouchers SET status='cancelled', cancelled_by=$1, cancellation_date=CURRENT_TIMESTAMP, cancellation_reason=$2, updated_at=CURRENT_TIMESTAMP WHERE id=$3`,
-    [userId, 'Bank entry deleted', voucherId]
+    `UPDATE vouchers SET status='cancelled', cancelled_by=$1, cancellation_date=CURRENT_TIMESTAMP, cancellation_reason=$2, updated_at=CURRENT_TIMESTAMP WHERE id=$3 AND company_id=$4`,
+    [userId, 'Bank entry deleted', voucherId, companyId]
   );
   return { success: true };
 }

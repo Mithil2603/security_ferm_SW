@@ -10,11 +10,12 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const Joi = require('joi');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const workflowEngine = require('../services/workflows/workflowEngine');
 const { logError } = require('../utils/errorLogger');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Workflow Rules
@@ -22,7 +23,7 @@ router.use(authMiddleware);
 
 router.get('/rules', requirePermission('manage_settings'), async (req, res) => {
   try {
-    const rules = await workflowEngine.getRules(req.query);
+    const rules = await workflowEngine.getRules(req.query, req.companyId);
     res.json({ success: true, data: rules });
   } catch (err) {
     logError({
@@ -39,7 +40,7 @@ router.get('/rules', requirePermission('manage_settings'), async (req, res) => {
 
 router.get('/rules/:id', async (req, res) => {
   try {
-    const rule = await workflowEngine.getRule(parseInt(req.params.id));
+    const rule = await workflowEngine.getRule(parseInt(req.params.id), req.companyId);
     if (!rule) return res.status(404).json({ success: false, message: 'Rule not found' });
     res.json({ success: true, data: rule });
   } catch (err) {
@@ -71,7 +72,7 @@ router.post('/rules', requirePermission('manage_settings'), async (req, res) => 
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
     value.created_by = req.user.id;
-    const result = await workflowEngine.createRule(value);
+    const result = await workflowEngine.createRule(value, req.companyId);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -88,7 +89,7 @@ router.post('/rules', requirePermission('manage_settings'), async (req, res) => 
 
 router.put('/rules/:id', requirePermission('manage_settings'), async (req, res) => {
   try {
-    const result = await workflowEngine.updateRule(parseInt(req.params.id), req.body);
+    const result = await workflowEngine.updateRule(parseInt(req.params.id), req.body, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -107,7 +108,7 @@ router.delete('/rules/:id', requirePermission('manage_settings'), async (req, re
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ success: false, message: 'Invalid rule ID' });
-    await workflowEngine.deleteRule(id);
+    await workflowEngine.deleteRule(id, req.companyId);
     res.json({ success: true, message: 'Workflow rule deleted successfully' });
   } catch (err) {
     logError({
@@ -183,7 +184,7 @@ router.post('/notifications/read-all', async (req, res) => {
 
 router.post('/scan-overdue', requirePermission('manage_payroll'), async (req, res) => {
   try {
-    const result = await workflowEngine.scanOverdueInvoices();
+    const result = await workflowEngine.scanOverdueInvoices(req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -204,7 +205,7 @@ router.post('/scan-overdue', requirePermission('manage_payroll'), async (req, re
 
 router.get('/auto-approvals', async (req, res) => {
   try {
-    const rules = await workflowEngine.getAutoApprovalRules();
+    const rules = await workflowEngine.getAutoApprovalRules(req.companyId);
     res.json({ success: true, data: rules });
   } catch (err) {
     logError({
@@ -232,7 +233,7 @@ router.post('/auto-approvals', requirePermission('manage_settings'), async (req,
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await workflowEngine.createAutoApprovalRule(value);
+    const result = await workflowEngine.createAutoApprovalRule(value, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -251,7 +252,7 @@ router.delete('/auto-approvals/:id', requirePermission('manage_settings'), async
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ success: false, message: 'Invalid rule ID' });
-    await workflowEngine.deleteAutoApprovalRule(id);
+    await workflowEngine.deleteAutoApprovalRule(id, req.companyId);
     res.json({ success: true, message: 'Auto-approval rule deleted successfully' });
   } catch (err) {
     logError({
@@ -301,7 +302,7 @@ router.post('/execute', requirePermission('manage_settings'), async (req, res) =
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await workflowEngine.executeRulesForEvent(value.trigger_entity, value.trigger_event, value.entity_data);
+    const result = await workflowEngine.executeRulesForEvent(value.trigger_entity, value.trigger_event, value.entity_data, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({

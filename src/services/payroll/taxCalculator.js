@@ -251,16 +251,16 @@ class TaxCalculator {
   // ═══════════════════════════════════════════════════════════════════════════
   // Tax Declaration CRUD
   // ═══════════════════════════════════════════════════════════════════════════
-  async getDeclaration(employeeId, financialYear) {
+  async getDeclaration(employeeId, financialYear, companyId) {
     const result = await query(
-      `SELECT * FROM employee_tax_declarations WHERE employee_id = $1 AND financial_year = $2`,
-      [employeeId, financialYear]
+      `SELECT * FROM employee_tax_declarations WHERE employee_id = $1 AND financial_year = $2 AND company_id = $3`,
+      [employeeId, financialYear, companyId]
     );
     return result.rows[0] || null;
   }
 
-  async saveDeclaration(employeeId, financialYear, data) {
-    const existing = await this.getDeclaration(employeeId, financialYear);
+  async saveDeclaration(employeeId, financialYear, data, companyId) {
+    const existing = await this.getDeclaration(employeeId, financialYear, companyId);
 
     const fields = [
       'tax_regime', 'sec_80c_ppf', 'sec_80c_elss', 'sec_80c_lic', 'sec_80c_nsc',
@@ -289,12 +289,12 @@ class TaxCalculator {
         `UPDATE employee_tax_declarations SET ${setClauses.join(', ')} WHERE id = $${pc}`,
         params
       );
-      return this.getDeclaration(employeeId, financialYear);
+      return this.getDeclaration(employeeId, financialYear, companyId);
     }
 
     // Insert new
-    const insertFields = ['employee_id', 'financial_year'];
-    const values = [employeeId, financialYear];
+    const insertFields = ['employee_id', 'financial_year', 'company_id'];
+    const values = [employeeId, financialYear, companyId];
     for (const f of fields) {
       if (data[f] !== undefined) {
         insertFields.push(f);
@@ -306,41 +306,41 @@ class TaxCalculator {
       `INSERT INTO employee_tax_declarations (${insertFields.join(', ')}) VALUES (${placeholders})`,
       values
     );
-    return this.getDeclaration(employeeId, financialYear);
+    return this.getDeclaration(employeeId, financialYear, companyId);
   }
 
-  async submitDeclaration(employeeId, financialYear) {
+  async submitDeclaration(employeeId, financialYear, companyId) {
     await query(
       `UPDATE employee_tax_declarations SET status = 'submitted', updated_at = CURRENT_TIMESTAMP
-       WHERE employee_id = $1 AND financial_year = $2 AND status = 'draft'`,
-      [employeeId, financialYear]
+       WHERE employee_id = $1 AND financial_year = $2 AND status = 'draft' AND company_id = $3`,
+      [employeeId, financialYear, companyId]
     );
-    return this.getDeclaration(employeeId, financialYear);
+    return this.getDeclaration(employeeId, financialYear, companyId);
   }
 
-  async verifyDeclaration(employeeId, financialYear, verifierId) {
+  async verifyDeclaration(employeeId, financialYear, verifierId, companyId) {
     await query(
-      `UPDATE employee_tax_declarations SET status = 'verified', verified_by = $1, 
+      `UPDATE employee_tax_declarations SET status = 'verified', verified_by = $1,
        verified_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-       WHERE employee_id = $2 AND financial_year = $3 AND status = 'submitted'`,
-      [verifierId, employeeId, financialYear]
+       WHERE employee_id = $2 AND financial_year = $3 AND status = 'submitted' AND company_id = $4`,
+      [verifierId, employeeId, financialYear, companyId]
     );
-    return this.getDeclaration(employeeId, financialYear);
+    return this.getDeclaration(employeeId, financialYear, companyId);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Log Tax Computation
   // ═══════════════════════════════════════════════════════════════════════════
-  async logComputation(employeeId, payrollMonth, taxResult) {
+  async logComputation(employeeId, payrollMonth, taxResult, companyId) {
     const fy = getIndianFinancialYear(new Date(payrollMonth + '-01'));
     await query(
-      `INSERT INTO tax_computation_log 
+      `INSERT INTO tax_computation_log
         (employee_id, payroll_month, financial_year, tax_regime,
          gross_annual_income, standard_deduction, hra_exemption,
          sec_80c_total, sec_80d_total, other_deductions, taxable_income,
          tax_on_income, education_cess, surcharge, total_annual_tax,
-         months_remaining, tds_already_deducted, monthly_tds, professional_tax_monthly)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+         months_remaining, tds_already_deducted, monthly_tds, professional_tax_monthly, company_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
       [
         employeeId, payrollMonth, fy, taxResult.regime,
         taxResult.gross_annual_income, taxResult.standard_deduction, taxResult.hra_exemption || 0,
@@ -349,17 +349,17 @@ class TaxCalculator {
         taxResult.taxable_income, taxResult.tax_on_income,
         taxResult.education_cess, taxResult.surcharge, taxResult.total_annual_tax,
         taxResult.months_remaining || 12, taxResult.tds_already_deducted || 0,
-        taxResult.monthly_tds, 0,
+        taxResult.monthly_tds, 0, companyId,
       ]
     );
   }
 
-  async getTaxHistory(employeeId, financialYear) {
+  async getTaxHistory(employeeId, financialYear, companyId) {
     const result = await query(
-      `SELECT * FROM tax_computation_log 
-       WHERE employee_id = $1 AND financial_year = $2
+      `SELECT * FROM tax_computation_log
+       WHERE employee_id = $1 AND financial_year = $2 AND company_id = $3
        ORDER BY payroll_month ASC`,
-      [employeeId, financialYear]
+      [employeeId, financialYear, companyId]
     );
     return result.rows;
   }

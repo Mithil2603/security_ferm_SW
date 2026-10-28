@@ -12,8 +12,9 @@ const PAYMENT_KIND = {
 };
 
 /** @returns {Promise<{ ok: boolean, status?: number, message: string }>} */
-async function deleteVoucher(id) {
-  const existing = await query('SELECT * FROM vouchers WHERE id = $1', [id]);
+async function deleteVoucher(id, companyId) {
+  if (!companyId) return { ok: false, status: 400, message: 'companyId is required' };
+  const existing = await query('SELECT * FROM vouchers WHERE id = $1 AND company_id = $2', [id, companyId]);
   if (existing.rows.length === 0) return { ok: false, status: 404, message: 'Voucher not found' };
   const voucher = existing.rows[0];
 

@@ -1,5 +1,5 @@
 import { useAuth } from '../../context/AuthContext';
-import { LogOut, Bell, AlertTriangle, XCircle, Info, ChevronRight, Menu } from 'lucide-react';
+import { LogOut, Bell, AlertTriangle, XCircle, Info, ChevronRight, Menu, Building2, Check, Loader2, ArrowLeftRight } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import api from '../../services/api';
@@ -32,13 +32,33 @@ function getAgencyInitials(name) {
 }
 
 export default function Topbar({ sidebarOpen, setSidebarOpen, setMobileMenuOpen }) {
-  const { user, logout } = useAuth();
+  const { user, logout, switchCompany } = useAuth();
   const navigate = useNavigate();
   const [alerts, setAlerts] = useState([]);
   const [alertsOpen, setAlertsOpen] = useState(false);
+  const [companyMenuOpen, setCompanyMenuOpen] = useState(false);
+  const [switchingId, setSwitchingId] = useState(null);
   const [agencySettings, setAgencySettings] = useState({ agency_name: 'SecurManage', agency_logo_url: '' });
   const [logoError, setLogoError] = useState(false);
   const dropdownRef = useRef(null);
+  const companyMenuRef = useRef(null);
+
+  const companies = user?.companies || [];
+  const currentCompany = user?.company;
+
+  const handleSwitchCompany = async (companyId) => {
+    if (companyId === currentCompany?.id) { setCompanyMenuOpen(false); return; }
+    setSwitchingId(companyId);
+    try {
+      await switchCompany(companyId);
+      setCompanyMenuOpen(false);
+      window.location.reload(); // simplest way to refetch every screen's data for the new company
+    } catch (err) {
+      console.error('Failed to switch company:', err);
+    } finally {
+      setSwitchingId(null);
+    }
+  };
 
   const toggleSidebar = () => {
     if (setSidebarOpen) {
@@ -70,11 +90,14 @@ export default function Topbar({ sidebarOpen, setSidebarOpen, setMobileMenuOpen 
       .catch(() => {});
   }, []);
 
-  // Close dropdown on outside click
+  // Close dropdowns on outside click
   useEffect(() => {
     const handler = (e) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
         setAlertsOpen(false);
+      }
+      if (companyMenuRef.current && !companyMenuRef.current.contains(e.target)) {
+        setCompanyMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handler);
@@ -122,6 +145,49 @@ export default function Topbar({ sidebarOpen, setSidebarOpen, setMobileMenuOpen 
             {agencySettings.agency_name || 'SecurManage'}
           </span>
         </div>
+
+        {/* Company switcher — only shown when the business has more than one company */}
+        {companies.length > 1 && (
+          <div className="relative ml-0.5" ref={companyMenuRef}>
+            <button
+              onClick={(e) => { e.stopPropagation(); setCompanyMenuOpen((v) => !v); }}
+              className={`p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer ${companyMenuOpen ? 'bg-slate-800 text-white' : ''}`}
+              title={`Switch company (currently: ${currentCompany?.name || 'none'})`}
+            >
+              <ArrowLeftRight className="w-4 h-4" />
+            </button>
+
+            {companyMenuOpen && (
+              <div className="absolute left-0 top-11 w-64 bg-white rounded-xl shadow-2xl shadow-slate-900/15 border border-slate-200 overflow-hidden z-50 animate-fade-in">
+                <div className="px-3.5 py-2.5 bg-slate-50 border-b border-slate-200">
+                  <span className="font-bold text-slate-700 text-xs uppercase tracking-wide">Your companies</span>
+                </div>
+                <div className="max-h-72 overflow-y-auto divide-y divide-slate-100">
+                  {companies.map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => handleSwitchCompany(c.id)}
+                      disabled={switchingId !== null}
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-slate-50 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      <span className="flex-1 min-w-0 truncate text-sm text-slate-700">{c.name}</span>
+                      {switchingId === c.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-teal-500 shrink-0" />
+                      ) : c.id === currentCompany?.id ? (
+                        <Check className="w-4 h-4 text-teal-500 shrink-0" />
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+                <div className="px-3.5 py-2 bg-slate-50 border-t border-slate-200 text-center">
+                  <Link to="/companies" onClick={() => setCompanyMenuOpen(false)} className="text-xs font-bold text-teal-600 hover:text-teal-800">
+                    Manage companies →
+                  </Link>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex items-center space-x-4 md:space-x-6">

@@ -13,6 +13,9 @@ const logger = require('./logger');
 // The P&L already counts expenses and payroll from their own tables, so
 // ledgerTotals() must NOT add expense_category / payroll amounts again. Bank
 // entries were not in the P&L before, so they are added there via BANK_ENTRY_LEDGERS.
+//
+// Everything here is scoped per company — `ledgers`, `expenses`,
+// `expense_categories`, `payroll` and `vouchers` all carry a company_id.
 
 const BANK_ENTRY_LEDGERS = {
   bank_charge: { name: 'Bank Charges', group: 'Indirect Expenses', side: 'debit' },
@@ -30,54 +33,64 @@ const SOURCE_LABELS = {
 const titleCase = (s) => String(s || '').replace(/_/g, ' ').trim().replace(/\s+/g, ' ')
   .replace(/\b\w/g, (c) => c.toUpperCase());
 
-let lastEnsure = 0;
+// Per-company throttle for ensureLinkedLedgers (was a single shared timestamp,
+// which meant one company's call could suppress another's within the window).
+const lastEnsureByCompany = new Map();
 
 // Auto ledgers the user deleted ("type:key"), kept in system_settings so they
-// are not re-created. Restoring clears the list.
-const DISMISSED_KEY = 'dismissed_linked_ledgers';
-async function getDismissed() {
+// are not re-created. Restoring clears the list. Keyed per company since the
+// dismissal is a per-company preference, even though system_settings itself
+// is a global table.
+const DISMISSED_KEY_PREFIX = 'dismissed_linked_ledgers';
+const dismissedKey = (companyId) => `${DISMISSED_KEY_PREFIX}:${companyId}`;
+
+async function getDismissed(companyId) {
   try {
-    const r = await query('SELECT setting_value FROM system_settings WHERE setting_key = $1', [DISMISSED_KEY]);
+    const r = await query('SELECT setting_value FROM system_settings WHERE setting_key = $1', [dismissedKey(companyId)]);
     return new Set(r.rows.length ? JSON.parse(r.rows[0].setting_value || '[]') : []);
   } catch (_) { return new Set(); }
 }
-async function saveDismissed(set) {
+async function saveDismissed(set, companyId) {
   await query(
     `INSERT INTO system_settings (setting_key, setting_value) VALUES ($1, $2)
      ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
-    [DISMISSED_KEY, JSON.stringify([...set])]
+    [dismissedKey(companyId), JSON.stringify([...set])]
   );
 }
-async function dismissLinkedLedger(type, key) {
-  const set = await getDismissed();
+async function dismissLinkedLedger(type, key, companyId) {
+  const set = await getDismissed(companyId);
   set.add(`${type}:${String(key).toLowerCase()}`);
-  await saveDismissed(set);
+  await saveDismissed(set, companyId);
 }
-async function restoreLinkedLedgers() {
-  const n = (await getDismissed()).size;
-  await saveDismissed(new Set());
-  lastEnsure = 0;
-  await ensureLinkedLedgers({ force: true });
+async function restoreLinkedLedgers(companyId) {
+  const n = (await getDismissed(companyId)).size;
+  await saveDismissed(new Set(), companyId);
+  lastEnsureByCompany.delete(companyId);
+  await ensureLinkedLedgers(companyId, { force: true });
   return n;
 }
 
 /**
  * Make sure every expense category, payroll and each bank-entry type has its
- * linked ledger. Idempotent; inserts only into `ledgers`. A user ledger with
- * the same name and no source is adopted instead of creating a duplicate.
+ * linked ledger for this company. Idempotent; inserts only into `ledgers`. A
+ * user ledger in the same company with the same name and no source is
+ * adopted instead of creating a duplicate.
  */
-async function ensureLinkedLedgers({ force = false } = {}) {
-  if (!force && Date.now() - lastEnsure < 15000) return;
-  lastEnsure = Date.now();
+async function ensureLinkedLedgers(companyId, { force = false } = {}) {
+  if (!companyId) return;
+  const last = lastEnsureByCompany.get(companyId) || 0;
+  if (!force && Date.now() - last < 15000) return;
+  lastEnsureByCompany.set(companyId, Date.now());
   try {
     const groups = (await query('SELECT id, name FROM ledger_groups')).rows;
     const gid = (name) => groups.find((g) => g.name === name)?.id;
 
     const wanted = [];
     const cats = await query(`
-      SELECT name AS cat FROM expense_categories WHERE is_active = 1
+      SELECT name AS cat FROM expense_categories WHERE is_active = 1 AND company_id = $1
       UNION
-      SELECT DISTINCT category AS cat FROM expenses WHERE category IS NOT NULL AND category != ''`);
+      SELECT DISTINCT category AS cat FROM expenses WHERE category IS NOT NULL AND category != '' AND company_id = $1`,
+      [companyId]);
     const seen = new Set();
     for (const { cat } of cats.rows) {
       const key = String(cat).trim().toLowerCase();
@@ -91,23 +104,23 @@ async function ensureLinkedLedgers({ force = false } = {}) {
       wanted.push({ type: 'bank_entry', key: kind, name: d.name, group: d.group });
     }
 
-    const existing = (await query('SELECT id, name, source_type, source_key FROM ledgers')).rows;
-    const dismissed = await getDismissed();
+    const existing = (await query('SELECT id, name, source_type, source_key FROM ledgers WHERE company_id = $1', [companyId])).rows;
+    const dismissed = await getDismissed(companyId);
     for (const w of wanted) {
       if (dismissed.has(`${w.type}:${w.key}`)) continue;
       if (existing.some((l) => l.source_type === w.type && String(l.source_key).toLowerCase() === w.key)) continue;
       let name = w.name;
       const sameName = existing.find((l) => l.name.toLowerCase() === name.toLowerCase());
       if (sameName && !sameName.source_type) {
-        await query('UPDATE ledgers SET source_type = $1, source_key = $2 WHERE id = $3', [w.type, w.key, sameName.id]);
+        await query('UPDATE ledgers SET source_type = $1, source_key = $2 WHERE id = $3 AND company_id = $4', [w.type, w.key, sameName.id, companyId]);
         sameName.source_type = w.type; sameName.source_key = w.key;
         continue;
       }
       if (sameName) name = `${name} (${SOURCE_LABELS[w.type]})`;
       if (!gid(w.group)) continue;
       const r = await query(
-        'INSERT INTO ledgers (name, group_id, description, source_type, source_key) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-        [name, gid(w.group), `Auto-filled from ${SOURCE_LABELS[w.type]}`, w.type, w.key]
+        'INSERT INTO ledgers (name, group_id, description, source_type, source_key, company_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        [name, gid(w.group), `Auto-filled from ${SOURCE_LABELS[w.type]}`, w.type, w.key, companyId]
       );
       existing.push(r.rows[0]);
     }
@@ -121,14 +134,14 @@ async function ensureLinkedLedgers({ force = false } = {}) {
  * Entries a linked ledger gets from its source module, as ledger rows
  * ({ id, date, particulars, vch_type, vch_no, debit, credit, created_at }).
  */
-async function linkedEntries(ledger) {
+async function linkedEntries(ledger, companyId) {
   if (!ledger?.source_type) return [];
   if (ledger.source_type === 'expense_category') {
     const r = await query(`
       SELECT e.id, e.expense_date, e.amount, e.receipt_number, e.description, e.created_at,
              COALESCE(v.name, e.vendor_name) AS vendor
-        FROM expenses e LEFT JOIN vendors v ON v.id = e.vendor_id
-       WHERE LOWER(TRIM(e.category)) = $1 AND e.status IN ('approved', 'paid')`, [ledger.source_key]);
+        FROM expenses e LEFT JOIN vendors v ON v.id = e.vendor_id AND v.company_id = e.company_id
+       WHERE LOWER(TRIM(e.category)) = $1 AND e.status IN ('approved', 'paid') AND e.company_id = $2`, [ledger.source_key, companyId]);
     return r.rows.map((e) => ({
       id: `exp-${e.id}`,
       date: e.expense_date,
@@ -143,7 +156,8 @@ async function linkedEntries(ledger) {
   if (ledger.source_type === 'payroll') {
     const r = await query(`
       SELECT p.id, p.payroll_month, p.gross_salary, p.created_at, emp.full_name
-        FROM payroll p LEFT JOIN employees emp ON emp.id = p.employee_id`);
+        FROM payroll p LEFT JOIN employees emp ON emp.id = p.employee_id AND emp.company_id = p.company_id
+       WHERE p.company_id = $1`, [companyId]);
     return r.rows.map((p) => ({
       id: `pay-${p.id}`,
       date: p.payroll_month,
@@ -162,9 +176,9 @@ async function linkedEntries(ledger) {
       SELECT v.id, v.voucher_number, v.voucher_date, v.amount, v.narration, v.created_at,
              ba.account_name
         FROM vouchers v
-        LEFT JOIN bank_accounts ba ON ba.id = COALESCE(v.debit_account_id, v.credit_account_id)
+        LEFT JOIN bank_accounts ba ON ba.id = COALESCE(v.debit_account_id, v.credit_account_id) AND ba.company_id = v.company_id
        WHERE v.status = 'posted' AND v.voucher_type = 'journal' AND v.category = $1
-         AND v.debit_ledger_id IS NULL AND v.credit_ledger_id IS NULL`, [ledger.source_key]);
+         AND v.debit_ledger_id IS NULL AND v.credit_ledger_id IS NULL AND v.company_id = $2`, [ledger.source_key, companyId]);
     return r.rows.map((v) => {
       const amt = parseFloat(v.amount) || 0;
       const dr = def.side === 'debit';
@@ -184,11 +198,11 @@ async function linkedEntries(ledger) {
 }
 
 /** Dr / Cr totals per linked ledger (all time), for the Ledgers list. */
-async function linkedTotals(ledgers) {
+async function linkedTotals(ledgers, companyId) {
   const out = new Map();
   for (const l of ledgers) {
     if (!l.source_type) continue;
-    const rows = await linkedEntries(l);
+    const rows = await linkedEntries(l, companyId);
     out.set(l.id, {
       debit: rows.reduce((s, r) => s + r.debit, 0),
       credit: rows.reduce((s, r) => s + r.credit, 0),

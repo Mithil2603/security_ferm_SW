@@ -3,11 +3,12 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const multer = require('multer');
 const path = require('path');
 const crypto = require('crypto');
 const { logError } = require('../utils/errorLogger');
+const { getCompanyProfile } = require('../utils/companyProfile');
 
 const storageConfig = require('../utils/storageConfig');
 const storage = multer.diskStorage({
@@ -16,6 +17,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 
 // ═══════════════════════════════════════════════════════════════════
 //  SALARY STRUCTURES CRUD
@@ -26,9 +28,11 @@ router.get('/salary-structures', async (req, res) => {
   try {
     const result = await query(
       `SELECT ss.*,
-              COALESCE((SELECT COUNT(*) FROM employees e WHERE e.salary_structure_id = ss.id AND e.is_active = 1), 0) AS active_guards
+              COALESCE((SELECT COUNT(*) FROM employees e WHERE e.salary_structure_id = ss.id AND e.is_active = 1 AND e.company_id = ss.company_id), 0) AS active_guards
        FROM salary_structures ss
-       ORDER BY ss.is_active DESC, ss.base_salary ASC`
+       WHERE ss.company_id = $1
+       ORDER BY ss.is_active DESC, ss.base_salary ASC`,
+      [req.companyId]
     );
     res.json({ success: true, data: result.rows });
   } catch (error) {
@@ -54,11 +58,11 @@ router.post('/salary-structures', requirePermission('manage_settings', 'manage_p
     const result = await query(
       `INSERT INTO salary_structures
          (name, base_salary, dearness_allowance, house_rent_allowance, other_allowances,
-          pf_percentage, esi_applicable, income_tax_applicable, effective_from)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          pf_percentage, esi_applicable, income_tax_applicable, effective_from, company_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        RETURNING *`,
       [name, base_salary, dearness_allowance, house_rent_allowance, other_allowances,
-       pf_percentage, esi_applicable, income_tax_applicable, effective_from || new Date().toISOString().split('T')[0]]
+       pf_percentage, esi_applicable, income_tax_applicable, effective_from || new Date().toISOString().split('T')[0], req.companyId]
     );
 
     res.status(201).json({ success: true, data: result.rows[0], message: 'Salary structure created' });
@@ -91,11 +95,11 @@ router.put('/salary-structures/:id', requirePermission('manage_settings', 'manag
          effective_from = COALESCE($9, effective_from),
          is_active = COALESCE($10, is_active),
          ctc = (COALESCE($2, base_salary) + COALESCE($3, dearness_allowance) + COALESCE($4, house_rent_allowance) + COALESCE($5, other_allowances)) + ((COALESCE($2, base_salary) * COALESCE($6, pf_percentage)) / 100)
-       WHERE id = $11
+       WHERE id = $11 AND company_id = $12
        RETURNING *`,
       [name, base_salary, dearness_allowance, house_rent_allowance,
        other_allowances, pf_percentage, esi_applicable, income_tax_applicable,
-       effective_from, is_active, req.params.id]
+       effective_from, is_active, req.params.id, req.companyId]
     );
 
     if (result.rows.length === 0) {
@@ -114,8 +118,8 @@ router.delete('/salary-structures/:id', requirePermission('manage_settings', 'ma
   try {
     // Check if any active employees are on this structure
     const check = await query(
-      'SELECT COUNT(*) AS cnt FROM employees WHERE salary_structure_id = $1 AND is_active = 1',
-      [req.params.id]
+      'SELECT COUNT(*) AS cnt FROM employees WHERE salary_structure_id = $1 AND is_active = 1 AND company_id = $2',
+      [req.params.id, req.companyId]
     );
     if (parseInt(check.rows[0].cnt) > 0) {
       return res.status(400).json({
@@ -124,7 +128,7 @@ router.delete('/salary-structures/:id', requirePermission('manage_settings', 'ma
       });
     }
 
-    await query('UPDATE salary_structures SET is_active = 0 WHERE id = $1', [req.params.id]);
+    await query('UPDATE salary_structures SET is_active = 0 WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     res.json({ success: true, message: 'Salary structure deactivated' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
@@ -141,8 +145,9 @@ router.delete('/salary-structures/:id', requirePermission('manage_settings', 'ma
 router.get('/team', requirePermission('manage_settings'), async (req, res) => {
   try {
     const result = await query(
-      `SELECT id, username, email, full_name, role, is_active, created_at, last_login, permissions
-       FROM users ORDER BY role ASC, full_name ASC`
+      `SELECT id, email, full_name, role, is_active, created_at, last_login, permissions
+       FROM users WHERE business_id = $1 ORDER BY role ASC, full_name ASC`,
+      [req.user.businessId]
     );
     res.json({ success: true, data: result.rows });
   } catch (error) {
@@ -157,6 +162,11 @@ router.put(['/users/:id', '/team/:id/permissions'], requirePermission('manage_se
   try {
     const { permissions, role, full_name, phone } = req.body;
     const userId = req.params.id;
+
+    const targetCheck = await query('SELECT id FROM users WHERE id = $1 AND business_id = $2', [userId, req.user.businessId]);
+    if (targetCheck.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
 
     const updates = [];
     const params = [];
@@ -191,8 +201,8 @@ router.put(['/users/:id', '/team/:id/permissions'], requirePermission('manage_se
     await query(sql, params);
 
     const checkUser = await query(
-      'SELECT id, email, full_name, role, is_active, permissions FROM users WHERE id = $1',
-      [userId]
+      'SELECT id, email, full_name, role, is_active, permissions FROM users WHERE id = $1 AND business_id = $2',
+      [userId, req.user.businessId]
     );
 
     if (checkUser.rows.length === 0) {
@@ -220,7 +230,7 @@ router.patch('/users/:id/toggle', requirePermission('manage_settings'), async (r
       return res.status(400).json({ success: false, message: 'Cannot deactivate your own account' });
     }
 
-    const check = await query('SELECT is_active FROM users WHERE id = $1', [userId]);
+    const check = await query('SELECT is_active FROM users WHERE id = $1 AND business_id = $2', [userId, req.user.businessId]);
     if (check.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
@@ -245,7 +255,10 @@ router.post('/users/:id/reset-password', requirePermission('manage_settings'), a
     }
 
     const hash = await bcrypt.hash(new_password, 12);
-    const result = await query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.params.id]);
+    const result = await query(
+      'UPDATE users SET password_hash = $1 WHERE id = $2 AND business_id = $3',
+      [hash, req.params.id, req.user.businessId]
+    );
 
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'User not found' });
@@ -272,8 +285,8 @@ router.put('/team/:id/status', requirePermission('manage_settings'), async (req,
     }
 
     const result = await query(
-      'UPDATE users SET is_active = $1 WHERE id = $2 RETURNING id, username, email, full_name, role, is_active',
-      [is_active ? 1 : 0, req.params.id]
+      'UPDATE users SET is_active = $1 WHERE id = $2 AND business_id = $3 RETURNING id, email, full_name, role, is_active',
+      [is_active ? 1 : 0, req.params.id, req.user.businessId]
     );
 
     if (result.rows.length === 0) {
@@ -291,9 +304,46 @@ router.put('/team/:id/status', requirePermission('manage_settings'), async (req,
 //  SYSTEM / AGENCY SETTINGS (Key-Value store)
 // ═══════════════════════════════════════════════════════════════════
 
+// agency_settings used to be one global JSON blob in system_settings. It's
+// now per-company — these two keys are special-cased below onto the
+// `companies` row (id = req.companyId) instead, in the same JSON shape the
+// frontend already reads/writes, so no frontend change is needed. Every
+// other key stays in system_settings, genuinely global across the install.
+const COMPANY_BACKED_KEYS = new Set(['agency_settings', 'invoice_email_template']);
+
+async function readAgencySettingsKey(companyId) {
+  const profile = await getCompanyProfile(companyId);
+  return profile ? JSON.stringify(profile) : null;
+}
+
+async function writeAgencySettingsKey(companyId, value) {
+  const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+  await query(
+    `UPDATE companies SET
+       name = COALESCE($1, name),
+       address = COALESCE($2, address),
+       phone = COALESCE($3, phone),
+       email = COALESCE($4, email),
+       gstin = COALESCE($5, gstin),
+       logo_url = COALESCE($6, logo_url),
+       updated_at = CURRENT_TIMESTAMP
+     WHERE id = $7`,
+    [parsed.agency_name, parsed.agency_address, parsed.agency_phone, parsed.agency_email,
+     parsed.gst_number, parsed.agency_logo_url, companyId]
+  );
+}
+
 // GET /api/settings/system/:key
 router.get('/system/:key', async (req, res) => {
   try {
+    if (req.params.key === 'agency_settings') {
+      return res.json({ success: true, data: await readAgencySettingsKey(req.companyId) });
+    }
+    if (req.params.key === 'invoice_email_template') {
+      const result = await query('SELECT invoice_email_template FROM companies WHERE id = $1', [req.companyId]);
+      return res.json({ success: true, data: result.rows[0]?.invoice_email_template || null });
+    }
+
     const result = await query(
       'SELECT setting_value FROM system_settings WHERE setting_key = $1',
       [req.params.key]
@@ -315,6 +365,15 @@ router.put('/system/:key', requirePermission('manage_settings'), async (req, res
     const { value } = req.body;
     if (value === undefined) {
       return res.status(400).json({ success: false, message: 'Value is required' });
+    }
+
+    if (req.params.key === 'agency_settings') {
+      await writeAgencySettingsKey(req.companyId, value);
+      return res.json({ success: true, data: await readAgencySettingsKey(req.companyId), message: 'Setting updated successfully' });
+    }
+    if (req.params.key === 'invoice_email_template') {
+      await query('UPDATE companies SET invoice_email_template = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [value, req.companyId]);
+      return res.json({ success: true, data: value, message: 'Setting updated successfully' });
     }
 
     await query(
@@ -344,25 +403,9 @@ router.post('/system/agency_logo', requirePermission('manage_settings'), upload.
       return res.status(400).json({ success: false, message: 'No file uploaded' });
     }
     const logoUrl = `/uploads/${req.file.filename}`;
-    
-    // Fetch current agency settings
-    const currentSettingsRes = await query(`SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'`);
-    let agencySettings = {};
-    if (currentSettingsRes.rows.length > 0) {
-      try {
-        agencySettings = JSON.parse(currentSettingsRes.rows[0].setting_value);
-      } catch(e) {}
-    }
-    
-    agencySettings.agency_logo_url = logoUrl;
-    
-    await query(
-      `INSERT INTO system_settings (setting_key, setting_value, updated_at)
-       VALUES ('agency_settings', $1, CURRENT_TIMESTAMP)
-       ON DUPLICATE KEY UPDATE setting_value = $1, updated_at = CURRENT_TIMESTAMP`,
-      [JSON.stringify(agencySettings)]
-    );
-    
+
+    await query('UPDATE companies SET logo_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [logoUrl, req.companyId]);
+
     res.json({ success: true, message: 'Logo uploaded successfully', logo_url: logoUrl, data: { logo_url: logoUrl } });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
@@ -374,19 +417,7 @@ router.post('/system/agency_logo', requirePermission('manage_settings'), upload.
 // DELETE /api/settings/system/agency_logo
 router.delete('/system/agency_logo', requirePermission('manage_settings'), async (req, res) => {
   try {
-    const currentSettingsRes = await query(`SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'`);
-    if (currentSettingsRes.rows.length > 0) {
-      let agencySettings = {};
-      try {
-        agencySettings = JSON.parse(currentSettingsRes.rows[0].setting_value);
-      } catch(e) {}
-      
-      agencySettings.agency_logo_url = '';
-      await query(
-        `UPDATE system_settings SET setting_value = $1, updated_at = CURRENT_TIMESTAMP WHERE setting_key = 'agency_settings'`,
-        [JSON.stringify(agencySettings)]
-      );
-    }
+    await query('UPDATE companies SET logo_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', ['', req.companyId]);
     res.json({ success: true, message: 'Logo removed successfully' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
@@ -402,7 +433,7 @@ router.delete('/system/agency_logo', requirePermission('manage_settings'), async
 // GET /api/settings/expense-categories
 router.get('/expense-categories', async (req, res) => {
   try {
-    const result = await query('SELECT * FROM expense_categories ORDER BY is_active DESC, name ASC');
+    const result = await query('SELECT * FROM expense_categories WHERE company_id = $1 ORDER BY is_active DESC, name ASC', [req.companyId]);
     res.json({ success: true, data: result.rows });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });
@@ -418,8 +449,8 @@ router.post('/expense-categories', requirePermission('manage_settings', 'manage_
     if (!name) return res.status(400).json({ success: false, message: 'Category name is required' });
 
     const result = await query(
-      `INSERT INTO expense_categories (name) VALUES ($1) RETURNING *`,
-      [name]
+      `INSERT INTO expense_categories (name, company_id) VALUES ($1, $2) RETURNING *`,
+      [name, req.companyId]
     );
     res.status(201).json({ success: true, data: result.rows[0], message: 'Expense category created' });
   } catch (error) {
@@ -437,12 +468,12 @@ router.put('/expense-categories/:id', requirePermission('manage_settings', 'mana
   try {
     const { name, is_active } = req.body;
     const result = await query(
-      `UPDATE expense_categories SET name = COALESCE($1, name), is_active = COALESCE($2, is_active) WHERE id = $3`,
-      [name, is_active, req.params.id]
+      `UPDATE expense_categories SET name = COALESCE($1, name), is_active = COALESCE($2, is_active) WHERE id = $3 AND company_id = $4`,
+      [name, is_active, req.params.id, req.companyId]
     );
     if (result.rowCount === 0) return res.status(404).json({ success: false, message: 'Category not found' });
-    
-    const updated = await query('SELECT * FROM expense_categories WHERE id = $1', [req.params.id]);
+
+    const updated = await query('SELECT * FROM expense_categories WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     res.json({ success: true, data: updated.rows[0], message: 'Category updated' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'settings' });

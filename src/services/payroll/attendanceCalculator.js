@@ -141,19 +141,21 @@ function summarizeAttendance(rows, totalDays, missingPolicy = 'unpaid') {
  * @param {'unpaid'|'present'} missingPolicy
  * @param {string}   [cutOffDate] optional "YYYY-MM-DD" to evaluate attendance only up to this day
  */
-async function resolveAttendanceDays(query, employeeId, payrollMonth, missingPolicy = 'unpaid', cutOffDate = null) {
+async function resolveAttendanceDays(query, employeeId, payrollMonth, missingPolicy = 'unpaid', cutOffDate = null, companyId) {
   const bounds = monthBounds(payrollMonth);
   const effectiveEndDate = cutOffDate && cutOffDate >= bounds.startDate && cutOffDate <= bounds.endDate
     ? cutOffDate
     : bounds.endDate;
 
+  const params = [employeeId, bounds.startDate, effectiveEndDate];
+  if (companyId) params.push(companyId);
   const result = await query(
     `SELECT status
        FROM attendance
       WHERE employee_id = $1
         AND attendance_date >= $2
-        AND attendance_date <= $3`,
-    [employeeId, bounds.startDate, effectiveEndDate]
+        AND attendance_date <= $3${companyId ? ' AND company_id = $4' : ''}`,
+    params
   );
 
   const [endYear, endMonth, endDay] = effectiveEndDate.split('-').map(Number);

@@ -33,15 +33,15 @@ class SalarySlipService {
    *                                computed from THIS month's attendance.
    * @param {number}  userId
    */
-  async generate(employeeId, payrollMonth, daysWorked, userId, options = {}) {
+  async generate(employeeId, payrollMonth, daysWorked, userId, options = {}, companyId) {
     payrollMonth = normalizePayrollMonth(payrollMonth);
 
     const { calculation_basis = 'full_month', cut_off_day = null } = options;
 
     // Check for duplicate
     const existing = await query(
-      `SELECT id FROM salary_slips WHERE employee_id = $1 AND payroll_month = $2`,
-      [employeeId, payrollMonth]
+      `SELECT id FROM salary_slips WHERE employee_id = $1 AND payroll_month = $2 AND company_id = $3`,
+      [employeeId, payrollMonth, companyId]
     );
     if (existing.rows.length > 0) {
       throw new Error(`Salary slip already exists for employee #${employeeId} for ${payrollMonth}`);
@@ -49,13 +49,13 @@ class SalarySlipService {
 
     // Get employee with salary structure
     const empResult = await query(
-      `SELECT e.*, ss.id as struct_id, ss.base_salary, ss.dearness_allowance, 
-              ss.house_rent_allowance, ss.other_allowances, ss.pf_percentage, 
+      `SELECT e.*, ss.id as struct_id, ss.base_salary, ss.dearness_allowance,
+              ss.house_rent_allowance, ss.other_allowances, ss.pf_percentage,
               ss.esi_applicable, ss.income_tax_applicable, ss.name as structure_name
        FROM employees e
-       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
-       WHERE e.id = $1 AND e.is_active = 1`,
-      [employeeId]
+       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id AND ss.company_id = e.company_id
+       WHERE e.id = $1 AND e.is_active = 1 AND e.company_id = $2`,
+      [employeeId, companyId]
     );
 
     if (empResult.rows.length === 0) throw new Error('Employee not found or inactive');
@@ -78,7 +78,7 @@ class SalarySlipService {
       effectiveDays = Number(daysWorked);
     } else {
       const missingPolicy = await getMissingAttendancePolicy(query);
-      attendanceSummary = await resolveAttendanceDays(query, employeeId, payrollMonth, missingPolicy, cutOffDate);
+      attendanceSummary = await resolveAttendanceDays(query, employeeId, payrollMonth, missingPolicy, cutOffDate, companyId);
       effectiveDays = attendanceSummary.payableDays;
     }
     if (!Number.isFinite(effectiveDays) || effectiveDays < 0) effectiveDays = 0;
@@ -107,8 +107,8 @@ class SalarySlipService {
 
     // Fetch unsettled ledger additions
     const ledgerResult = await query(
-      `SELECT * FROM employee_ledger WHERE employee_id = $1 AND payroll_id IS NULL`,
-      [employeeId]
+      `SELECT * FROM employee_ledger WHERE employee_id = $1 AND payroll_id IS NULL AND company_id = $2`,
+      [employeeId, companyId]
     );
     let customAdditions = D(0);
     let customDeductions = D(0);
@@ -192,16 +192,16 @@ class SalarySlipService {
 
     // ─── Insert Salary Slip ───────────────────────────────────────────────────
     const slipResult = await query(
-      `INSERT INTO salary_slips 
+      `INSERT INTO salary_slips
         (employee_id, payroll_month, salary_structure_id, days_in_month, days_worked, days_absent,
-         total_earnings, total_deductions, net_salary, status, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', $10)`,
+         total_earnings, total_deductions, net_salary, status, created_by, company_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', $10, $11)`,
       [
         employeeId, payrollMonth, emp.struct_id, periodDays, effectiveDays, absentDays,
         parseFloat(totalEarnings.toString()),
         parseFloat(totalDeductions.toString()),
         parseFloat(netSalary.toString()),
-        userId,
+        userId, companyId,
       ]
     );
 
@@ -210,20 +210,20 @@ class SalarySlipService {
     // ─── Insert Component Breakdown ───────────────────────────────────────────
     for (const e of earnings) {
       await query(
-        `INSERT INTO salary_slip_components (salary_slip_id, component_code, component_name, type, amount, display_order)
-          VALUES ($1, $2, $3, 'earning', $4, $5)`,
-        [slipId, e.code, e.name, e.amount, e.order]
+        `INSERT INTO salary_slip_components (salary_slip_id, component_code, component_name, type, amount, display_order, company_id)
+          VALUES ($1, $2, $3, 'earning', $4, $5, $6)`,
+        [slipId, e.code, e.name, e.amount, e.order, companyId]
       );
     }
     for (const d of deductions) {
       await query(
-        `INSERT INTO salary_slip_components (salary_slip_id, component_code, component_name, type, amount, display_order)
-          VALUES ($1, $2, $3, 'deduction', $4, $5)`,
-        [slipId, d.code, d.name, d.amount, d.order]
+        `INSERT INTO salary_slip_components (salary_slip_id, component_code, component_name, type, amount, display_order, company_id)
+          VALUES ($1, $2, $3, 'deduction', $4, $5, $6)`,
+        [slipId, d.code, d.name, d.amount, d.order, companyId]
       );
     }
 
-    return this.findById(slipId);
+    return this.findById(slipId, companyId);
   }
 
   /**
@@ -233,7 +233,7 @@ class SalarySlipService {
    * generate() — each employee's payable days come from resolveAttendanceDays()
    * for the SELECTED month only.
    */
-  async batchGenerate(payrollMonth, userId, options = {}) {
+  async batchGenerate(payrollMonth, userId, options = {}, companyId) {
     payrollMonth = normalizePayrollMonth(payrollMonth);
     const missingPolicy = await getMissingAttendancePolicy(query);
 
@@ -246,7 +246,8 @@ class SalarySlipService {
     const employees = await query(
       `SELECT e.id, e.full_name, e.salary_structure_id
        FROM employees e
-       WHERE e.is_active = 1 AND e.salary_structure_id IS NOT NULL`
+       WHERE e.is_active = 1 AND e.salary_structure_id IS NOT NULL AND e.company_id = $1`,
+      [companyId]
     );
 
     let generated = 0, skipped = 0, errors = 0;
@@ -256,15 +257,15 @@ class SalarySlipService {
       try {
         // Check existing
         const existing = await query(
-          `SELECT id FROM salary_slips WHERE employee_id = $1 AND payroll_month = $2`,
-          [emp.id, payrollMonth]
+          `SELECT id FROM salary_slips WHERE employee_id = $1 AND payroll_month = $2 AND company_id = $3`,
+          [emp.id, payrollMonth, companyId]
         );
         if (existing.rows.length > 0) { skipped++; continue; }
 
         // Resolve payable days from THIS month's attendance (shared calculator).
-        const att = await resolveAttendanceDays(query, emp.id, payrollMonth, missingPolicy, cutOffDate);
+        const att = await resolveAttendanceDays(query, emp.id, payrollMonth, missingPolicy, cutOffDate, companyId);
 
-        const slip = await this.generate(emp.id, payrollMonth, att.payableDays, userId, options);
+        const slip = await this.generate(emp.id, payrollMonth, att.payableDays, userId, options, companyId);
         results.push({
           employee: emp.full_name,
           status: 'generated',
@@ -303,7 +304,7 @@ class SalarySlipService {
   /**
    * Find a salary slip by ID with components.
    */
-  async findById(id) {
+  async findById(id, companyId) {
     const result = await query(
       `SELECT ss.*, e.full_name as employee_name, e.employee_id as emp_code,
               e.designation, e.bank_account_number, e.bank_ifsc_code, e.bank_name,
@@ -315,20 +316,20 @@ class SalarySlipService {
               st.other_allowances as struct_other,
               u.full_name as approved_by_name
        FROM salary_slips ss
-       JOIN employees e ON ss.employee_id = e.id
-       LEFT JOIN salary_structures st ON ss.salary_structure_id = st.id
+       JOIN employees e ON ss.employee_id = e.id AND e.company_id = ss.company_id
+       LEFT JOIN salary_structures st ON ss.salary_structure_id = st.id AND st.company_id = ss.company_id
        LEFT JOIN users u ON ss.approved_by = u.id
-       WHERE ss.id = $1`,
-      [id]
+       WHERE ss.id = $1 AND ss.company_id = $2`,
+      [id, companyId]
     );
     if (result.rows.length === 0) return null;
 
     const slip = result.rows[0];
 
-    // Fetch components
+    // Fetch components (scoped to the same company as the slip)
     const comps = await query(
-      `SELECT * FROM salary_slip_components WHERE salary_slip_id = $1 ORDER BY display_order`,
-      [id]
+      `SELECT * FROM salary_slip_components WHERE salary_slip_id = $1 AND company_id = $2 ORDER BY display_order`,
+      [id, companyId]
     );
     slip.earnings = comps.rows.filter(c => c.type === 'earning');
     slip.deductions = comps.rows.filter(c => c.type === 'deduction');
@@ -356,12 +357,12 @@ class SalarySlipService {
   /**
    * List salary slips with filters.
    */
-  async findAll(filters = {}) {
+  async findAll(filters = {}, companyId) {
     const { employee_id, payroll_month, status, page = 1, limit = 50 } = filters;
 
-    let conditions = [];
-    let params = [];
-    let pc = 1;
+    let conditions = ['ss.company_id = $1'];
+    let params = [companyId];
+    let pc = 2;
 
     if (employee_id) { conditions.push(`ss.employee_id = $${pc}`); params.push(employee_id); pc++; }
     if (payroll_month) { conditions.push(`ss.payroll_month = $${pc}`); params.push(payroll_month); pc++; }
@@ -374,8 +375,8 @@ class SalarySlipService {
       `SELECT ss.*, e.full_name as employee_name, e.employee_id as emp_code, e.designation,
               st.name as structure_name
        FROM salary_slips ss
-       JOIN employees e ON ss.employee_id = e.id
-       LEFT JOIN salary_structures st ON ss.salary_structure_id = st.id
+       JOIN employees e ON ss.employee_id = e.id AND e.company_id = ss.company_id
+       LEFT JOIN salary_structures st ON ss.salary_structure_id = st.id AND st.company_id = ss.company_id
        ${where}
        ORDER BY ss.payroll_month DESC, e.full_name ASC
        LIMIT $${pc} OFFSET $${pc + 1}`,
@@ -417,33 +418,33 @@ class SalarySlipService {
   /**
    * Submit slip for approval (draft → pending).
    */
-  async submitForApproval(id) {
-    return this._transition(id, 'draft', 'pending');
+  async submitForApproval(id, companyId) {
+    return this._transition(id, 'draft', 'pending', companyId);
   }
 
   /**
    * Approve a salary slip (pending → approved).
    */
-  async approve(id, userId) {
-    const slip = await this.findById(id);
+  async approve(id, userId, companyId) {
+    const slip = await this.findById(id, companyId);
     if (!slip) throw new Error('Salary slip not found');
     if (slip.status !== 'pending') throw new Error('Only pending slips can be approved');
 
     await query(
-      `UPDATE salary_slips SET status = 'approved', approved_by = $1, approved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-      [userId, id]
+      `UPDATE salary_slips SET status = 'approved', approved_by = $1, approved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND company_id = $3`,
+      [userId, id, companyId]
     );
-    return this.findById(id);
+    return this.findById(id, companyId);
   }
 
   /**
    * Bulk approve all pending slips for a month.
    */
-  async bulkApprove(payrollMonth, userId) {
+  async bulkApprove(payrollMonth, userId, companyId) {
     const result = await query(
       `UPDATE salary_slips SET status = 'approved', approved_by = $1, approved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-       WHERE payroll_month = $2 AND status = 'pending'`,
-      [userId, payrollMonth]
+       WHERE payroll_month = $2 AND status = 'pending' AND company_id = $3`,
+      [userId, payrollMonth, companyId]
     );
     return { approved: result.rowCount, payroll_month: payrollMonth };
   }
@@ -451,52 +452,52 @@ class SalarySlipService {
   /**
    * Mark as paid (draft/pending/approved → paid).
    */
-  async markPaid(id, paymentDetails = {}) {
-    const slip = await this.findById(id);
+  async markPaid(id, paymentDetails = {}, companyId) {
+    const slip = await this.findById(id, companyId);
     if (!slip) throw new Error('Salary slip not found');
     if (slip.status === 'paid') throw new Error('Salary slip is already marked as paid');
     if (slip.status === 'cancelled') throw new Error('Cannot pay a cancelled salary slip');
 
-    const paidAt = paymentDetails.payment_date 
-      ? new Date(paymentDetails.payment_date) 
+    const paidAt = paymentDetails.payment_date
+      ? new Date(paymentDetails.payment_date)
       : new Date();
 
     await query(
-      `UPDATE salary_slips SET status = 'paid', paid_at = $1, 
+      `UPDATE salary_slips SET status = 'paid', paid_at = $1,
        payment_method = $2, transaction_reference = $3, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $4`,
-      [paidAt, paymentDetails.payment_method || 'bank_transfer', paymentDetails.transaction_reference || null, id]
+       WHERE id = $4 AND company_id = $5`,
+      [paidAt, paymentDetails.payment_method || 'bank_transfer', paymentDetails.transaction_reference || null, id, companyId]
     );
-    return this.findById(id);
+    return this.findById(id, companyId);
   }
 
   /**
    * Cancel a slip (any status except paid → cancelled).
    */
-  async cancel(id) {
-    const slip = await this.findById(id);
+  async cancel(id, companyId) {
+    const slip = await this.findById(id, companyId);
     if (!slip) throw new Error('Salary slip not found');
     if (slip.status === 'paid') throw new Error('Cannot cancel a paid salary slip');
 
     await query(
-      `UPDATE salary_slips SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-      [id]
+      `UPDATE salary_slips SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND company_id = $2`,
+      [id, companyId]
     );
-    return this.findById(id);
+    return this.findById(id, companyId);
   }
 
   // ─── Private Helpers ──────────────────────────────────────────────────────
 
-  async _transition(id, fromStatus, toStatus) {
-    const slip = await this.findById(id);
+  async _transition(id, fromStatus, toStatus, companyId) {
+    const slip = await this.findById(id, companyId);
     if (!slip) throw new Error('Salary slip not found');
     if (slip.status !== fromStatus) throw new Error(`Slip must be "${fromStatus}" to transition to "${toStatus}"`);
 
     await query(
-      `UPDATE salary_slips SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-      [toStatus, id]
+      `UPDATE salary_slips SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND company_id = $3`,
+      [toStatus, id, companyId]
     );
-    return this.findById(id);
+    return this.findById(id, companyId);
   }
 }
 

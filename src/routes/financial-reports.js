@@ -10,11 +10,12 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const Joi = require('joi');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const reportService = require('../services/reports/financialReportingService');
 const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/errorLogger');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('manage_payroll', 'view_reports', 'view_pl_account', 'view_balance_sheet'));
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -32,7 +33,8 @@ router.post('/cash-flow', async (req, res) => {
 
     const result = await reportService.generateCashFlow(
       value.start_date.toISOString().split('T')[0],
-      value.end_date.toISOString().split('T')[0]
+      value.end_date.toISOString().split('T')[0],
+      req.companyId
     );
     res.json({ success: true, data: result });
   } catch (err) {
@@ -62,12 +64,12 @@ router.post('/kpis/calculate', async (req, res) => {
       const endDate   = req.body.end_date   || new Date().toISOString().split('T')[0];
 
       const [revenueRow, expensesRow, empRow, arRow, payablesRow, cashRow] = await Promise.all([
-        query(`SELECT COALESCE(SUM(final_amount),0) as total FROM invoices WHERE invoice_date BETWEEN $1 AND $2 AND status != 'cancelled'`, [startDate, endDate]),
-        query(`SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE expense_date BETWEEN $1 AND $2 AND status != 'pending'`, [startDate, endDate]),
-        query(`SELECT COUNT(*) as cnt FROM employees WHERE is_active = 1`),
-        query(`SELECT COALESCE(SUM(payment_due),0) as total FROM invoices WHERE status != 'cancelled' AND payment_due > 0`),
-        query(`SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE status = 'pending'`),
-        query(`SELECT COALESCE(SUM(opening_balance),0) as total FROM bank_accounts WHERE is_active = 1`),
+        query(`SELECT COALESCE(SUM(final_amount),0) as total FROM invoices WHERE company_id = $1 AND invoice_date BETWEEN $2 AND $3 AND status != 'cancelled'`, [req.companyId, startDate, endDate]),
+        query(`SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE company_id = $1 AND expense_date BETWEEN $2 AND $3 AND status != 'pending'`, [req.companyId, startDate, endDate]),
+        query(`SELECT COUNT(*) as cnt FROM employees WHERE is_active = 1 AND company_id = $1`, [req.companyId]),
+        query(`SELECT COALESCE(SUM(payment_due),0) as total FROM invoices WHERE company_id = $1 AND status != 'cancelled' AND payment_due > 0`, [req.companyId]),
+        query(`SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE company_id = $1 AND status = 'pending'`, [req.companyId]),
+        query(`SELECT COALESCE(SUM(opening_balance),0) as total FROM bank_accounts WHERE is_active = 1 AND company_id = $1`, [req.companyId]),
       ]);
 
       const kpiInputs = {
@@ -163,7 +165,7 @@ router.get('/snapshots', async (req, res) => {
 
 router.get('/budgets', async (req, res) => {
   try {
-    const result = await reportService.getBudgets(req.query.financial_year);
+    const result = await reportService.getBudgets(req.query.financial_year, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -180,7 +182,7 @@ router.get('/budgets', async (req, res) => {
 
 router.get('/budgets/:id', async (req, res) => {
   try {
-    const result = await reportService.getBudget(parseInt(req.params.id));
+    const result = await reportService.getBudget(parseInt(req.params.id), req.companyId);
     if (!result) return res.status(404).json({ success: false, message: 'Budget not found' });
     res.json({ success: true, data: result });
   } catch (err) {
@@ -209,7 +211,7 @@ router.post('/budgets', async (req, res) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await reportService.createBudget(value);
+    const result = await reportService.createBudget(value, req.companyId);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -240,7 +242,8 @@ router.post('/budgets/:id/items', async (req, res) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await reportService.addBudgetItem(parseInt(req.params.id), value);
+    const result = await reportService.addBudgetItem(parseInt(req.params.id), value, req.companyId);
+    if (!result) return res.status(404).json({ success: false, message: 'Budget not found' });
     res.status(201).json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -257,7 +260,7 @@ router.post('/budgets/:id/items', async (req, res) => {
 
 router.post('/budgets/:id/approve', async (req, res) => {
   try {
-    const result = await reportService.approveBudget(parseInt(req.params.id), req.user.id);
+    const result = await reportService.approveBudget(parseInt(req.params.id), req.user.id, req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({
@@ -278,7 +281,7 @@ router.post('/budgets/:id/approve', async (req, res) => {
 
 router.get('/variance/:budgetId', async (req, res) => {
   try {
-    const result = await reportService.getVarianceAnalysis(parseInt(req.params.budgetId));
+    const result = await reportService.getVarianceAnalysis(parseInt(req.params.budgetId), req.companyId);
     res.json({ success: true, data: result });
   } catch (err) {
     logError({

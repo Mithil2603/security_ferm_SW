@@ -4,17 +4,8 @@
 // numbers stay numbers in Excel (money columns get a 2-decimal format) and are
 // formatted en-IN for the PDF.
 const ExcelJS = require('exceljs');
-const { query } = require('../database/connection');
+const { getCompanyProfile } = require('./companyProfile');
 const { generateMultiSectionReportPDF } = require('./paymentsPdfGenerator');
-
-async function getAgencySettings() {
-  try {
-    const r = await query("SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'");
-    return r.rows.length > 0 ? JSON.parse(r.rows[0].setting_value) : null;
-  } catch (_) {
-    return null;
-  }
-}
 
 const fmtMoney = (n) => Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -31,8 +22,8 @@ function excelValue(v) {
   return v === undefined ? null : v;
 }
 
-async function sendPdf(res, { filename, title, subtitleLines = [], sections }) {
-  const agencySettings = await getAgencySettings();
+async function sendPdf(res, { filename, title, subtitleLines = [], sections }, companyId) {
+  const agencySettings = await getCompanyProfile(companyId);
   const pdfSections = sections.map((s) => ({
     name: s.name,
     columns: s.columns.map((c) => ({ key: c.key, label: c.label, width: c.width, align: c.money ? 'right' : c.align })),
@@ -107,10 +98,11 @@ async function sendExcel(res, { filename, title, subtitleLines = [], sections, s
   res.end();
 }
 
-// format = 'pdf' | 'xlsx' (also accepts 'excel')
-async function sendReport(res, format, report) {
-  if (format === 'pdf') return sendPdf(res, report);
+// format = 'pdf' | 'xlsx' (also accepts 'excel'). companyId scopes the
+// agency/company letterhead details shown on PDF exports.
+async function sendReport(res, format, report, companyId) {
+  if (format === 'pdf') return sendPdf(res, report, companyId);
   return sendExcel(res, report);
 }
 
-module.exports = { sendReport, sendPdf, sendExcel, getAgencySettings };
+module.exports = { sendReport, sendPdf, sendExcel };

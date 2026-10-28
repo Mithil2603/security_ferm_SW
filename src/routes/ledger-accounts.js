@@ -2,7 +2,7 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const Joi = require('joi');
 const { logError } = require('../utils/errorLogger');
 const { ensureLinkedLedgers, linkedTotals, dismissLinkedLedger, restoreLinkedLedgers, getDismissed, SOURCE_LABELS } = require('../utils/ledgerSources');
@@ -12,6 +12,7 @@ const { ensureLinkedLedgers, linkedTotals, dismissLinkedLedger, restoreLinkedLed
 // Balance convention matches bank accounts: Dr − Cr of posted vouchers.
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission(
   'manage_vouchers', 'view_vouchers', 'create_vouchers', 'edit_vouchers',
   'manage_bank_accounts', 'manage_expenses', 'manage_invoices', 'view_reports'
@@ -25,9 +26,9 @@ const ledgerSchema = Joi.object({
 });
 
 const BALANCE_SQL = `
-  COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.debit_ledger_id = l.id AND v.status = 'posted'), 0) AS total_debit,
-  COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.credit_ledger_id = l.id AND v.status = 'posted'), 0) AS total_credit,
-  (SELECT COUNT(*) FROM vouchers v WHERE (v.debit_ledger_id = l.id OR v.credit_ledger_id = l.id)) AS voucher_count`;
+  COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.debit_ledger_id = l.id AND v.status = 'posted' AND v.company_id = l.company_id), 0) AS total_debit,
+  COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.credit_ledger_id = l.id AND v.status = 'posted' AND v.company_id = l.company_id), 0) AS total_credit,
+  (SELECT COUNT(*) FROM vouchers v WHERE (v.debit_ledger_id = l.id OR v.credit_ledger_id = l.id) AND v.company_id = l.company_id) AS voucher_count`;
 
 function withBalance(row) {
   const dr = parseFloat(row.total_debit) || 0;
@@ -44,7 +45,7 @@ function withBalance(row) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /api/ledger-accounts/groups — fixed Tally groups
+// GET /api/ledger-accounts/groups — fixed Tally groups (global, shared taxonomy)
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/groups', async (req, res) => {
   try {
@@ -64,15 +65,15 @@ router.get('/groups', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/voucher-options', async (req, res) => {
   try {
-    await ensureLinkedLedgers();
+    await ensureLinkedLedgers(req.companyId);
     const [banks, clients, vendors, ledgers] = await Promise.all([
-      query(`SELECT id, account_name, account_type, bank_name, account_number FROM bank_accounts WHERE is_active = 1 ORDER BY account_type DESC, account_name`),
-      query(`SELECT id, name, city FROM clients WHERE is_active = 1 ORDER BY name`),
-      query(`SELECT id, name FROM vendors WHERE is_active = 1 ORDER BY name`),
+      query(`SELECT id, account_name, account_type, bank_name, account_number FROM bank_accounts WHERE is_active = 1 AND company_id = $1 ORDER BY account_type DESC, account_name`, [req.companyId]),
+      query(`SELECT id, name, city FROM clients WHERE is_active = 1 AND company_id = $1 ORDER BY name`, [req.companyId]),
+      query(`SELECT id, name FROM vendors WHERE is_active = 1 AND company_id = $1 ORDER BY name`, [req.companyId]),
       query(`SELECT l.id, l.name, g.name AS group_name, g.nature, g.sort_order
                FROM ledgers l JOIN ledger_groups g ON g.id = l.group_id
-              WHERE l.is_active = 1
-              ORDER BY g.sort_order, l.name`),
+              WHERE l.is_active = 1 AND l.company_id = $1
+              ORDER BY g.sort_order, l.name`, [req.companyId]),
     ]);
 
     const last4 = (n) => (n ? ` · ••${String(n).slice(-4)}` : '');
@@ -105,14 +106,14 @@ router.get('/voucher-options', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
-    await ensureLinkedLedgers();
+    await ensureLinkedLedgers(req.companyId);
     const { group_id, search, active_only } = req.query;
-    const conditions = [];
-    const params = [];
+    const conditions = ['l.company_id = $1'];
+    const params = [req.companyId];
     if (group_id) { params.push(group_id); conditions.push(`l.group_id = $${params.length}`); }
     if (search) { params.push(`%${search}%`); conditions.push(`l.name LIKE $${params.length}`); }
     if (active_only === 'true') conditions.push('l.is_active = 1');
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const where = `WHERE ${conditions.join(' AND ')}`;
 
     const result = await query(`
       SELECT l.*, g.name AS group_name, g.nature, g.report, g.is_direct, g.sort_order,
@@ -124,7 +125,7 @@ router.get('/', async (req, res) => {
     `, params);
 
     // Linked ledgers also carry what their source module recorded.
-    const linked = await linkedTotals(result.rows);
+    const linked = await linkedTotals(result.rows, req.companyId);
     const rows = result.rows.map((r) => {
       const t = linked.get(r.id);
       return withBalance(t ? {
@@ -139,7 +140,7 @@ router.get('/', async (req, res) => {
       // vouchers posted directly to this ledger (blocks a hard delete)
       direct_voucher_count: parseInt(result.rows.find((x) => x.id === r.id)?.voucher_count) || 0,
     }));
-    res.json({ success: true, data: rows, dismissed_auto: (await getDismissed()).size });
+    res.json({ success: true, data: rows, dismissed_auto: (await getDismissed(req.companyId)).size });
   } catch (error) {
     logError(error, req, { feature: 'ledger-accounts' });
     logger.error('Fetch ledgers error:', error);
@@ -152,10 +153,10 @@ async function validateGroup(groupId) {
   return g.rows.length > 0;
 }
 
-async function nameTaken(name, excludeId = null) {
+async function nameTaken(name, companyId, excludeId = null) {
   const r = await query(
-    `SELECT id FROM ledgers WHERE LOWER(TRIM(name)) = LOWER(TRIM($1))${excludeId ? ' AND id != $2' : ''}`,
-    excludeId ? [name, excludeId] : [name]
+    `SELECT id FROM ledgers WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND company_id = $2${excludeId ? ' AND id != $3' : ''}`,
+    excludeId ? [name, companyId, excludeId] : [name, companyId]
   );
   return r.rows.length > 0;
 }
@@ -168,11 +169,11 @@ router.post('/', canEdit, async (req, res) => {
     const { error, value } = ledgerSchema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
     if (!(await validateGroup(value.group_id))) return res.status(400).json({ success: false, message: 'Invalid ledger group' });
-    if (await nameTaken(value.name)) return res.status(409).json({ success: false, message: `A ledger named "${value.name}" already exists` });
+    if (await nameTaken(value.name, req.companyId)) return res.status(409).json({ success: false, message: `A ledger named "${value.name}" already exists` });
 
     const result = await query(
-      `INSERT INTO ledgers (name, group_id, description, created_by) VALUES ($1, $2, $3, $4) RETURNING *`,
-      [value.name, value.group_id, value.description || null, req.user.userId]
+      `INSERT INTO ledgers (name, group_id, description, created_by, company_id) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [value.name, value.group_id, value.description || null, req.user.userId, req.companyId]
     );
     res.status(201).json({ success: true, data: result.rows[0], message: 'Ledger created' });
   } catch (error) {
@@ -188,26 +189,26 @@ router.post('/', canEdit, async (req, res) => {
 router.put('/:id', canEdit, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const existing = await query('SELECT * FROM ledgers WHERE id = $1', [id]);
+    const existing = await query('SELECT * FROM ledgers WHERE id = $1 AND company_id = $2', [id, req.companyId]);
     if (!existing.rows.length) return res.status(404).json({ success: false, message: 'Ledger not found' });
 
     // Activate / deactivate only
     if (Object.keys(req.body || {}).length === 1 && req.body.is_active !== undefined) {
-      await query('UPDATE ledgers SET is_active = $1 WHERE id = $2', [req.body.is_active ? 1 : 0, id]);
-      const row = await query('SELECT * FROM ledgers WHERE id = $1', [id]);
+      await query('UPDATE ledgers SET is_active = $1 WHERE id = $2 AND company_id = $3', [req.body.is_active ? 1 : 0, id, req.companyId]);
+      const row = await query('SELECT * FROM ledgers WHERE id = $1 AND company_id = $2', [id, req.companyId]);
       return res.json({ success: true, data: row.rows[0], message: req.body.is_active ? 'Ledger activated' : 'Ledger deactivated' });
     }
 
     const { error, value } = ledgerSchema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
     if (!(await validateGroup(value.group_id))) return res.status(400).json({ success: false, message: 'Invalid ledger group' });
-    if (await nameTaken(value.name, id)) return res.status(409).json({ success: false, message: `A ledger named "${value.name}" already exists` });
+    if (await nameTaken(value.name, req.companyId, id)) return res.status(409).json({ success: false, message: `A ledger named "${value.name}" already exists` });
 
     await query(
-      'UPDATE ledgers SET name = $1, group_id = $2, description = $3 WHERE id = $4',
-      [value.name, value.group_id, value.description || null, id]
+      'UPDATE ledgers SET name = $1, group_id = $2, description = $3 WHERE id = $4 AND company_id = $5',
+      [value.name, value.group_id, value.description || null, id, req.companyId]
     );
-    const row = await query('SELECT * FROM ledgers WHERE id = $1', [id]);
+    const row = await query('SELECT * FROM ledgers WHERE id = $1 AND company_id = $2', [id, req.companyId]);
     res.json({ success: true, data: row.rows[0], message: 'Ledger updated' });
   } catch (error) {
     logError(error, req, { feature: 'ledger-accounts' });
@@ -221,15 +222,15 @@ router.put('/:id', canEdit, async (req, res) => {
 router.delete('/:id', canEdit, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const existing = await query('SELECT * FROM ledgers WHERE id = $1', [id]);
+    const existing = await query('SELECT * FROM ledgers WHERE id = $1 AND company_id = $2', [id, req.companyId]);
     if (!existing.rows.length) return res.status(404).json({ success: false, message: 'Ledger not found' });
 
     const used = await query(
-      'SELECT COUNT(*) AS count FROM vouchers WHERE debit_ledger_id = $1 OR credit_ledger_id = $1',
-      [id]
+      'SELECT COUNT(*) AS count FROM vouchers WHERE (debit_ledger_id = $1 OR credit_ledger_id = $1) AND company_id = $2',
+      [id, req.companyId]
     );
     if (parseInt(used.rows[0].count) > 0) {
-      await query('UPDATE ledgers SET is_active = 0 WHERE id = $1', [id]);
+      await query('UPDATE ledgers SET is_active = 0 WHERE id = $1 AND company_id = $2', [id, req.companyId]);
       return res.json({
         success: true,
         deactivated: true,
@@ -237,12 +238,12 @@ router.delete('/:id', canEdit, async (req, res) => {
       });
     }
 
-    await query('DELETE FROM ledgers WHERE id = $1', [id]);
+    await query('DELETE FROM ledgers WHERE id = $1 AND company_id = $2', [id, req.companyId]);
     const src = existing.rows[0];
     if (src.source_type) {
       // Auto ledger: remember it so it is not re-created. The expenses / salary /
       // bank entries it showed are untouched.
-      await dismissLinkedLedger(src.source_type, src.source_key);
+      await dismissLinkedLedger(src.source_type, src.source_key, req.companyId);
       return res.json({ success: true, deleted: true, message: `Ledger "${src.name}" deleted. Its entries are still in ${SOURCE_LABELS[src.source_type]}.` });
     }
     res.json({ success: true, deleted: true, message: 'Ledger deleted' });
@@ -257,7 +258,7 @@ router.delete('/:id', canEdit, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/restore-auto', canEdit, async (req, res) => {
   try {
-    const n = await restoreLinkedLedgers();
+    const n = await restoreLinkedLedgers(req.companyId);
     res.json({ success: true, message: n ? `${n} auto ledger(s) restored` : 'Nothing to restore' });
   } catch (error) {
     logError(error, req, { feature: 'ledger-accounts' });

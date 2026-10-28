@@ -2,7 +2,7 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const { logError } = require('../utils/errorLogger');
 const multer = require('multer');
 const path = require('path');
@@ -43,6 +43,7 @@ const upload = multer({
 });
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. GET /api/vendors/alerts/expiring-docs — Documents expiring within 30 days
@@ -53,11 +54,12 @@ router.get('/alerts/expiring-docs', async (req, res) => {
       SELECT vd.*, v.legal_name, v.display_name, v.vendor_code
       FROM vendor_documents vd
       JOIN vendors v ON vd.vendor_id = v.id
-      WHERE vd.expiry_date IS NOT NULL 
+      WHERE vd.company_id = $1
+        AND vd.expiry_date IS NOT NULL
         AND vd.expiry_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY)
         AND v.is_active = 1
       ORDER BY vd.expiry_date ASC
-    `);
+    `, [req.companyId]);
     res.json({ success: true, data: result.rows });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'vendors' });
@@ -77,15 +79,15 @@ router.get('/', async (req, res) => {
       const result = await query(`
         SELECT v.id, v.vendor_code, v.legal_name, v.display_name, v.name, v.tax_id, v.is_active
         FROM vendors v
-        WHERE v.is_active = 1
+        WHERE v.is_active = 1 AND v.company_id = $1
         ORDER BY COALESCE(v.display_name, v.name) ASC
-      `);
+      `, [req.companyId]);
       return res.json({ success: true, data: result.rows });
     }
 
-    let conditions = [];
-    let params = [];
-    let pc = 1;
+    let conditions = ['v.company_id = $1'];
+    let params = [req.companyId];
+    let pc = 2;
 
     if (search) {
       conditions.push(`(
@@ -168,8 +170,8 @@ router.get('/:id', async (req, res) => {
         COALESCE((SELECT SUM(amount_paid) FROM expenses e WHERE e.vendor_id = v.id AND e.status != 'rejected'), 0) AS total_paid
       FROM vendors v
       LEFT JOIN expense_categories ec ON v.default_account_id = ec.id
-      WHERE v.id = $1
-    `, [req.params.id]);
+      WHERE v.id = $1 AND v.company_id = $2
+    `, [req.params.id, req.companyId]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Vendor not found' });
@@ -223,7 +225,7 @@ router.post('/', async (req, res) => {
     // Auto-generate vendor_code if not provided
     let finalCode = vendor_code?.trim() || null;
     if (!finalCode) {
-      const maxRes = await query('SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM vendors');
+      const maxRes = await query('SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM vendors WHERE company_id = $1', [req.companyId]);
       const nextId = maxRes.rows[0]?.next_id || 1;
       finalCode = `VND-${String(nextId).padStart(3, '0')}`;
     }
@@ -232,8 +234,8 @@ router.post('/', async (req, res) => {
       INSERT INTO vendors (
         vendor_code, legal_name, display_name, name, tax_id, currency,
         contact_info, payment_terms_days, bank_name, bank_account_no,
-        bank_routing_code, default_account_id, is_active
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        bank_routing_code, default_account_id, is_active, company_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING *
     `, [
       finalCode,
@@ -248,7 +250,8 @@ router.post('/', async (req, res) => {
       bank_account_no || null,
       bank_routing_code ? bank_routing_code.trim().toUpperCase() : null,
       default_account_id || null,
-      is_active ? 1 : 0
+      is_active ? 1 : 0,
+      req.companyId
     ]);
 
     res.status(201).json({
@@ -308,7 +311,7 @@ router.put('/:id', async (req, res) => {
         default_account_id = $12,
         is_active = $13,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $14
+      WHERE id = $14 AND company_id = $15
     `, [
       vendor_code || null,
       finalLegalName,
@@ -323,14 +326,15 @@ router.put('/:id', async (req, res) => {
       bank_routing_code ? bank_routing_code.trim().toUpperCase() : null,
       default_account_id || null,
       is_active !== undefined ? (is_active ? 1 : 0) : 1,
-      req.params.id
+      req.params.id,
+      req.companyId
     ]);
 
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Vendor not found' });
     }
 
-    const updated = await query('SELECT * FROM vendors WHERE id = $1', [req.params.id]);
+    const updated = await query('SELECT * FROM vendors WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     res.json({
       success: true,
       data: updated.rows[0],
@@ -349,12 +353,12 @@ router.put('/:id', async (req, res) => {
 // PATCH /api/vendors/:id/toggle-status — Activate / Deactivate vendor
 router.patch('/:id/toggle-status', async (req, res) => {
   try {
-    const existing = await query('SELECT is_active FROM vendors WHERE id = $1', [req.params.id]);
+    const existing = await query('SELECT is_active FROM vendors WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     if (existing.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Vendor not found' });
     }
     const nextStatus = existing.rows[0].is_active ? 0 : 1;
-    await query('UPDATE vendors SET is_active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [nextStatus, req.params.id]);
+    await query('UPDATE vendors SET is_active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND company_id = $3', [nextStatus, req.params.id, req.companyId]);
     res.json({ success: true, is_active: nextStatus === 1, message: `Vendor ${nextStatus ? 'activated' : 'deactivated'}` });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'vendors' });
@@ -373,9 +377,9 @@ router.get('/:id/documents', async (req, res) => {
       SELECT vd.*, u.full_name AS verified_by_name
       FROM vendor_documents vd
       LEFT JOIN users u ON vd.verified_by = u.id
-      WHERE vd.vendor_id = $1
+      WHERE vd.vendor_id = $1 AND vd.company_id = $2
       ORDER BY vd.created_at DESC
-    `, [req.params.id]);
+    `, [req.params.id, req.companyId]);
     res.json({ success: true, data: result.rows });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'vendors' });
@@ -396,12 +400,18 @@ router.post('/:id/documents', upload.single('file'), async (req, res) => {
       return res.status(400).json({ success: false, message: 'Document type is required' });
     }
 
+    const vendorCheck = await query('SELECT id FROM vendors WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
+    if (vendorCheck.rows.length === 0) {
+      fs.unlinkSync(req.file.path);
+      return res.status(404).json({ success: false, message: 'Vendor not found' });
+    }
+
     const fileUrl = `/uploads/vendor_docs/${req.file.filename}`;
 
     const result = await query(`
       INSERT INTO vendor_documents (
-        vendor_id, document_type, file_url, file_name, file_size, mime_type, expiry_date, status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending')
+        vendor_id, document_type, file_url, file_name, file_size, mime_type, expiry_date, status, company_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending', $8)
       RETURNING *
     `, [
       req.params.id,
@@ -410,7 +420,8 @@ router.post('/:id/documents', upload.single('file'), async (req, res) => {
       req.file.originalname,
       req.file.size,
       req.file.mimetype,
-      expiry_date || null
+      expiry_date || null,
+      req.companyId
     ]);
 
     res.status(201).json({
@@ -445,13 +456,14 @@ router.patch('/:id/documents/:docId/status', async (req, res) => {
         verified_by = $3,
         verified_at = CURRENT_TIMESTAMP,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $4 AND vendor_id = $5
+      WHERE id = $4 AND vendor_id = $5 AND company_id = $6
     `, [
       status,
       status === 'Rejected' ? rejection_reason || 'Rejected during compliance review' : null,
       status === 'Pending' ? null : userId,
       req.params.docId,
-      req.params.id
+      req.params.id,
+      req.companyId
     ]);
 
     if (result.rowCount === 0) {
@@ -462,8 +474,8 @@ router.patch('/:id/documents/:docId/status', async (req, res) => {
       SELECT vd.*, u.full_name AS verified_by_name
       FROM vendor_documents vd
       LEFT JOIN users u ON vd.verified_by = u.id
-      WHERE vd.id = $1
-    `, [req.params.docId]);
+      WHERE vd.id = $1 AND vd.company_id = $2
+    `, [req.params.docId, req.companyId]);
 
     res.json({
       success: true,
@@ -479,7 +491,7 @@ router.patch('/:id/documents/:docId/status', async (req, res) => {
 // DELETE /api/vendors/:id/documents/:docId — Delete document
 router.delete('/:id/documents/:docId', async (req, res) => {
   try {
-    const docRes = await query('SELECT * FROM vendor_documents WHERE id = $1 AND vendor_id = $2', [req.params.docId, req.params.id]);
+    const docRes = await query('SELECT * FROM vendor_documents WHERE id = $1 AND vendor_id = $2 AND company_id = $3', [req.params.docId, req.params.id, req.companyId]);
     if (docRes.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
@@ -499,7 +511,7 @@ router.delete('/:id/documents/:docId', async (req, res) => {
       }
     }
 
-    await query('DELETE FROM vendor_documents WHERE id = $1', [req.params.docId]);
+    await query('DELETE FROM vendor_documents WHERE id = $1 AND company_id = $2', [req.params.docId, req.companyId]);
     res.json({ success: true, message: 'Document deleted successfully' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'vendors' });
@@ -514,17 +526,17 @@ router.get('/:id/statement', async (req, res) => {
   try {
     const vendorId = req.params.id;
 
-    const vendorRes = await query('SELECT * FROM vendors WHERE id = $1', [vendorId]);
+    const vendorRes = await query('SELECT * FROM vendors WHERE id = $1 AND company_id = $2', [vendorId, req.companyId]);
     if (vendorRes.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Vendor not found' });
     }
     const vendor = vendorRes.rows[0];
 
     const expensesRes = await query(`
-      SELECT * FROM expenses 
-      WHERE vendor_id = $1 
+      SELECT * FROM expenses
+      WHERE vendor_id = $1 AND company_id = $2
       ORDER BY expense_date DESC, created_at DESC
-    `, [vendorId]);
+    `, [vendorId, req.companyId]);
 
     const expenses = expensesRes.rows;
 
@@ -542,9 +554,9 @@ router.get('/:id/statement', async (req, res) => {
       SELECT vp.*, e.description as expense_description, e.expense_date
       FROM vendor_payments vp
       LEFT JOIN expenses e ON vp.expense_id = e.id
-      WHERE vp.vendor_id = $1
+      WHERE vp.vendor_id = $1 AND vp.company_id = $2
       ORDER BY vp.payment_date DESC, vp.created_at DESC
-    `, [vendorId]);
+    `, [vendorId, req.companyId]);
 
     res.json({
       success: true,

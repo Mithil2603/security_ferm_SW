@@ -1,14 +1,21 @@
 /**
  * src/services/invoicing/recurringInvoices.js
- * 
+ *
  * Core service for managing recurring invoice templates.
  * Handles CRUD, frequency scheduling, pro-rata calculations,
  * and automatic invoice generation via cron integration.
+ *
+ * Route-driven methods (create/findAll/update/delete/pause/resume/getHistory/
+ * getDashboardStats) take a companyId and scope by it. `generateInvoice` and
+ * the `getDueFor*` finders are also used by the install-wide cron job in
+ * `src/utils/scheduledJobs.js` with no per-request company context, so they
+ * derive the right company from the recurring invoice row itself rather than
+ * requiring a companyId argument — the route handler for manual "generate
+ * now" verifies ownership itself before calling it.
  */
 
 const { query } = require('../../database/connection');
 const { calculateNextDate, daysInMonth, today } = require('../utils/dateCalculator');
-const { add, subtract, multiply, divide, percentage, isPositive, toDecimal } = require('../utils/decimalMath');
 const Decimal = require('decimal.js');
 const logger = require('../../utils/logger');
 
@@ -17,7 +24,7 @@ class RecurringInvoiceService {
   /**
    * Create a new recurring invoice template.
    */
-  async create(data, userId) {
+  async create(data, userId, companyId) {
     const {
       client_id,
       monthly_rate,
@@ -41,37 +48,44 @@ class RecurringInvoiceService {
       `INSERT INTO recurring_invoices
         (client_id, monthly_rate, tax_type, tax_rate, discount_amount, is_rcm_applicable,
          frequency, start_date, end_date, next_invoice_date, auto_generate,
-         reminder_days, invoice_description, invoice_notes, status, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'active', $15)`,
+         reminder_days, invoice_description, invoice_notes, status, created_by, company_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'active', $15, $16)`,
       [
         client_id, monthly_rate, tax_type, tax_rate, discount_amount, is_rcm_applicable,
         frequency, start_date, end_date, next_invoice_date, auto_generate,
-        reminder_days, invoice_description, invoice_notes, userId,
+        reminder_days, invoice_description, invoice_notes, userId, companyId,
       ]
     );
 
     // Log the creation
     const newId = result.insertId;
     if (newId) {
-      await this._log(newId, null, 'CREATED', `Recurring invoice created with ${frequency} frequency`);
+      await this._log(newId, null, 'CREATED', `Recurring invoice created with ${frequency} frequency`, companyId);
     }
 
-    return this.findById(newId);
+    return this.findById(newId, companyId);
   }
 
   /**
-   * Find a recurring invoice by ID.
+   * Find a recurring invoice by ID. `companyId` is omitted only by the
+   * install-wide cron job; every route call must pass it.
    */
-  async findById(id) {
+  async findById(id, companyId = null) {
+    const params = [id];
+    let companyFilter = '';
+    if (companyId) {
+      companyFilter = 'AND ri.company_id = $2';
+      params.push(companyId);
+    }
     const result = await query(
-      `SELECT ri.*, c.name as client_name, c.email as client_email, 
+      `SELECT ri.*, c.name as client_name, c.email as client_email,
               c.monthly_rate as client_monthly_rate, c.city as client_city,
               u.full_name as created_by_name
        FROM recurring_invoices ri
-       JOIN clients c ON ri.client_id = c.id
+       JOIN clients c ON ri.client_id = c.id AND c.company_id = ri.company_id
        LEFT JOIN users u ON ri.created_by = u.id
-       WHERE ri.id = $1`,
-      [id]
+       WHERE ri.id = $1 ${companyFilter}`,
+      params
     );
     return result.rows[0] || null;
   }
@@ -79,24 +93,24 @@ class RecurringInvoiceService {
   /**
    * List all recurring invoices with filters.
    */
-  async findAll(filters = {}) {
+  async findAll(filters = {}, companyId) {
     const { client_id, status, frequency, page = 1, limit = 50 } = filters;
 
-    let conditions = [];
-    let params = [];
-    let pc = 1;
+    let conditions = ['ri.company_id = $1'];
+    let params = [companyId];
+    let pc = 2;
 
     if (client_id) { conditions.push(`ri.client_id = $${pc}`); params.push(client_id); pc++; }
     if (status) { conditions.push(`ri.status = $${pc}`); params.push(status); pc++; }
     if (frequency) { conditions.push(`ri.frequency = $${pc}`); params.push(frequency); pc++; }
 
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const where = `WHERE ${conditions.join(' AND ')}`;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     const result = await query(
       `SELECT ri.*, c.name as client_name, c.email as client_email
        FROM recurring_invoices ri
-       JOIN clients c ON ri.client_id = c.id
+       JOIN clients c ON ri.client_id = c.id AND c.company_id = ri.company_id
        ${where}
        ORDER BY ri.next_invoice_date ASC, ri.created_at DESC
        LIMIT $${pc} OFFSET $${pc + 1}`,
@@ -121,8 +135,8 @@ class RecurringInvoiceService {
   /**
    * Update a recurring invoice template.
    */
-  async update(id, data) {
-    const existing = await this.findById(id);
+  async update(id, data, companyId) {
+    const existing = await this.findById(id, companyId);
     if (!existing) throw new Error('Recurring invoice not found');
 
     const fields = [];
@@ -146,56 +160,56 @@ class RecurringInvoiceService {
     if (fields.length === 0) return existing;
 
     fields.push(`updated_at = CURRENT_TIMESTAMP`);
-    params.push(id);
+    params.push(id, companyId);
 
     await query(
-      `UPDATE recurring_invoices SET ${fields.join(', ')} WHERE id = $${pc}`,
+      `UPDATE recurring_invoices SET ${fields.join(', ')} WHERE id = $${pc} AND company_id = $${pc + 1}`,
       params
     );
 
-    await this._log(id, null, 'UPDATED', `Fields updated: ${Object.keys(data).join(', ')}`);
+    await this._log(id, null, 'UPDATED', `Fields updated: ${Object.keys(data).join(', ')}`, companyId);
 
-    return this.findById(id);
+    return this.findById(id, companyId);
   }
 
   /**
    * Delete a recurring invoice (soft: set status to cancelled).
    */
-  async delete(id) {
-    const existing = await this.findById(id);
+  async delete(id, companyId) {
+    const existing = await this.findById(id, companyId);
     if (!existing) throw new Error('Recurring invoice not found');
 
     await query(
-      `UPDATE recurring_invoices SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-      [id]
+      `UPDATE recurring_invoices SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND company_id = $2`,
+      [id, companyId]
     );
 
-    await this._log(id, null, 'CANCELLED', 'Recurring invoice cancelled');
+    await this._log(id, null, 'CANCELLED', 'Recurring invoice cancelled', companyId);
     return { success: true, message: 'Recurring invoice cancelled' };
   }
 
   /**
    * Pause a recurring invoice.
    */
-  async pause(id) {
-    const existing = await this.findById(id);
+  async pause(id, companyId) {
+    const existing = await this.findById(id, companyId);
     if (!existing) throw new Error('Recurring invoice not found');
     if (existing.status !== 'active') throw new Error('Only active recurring invoices can be paused');
 
     await query(
-      `UPDATE recurring_invoices SET status = 'paused', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-      [id]
+      `UPDATE recurring_invoices SET status = 'paused', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND company_id = $2`,
+      [id, companyId]
     );
 
-    await this._log(id, null, 'PAUSED', 'Recurring invoice paused');
-    return this.findById(id);
+    await this._log(id, null, 'PAUSED', 'Recurring invoice paused', companyId);
+    return this.findById(id, companyId);
   }
 
   /**
    * Resume a paused recurring invoice.
    */
-  async resume(id) {
-    const existing = await this.findById(id);
+  async resume(id, companyId) {
+    const existing = await this.findById(id, companyId);
     if (!existing) throw new Error('Recurring invoice not found');
     if (existing.status !== 'paused') throw new Error('Only paused recurring invoices can be resumed');
 
@@ -203,24 +217,27 @@ class RecurringInvoiceService {
     const nextDate = calculateNextDate(today(), existing.frequency);
 
     await query(
-      `UPDATE recurring_invoices 
-       SET status = 'active', next_invoice_date = $1, updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $2`,
-      [nextDate, id]
+      `UPDATE recurring_invoices
+       SET status = 'active', next_invoice_date = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2 AND company_id = $3`,
+      [nextDate, id, companyId]
     );
 
-    await this._log(id, null, 'RESUMED', `Recurring invoice resumed, next date: ${nextDate}`);
-    return this.findById(id);
+    await this._log(id, null, 'RESUMED', `Recurring invoice resumed, next date: ${nextDate}`, companyId);
+    return this.findById(id, companyId);
   }
 
   /**
    * Generate an invoice NOW from a recurring template.
    * This is the core generation logic used by both manual trigger and cron job.
+   * No companyId param — the recurring invoice's own company_id is authoritative
+   * (cron has no request-scoped company; the route verifies ownership before calling this).
    */
   async generateInvoice(id) {
     const recurring = await this.findById(id);
     if (!recurring) throw new Error('Recurring invoice not found');
     if (recurring.status === 'cancelled') throw new Error('Cannot generate from cancelled recurring invoice');
+    const companyId = recurring.company_id;
 
     // Calculate billing period
     const billingStart = recurring.next_invoice_date;
@@ -259,19 +276,19 @@ class RecurringInvoiceService {
     const roundOff = parseFloat((roundedFinal - rawTotal).toFixed(2));
 
     // Generate invoice number
-    const invoiceNumber = await this._generateInvoiceNumber(startDate);
+    const invoiceNumber = await this._generateInvoiceNumber(startDate, companyId);
 
     const todayDate = today();
     const dueDate = calculateNextDate(todayDate, 'biweekly'); // Net 15
 
     // Insert invoice
     const invoiceResult = await query(
-      `INSERT INTO invoices 
+      `INSERT INTO invoices
         (client_id, invoice_number, invoice_date, due_date, billing_period_start, billing_period_end,
          amount_subtotal, tax_rate, tax_amount, cgst_amount, sgst_amount, igst_amount,
-         discount_amount, total_amount, round_off, final_amount, payment_due, status, 
-         recurring_invoice_id, is_recurring, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'draft', $18, 1, $19)`,
+         discount_amount, total_amount, round_off, final_amount, payment_due, status,
+         recurring_invoice_id, is_recurring, created_by, company_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'draft', $18, 1, $19, $20)`,
       [
         recurring.client_id,
         invoiceNumber,
@@ -292,6 +309,7 @@ class RecurringInvoiceService {
         roundedFinal,
         id,
         recurring.created_by,
+        companyId,
       ]
     );
 
@@ -307,20 +325,20 @@ class RecurringInvoiceService {
     }
 
     await query(
-      `UPDATE recurring_invoices 
+      `UPDATE recurring_invoices
        SET next_invoice_date = $1, last_invoice_date = $2, status = $3, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $4`,
-      [nextDate, todayDate, newStatus, id]
+       WHERE id = $4 AND company_id = $5`,
+      [nextDate, todayDate, newStatus, id, companyId]
     );
 
     await this._log(id, generatedInvoiceId, 'INVOICE_GENERATED',
-      `Invoice ${invoiceNumber} generated for period ${billingStart} to ${billingEnd}, amount: ₹${finalAmount}`);
+      `Invoice ${invoiceNumber} generated for period ${billingStart} to ${billingEnd}, amount: ₹${roundedFinal}`, companyId);
 
     return {
       recurring_invoice_id: id,
       generated_invoice_id: generatedInvoiceId,
       invoice_number: invoiceNumber,
-      amount: parseFloat(finalAmount.toString()),
+      amount: roundedFinal,
       billing_period: { start: billingStart, end: billingEnd },
       next_invoice_date: nextDate,
       status: newStatus,
@@ -328,14 +346,14 @@ class RecurringInvoiceService {
   }
 
   /**
-   * Get all recurring invoices due for generation (used by cron job).
+   * Get all recurring invoices due for generation (used by cron job — install-wide, every company).
    */
   async getDueForGeneration() {
     const todayStr = today();
     const result = await query(
       `SELECT ri.*, c.name as client_name, c.email as client_email
        FROM recurring_invoices ri
-       JOIN clients c ON ri.client_id = c.id
+       JOIN clients c ON ri.client_id = c.id AND c.company_id = ri.company_id
        WHERE ri.status = 'active'
          AND ri.auto_generate = 1
          AND ri.next_invoice_date <= $1
@@ -346,13 +364,13 @@ class RecurringInvoiceService {
   }
 
   /**
-   * Get recurring invoices due for reminder emails.
+   * Get recurring invoices due for reminder emails (used by cron job — install-wide, every company).
    */
   async getDueForReminder() {
     const result = await query(
       `SELECT ri.*, c.name as client_name, c.email as client_email
        FROM recurring_invoices ri
-       JOIN clients c ON ri.client_id = c.id
+       JOIN clients c ON ri.client_id = c.id AND c.company_id = ri.company_id
        WHERE ri.status = 'active'
          AND ri.reminder_days > 0
          AND date(ri.next_invoice_date, '-' || ri.reminder_days || ' days') <= date('now')
@@ -365,15 +383,15 @@ class RecurringInvoiceService {
   /**
    * Get generation history for a recurring invoice.
    */
-  async getHistory(id, limit = 20) {
+  async getHistory(id, limit = 20, companyId) {
     const result = await query(
       `SELECT ril.*, i.invoice_number, i.final_amount, i.status as invoice_status
        FROM recurring_invoice_log ril
        LEFT JOIN invoices i ON ril.generated_invoice_id = i.id
-       WHERE ril.recurring_invoice_id = $1
+       WHERE ril.recurring_invoice_id = $1 AND ril.company_id = $2
        ORDER BY ril.created_at DESC
-       LIMIT $2`,
-      [id, limit]
+       LIMIT $3`,
+      [id, companyId, limit]
     );
     return result.rows;
   }
@@ -381,27 +399,30 @@ class RecurringInvoiceService {
   /**
    * Get dashboard stats for recurring invoices.
    */
-  async getDashboardStats() {
+  async getDashboardStats(companyId) {
     const stats = await query(
-      `SELECT 
+      `SELECT
          COUNT(*) as total,
          SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
          SUM(CASE WHEN status = 'paused' THEN 1 ELSE 0 END) as paused,
          SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END) as expired,
          SUM(CASE WHEN status = 'active' THEN monthly_rate ELSE 0 END) as monthly_recurring_revenue
        FROM recurring_invoices
-       WHERE status != 'cancelled'`
+       WHERE status != 'cancelled' AND company_id = $1`,
+      [companyId]
     );
 
     const upcoming = await query(
       `SELECT ri.id, ri.next_invoice_date, ri.monthly_rate, ri.frequency,
               c.name as client_name
        FROM recurring_invoices ri
-       JOIN clients c ON ri.client_id = c.id
+       JOIN clients c ON ri.client_id = c.id AND c.company_id = ri.company_id
        WHERE ri.status = 'active'
          AND ri.next_invoice_date <= date('now', '+7 days')
+         AND ri.company_id = $1
        ORDER BY ri.next_invoice_date ASC
-       LIMIT 10`
+       LIMIT 10`,
+      [companyId]
     );
 
     return {
@@ -449,7 +470,7 @@ class RecurringInvoiceService {
   /**
    * Generate a unique invoice number (matches existing pattern from invoices.js).
    */
-  async _generateInvoiceNumber(date) {
+  async _generateInvoiceNumber(date, companyId) {
     const targetDate = date instanceof Date ? date : new Date(date);
     const year = targetDate.getFullYear();
     const month = targetDate.getMonth() + 1;
@@ -462,12 +483,13 @@ class RecurringInvoiceService {
     const fyEndDate = `${fyStartYear + 1}-04-01`;
 
     const result = await query(
-      `SELECT invoice_number FROM invoices 
-       WHERE invoice_number LIKE 'INV-%' 
-         AND invoice_date >= $1 
+      `SELECT invoice_number FROM invoices
+       WHERE invoice_number LIKE 'INV-%'
+         AND invoice_date >= $1
          AND invoice_date < $2
+         AND company_id = $3
        ORDER BY id DESC LIMIT 1`,
-      [fyStartDate, fyEndDate]
+      [fyStartDate, fyEndDate, companyId]
     );
 
     let sequence = 1;
@@ -485,12 +507,12 @@ class RecurringInvoiceService {
   /**
    * Log recurring invoice actions.
    */
-  async _log(recurringInvoiceId, generatedInvoiceId, action, details) {
+  async _log(recurringInvoiceId, generatedInvoiceId, action, details, companyId) {
     try {
       await query(
-        `INSERT INTO recurring_invoice_log (recurring_invoice_id, generated_invoice_id, action, details)
-         VALUES ($1, $2, $3, $4)`,
-        [recurringInvoiceId, generatedInvoiceId, action, details]
+        `INSERT INTO recurring_invoice_log (recurring_invoice_id, generated_invoice_id, action, details, company_id)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [recurringInvoiceId, generatedInvoiceId, action, details, companyId]
       );
     } catch (err) {
       logger.error('Failed to log recurring invoice action:', err);

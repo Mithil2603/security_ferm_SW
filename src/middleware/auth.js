@@ -133,4 +133,17 @@ const requirePermission = (...perms) => {
   };
 };
 
-module.exports = { authMiddleware, requireRole, requirePermission, ROLE_PERMISSIONS, getEffectivePermissions };
+
+const requireCompanyContext = (req, res, next) => {
+  if (!req.user || !req.user.companyId) {
+    return res.status(400).json({
+      success: false,
+      message: 'No company selected. Call /api/auth/switch-company first.'
+    });
+  }
+  req.companyId = req.user.companyId;
+  req.businessId = req.user.businessId;
+  next();
+};
+
+module.exports = { authMiddleware, requireRole, requirePermission, requireCompanyContext, ROLE_PERMISSIONS, getEffectivePermissions };

@@ -5,9 +5,10 @@ const multer = require('multer');
 const path = require('path');
 const crypto = require('crypto');
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission, getEffectivePermissions } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext, getEffectivePermissions } = require('../middleware/auth');
 const { logError } = require('../utils/errorLogger');
 const storageConfig = require('../utils/storageConfig');
+const { getCompanyProfile } = require('../utils/companyProfile');
 const {
   recordClientReceipt,
   recordVendorPayment,
@@ -24,6 +25,7 @@ const {
 } = require('../services/payments/paymentTransactionService');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('manage_invoices', 'manage_expenses', 'manage_payroll', 'manage_vouchers'));
 
 // Permission required to record a payment of a given type — each tab is gated by
@@ -105,7 +107,7 @@ function bankEntryToRegisterRow(v) {
   };
 }
 
-async function fetchPaymentRows({ types, party_id, from_date, to_date, search, limit, offset }) {
+async function fetchPaymentRows({ types, party_id, from_date, to_date, search, limit, offset, companyId }) {
   const paymentTypes = types.filter((t) => t !== BANK_ENTRY_TYPE);
   // Bank entries have no party, so a party filter excludes them.
   const includeBank = types.includes(BANK_ENTRY_TYPE) && !party_id;
@@ -114,8 +116,8 @@ async function fetchPaymentRows({ types, party_id, from_date, to_date, search, l
   const parts = [];
 
   if (paymentTypes.length > 0) {
-    const conditions = [`pt.transaction_type IN (${paymentTypes.map(() => `$${pc++}`).join(',')})`];
-    params.push(...paymentTypes);
+    const conditions = [`pt.transaction_type IN (${paymentTypes.map(() => `$${pc++}`).join(',')})`, `pt.company_id = $${pc++}`];
+    params.push(...paymentTypes, companyId);
     if (party_id) { conditions.push(`pt.party_id = $${pc}`); params.push(party_id); pc++; }
     if (from_date) { conditions.push(`pt.payment_date >= $${pc}`); params.push(from_date); pc++; }
     if (to_date) { conditions.push(`pt.payment_date <= $${pc}`); params.push(to_date); pc++; }
@@ -126,16 +128,17 @@ async function fetchPaymentRows({ types, party_id, from_date, to_date, search, l
     }
     parts.push(`SELECT 'pt' AS src, pt.id AS id, pt.payment_date AS sort_date
        FROM payment_transactions pt
-       LEFT JOIN clients c ON pt.party_type = 'client' AND pt.party_id = c.id
-       LEFT JOIN vendors v ON pt.party_type = 'vendor' AND pt.party_id = v.id
-       LEFT JOIN employees e ON pt.party_type = 'employee' AND pt.party_id = e.id
-       LEFT JOIN invoices i ON pt.reference_type = 'invoice' AND pt.reference_id = i.id
-       LEFT JOIN expenses ex ON pt.reference_type = 'expense' AND pt.reference_id = ex.id
+       LEFT JOIN clients c ON pt.party_type = 'client' AND pt.party_id = c.id AND c.company_id = pt.company_id
+       LEFT JOIN vendors v ON pt.party_type = 'vendor' AND pt.party_id = v.id AND v.company_id = pt.company_id
+       LEFT JOIN employees e ON pt.party_type = 'employee' AND pt.party_id = e.id AND e.company_id = pt.company_id
+       LEFT JOIN invoices i ON pt.reference_type = 'invoice' AND pt.reference_id = i.id AND i.company_id = pt.company_id
+       LEFT JOIN expenses ex ON pt.reference_type = 'expense' AND pt.reference_id = ex.id AND ex.company_id = pt.company_id
        WHERE ${conditions.join(' AND ')}`);
   }
 
   if (includeBank) {
-    const conditions = [`bv.voucher_type IN ('journal', 'contra')`, `bv.status = 'posted'`];
+    const conditions = [`bv.voucher_type IN ('journal', 'contra')`, `bv.status = 'posted'`, `bv.company_id = $${pc++}`];
+    params.push(companyId);
     if (from_date) { conditions.push(`bv.voucher_date >= $${pc}`); params.push(from_date); pc++; }
     if (to_date) { conditions.push(`bv.voucher_date <= $${pc}`); params.push(to_date); pc++; }
     if (search) {
@@ -145,8 +148,8 @@ async function fetchPaymentRows({ types, party_id, from_date, to_date, search, l
     }
     parts.push(`SELECT 'bank' AS src, bv.id AS id, bv.voucher_date AS sort_date
        FROM vouchers bv
-       LEFT JOIN bank_accounts da ON bv.debit_account_id = da.id
-       LEFT JOIN bank_accounts ca ON bv.credit_account_id = ca.id
+       LEFT JOIN bank_accounts da ON bv.debit_account_id = da.id AND da.company_id = bv.company_id
+       LEFT JOIN bank_accounts ca ON bv.credit_account_id = ca.id AND ca.company_id = bv.company_id
        WHERE ${conditions.join(' AND ')}`);
   }
 
@@ -180,15 +183,15 @@ async function fetchPaymentRows({ types, party_id, from_date, to_date, search, l
               ba.account_name as bank_account_name, ba.account_type as bank_account_type,
               ptd.total_gst_amount, ptd.tds_amount, ptd.cgst_amount, ptd.sgst_amount, ptd.igst_amount
        FROM payment_transactions pt
-       LEFT JOIN clients c ON pt.party_type = 'client' AND pt.party_id = c.id
-       LEFT JOIN vendors v ON pt.party_type = 'vendor' AND pt.party_id = v.id
-       LEFT JOIN employees e ON pt.party_type = 'employee' AND pt.party_id = e.id
-       LEFT JOIN invoices i ON pt.reference_type = 'invoice' AND pt.reference_id = i.id
-       LEFT JOIN expenses ex ON pt.reference_type = 'expense' AND pt.reference_id = ex.id
-       LEFT JOIN bank_accounts ba ON pt.bank_account_id = ba.id
+       LEFT JOIN clients c ON pt.party_type = 'client' AND pt.party_id = c.id AND c.company_id = pt.company_id
+       LEFT JOIN vendors v ON pt.party_type = 'vendor' AND pt.party_id = v.id AND v.company_id = pt.company_id
+       LEFT JOIN employees e ON pt.party_type = 'employee' AND pt.party_id = e.id AND e.company_id = pt.company_id
+       LEFT JOIN invoices i ON pt.reference_type = 'invoice' AND pt.reference_id = i.id AND i.company_id = pt.company_id
+       LEFT JOIN expenses ex ON pt.reference_type = 'expense' AND pt.reference_id = ex.id AND ex.company_id = pt.company_id
+       LEFT JOIN bank_accounts ba ON pt.bank_account_id = ba.id AND ba.company_id = pt.company_id
        LEFT JOIN payment_tax_details ptd ON ptd.payment_transaction_id = pt.id
-       WHERE pt.id IN (${ptIds.map((_, idx) => `$${idx + 1}`).join(',')})`,
-      ptIds
+       WHERE pt.id IN (${ptIds.map((_, idx) => `$${idx + 1}`).join(',')}) AND pt.company_id = $${ptIds.length + 1}`,
+      [...ptIds, companyId]
     );
     for (const r of ptRows.rows) {
       const amount = parseFloat(r.amount) || 0;
@@ -205,10 +208,10 @@ async function fetchPaymentRows({ types, party_id, from_date, to_date, search, l
     const bankRows = await query(
       `SELECT bv.*, da.account_name as debit_account_name, ca.account_name as credit_account_name
        FROM vouchers bv
-       LEFT JOIN bank_accounts da ON bv.debit_account_id = da.id
-       LEFT JOIN bank_accounts ca ON bv.credit_account_id = ca.id
-       WHERE bv.id IN (${bankIds.map((_, idx) => `$${idx + 1}`).join(',')})`,
-      bankIds
+       LEFT JOIN bank_accounts da ON bv.debit_account_id = da.id AND da.company_id = bv.company_id
+       LEFT JOIN bank_accounts ca ON bv.credit_account_id = ca.id AND ca.company_id = bv.company_id
+       WHERE bv.id IN (${bankIds.map((_, idx) => `$${idx + 1}`).join(',')}) AND bv.company_id = $${bankIds.length + 1}`,
+      [...bankIds, companyId]
     );
     for (const r of bankRows.rows) byKey.set(`bank-${r.id}`, bankEntryToRegisterRow(r));
   }
@@ -223,7 +226,7 @@ router.get('/', async (req, res) => {
     const types = resolveTypesFilter(req);
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    const { rows, total } = await fetchPaymentRows({ types, party_id, from_date, to_date, search, limit, offset });
+    const { rows, total } = await fetchPaymentRows({ types, party_id, from_date, to_date, search, limit, offset, companyId: req.companyId });
 
     res.json({
       success: true,
@@ -259,9 +262,9 @@ router.get('/open-bills', async (req, res) => {
         `SELECT id, invoice_number, invoice_date, final_amount, payment_received, payment_due, status,
                 tax_type, tax_rate, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable, tds_rate
          FROM invoices
-         WHERE client_id = $1 AND status != 'cancelled' AND payment_due > 0
+         WHERE client_id = $1 AND status != 'cancelled' AND payment_due > 0 AND company_id = $2
          ORDER BY invoice_date ASC`,
-        [party_id]
+        [party_id, req.companyId]
       );
       return res.json({ success: true, data: result.rows });
     }
@@ -272,9 +275,9 @@ router.get('/open-bills', async (req, res) => {
                 (amount - COALESCE(amount_paid,0)) as balance_due, status,
                 tax_type, tax_rate, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable, tds_rate
          FROM expenses
-         WHERE vendor_id = $1 AND status != 'paid' AND status != 'rejected'
+         WHERE vendor_id = $1 AND status != 'paid' AND status != 'rejected' AND company_id = $2
          ORDER BY expense_date ASC`,
-        [party_id]
+        [party_id, req.companyId]
       );
       return res.json({ success: true, data: result.rows });
     }
@@ -283,16 +286,16 @@ router.get('/open-bills', async (req, res) => {
       const slips = await query(
         `SELECT id, 'salary_slip' as source, payroll_month as period, net_salary as amount, status
          FROM salary_slips
-         WHERE employee_id = $1 AND status IN ('approved','pending')
+         WHERE employee_id = $1 AND status IN ('approved','pending') AND company_id = $2
          ORDER BY payroll_month DESC`,
-        [party_id]
+        [party_id, req.companyId]
       );
       const legacy = await query(
         `SELECT id, 'payroll' as source, payroll_month as period, net_salary as amount, payment_status as status
          FROM payroll
-         WHERE employee_id = $1 AND payment_status = 'pending'
+         WHERE employee_id = $1 AND payment_status = 'pending' AND company_id = $2
          ORDER BY payroll_month DESC`,
-        [party_id]
+        [party_id, req.companyId]
       );
       return res.json({ success: true, data: [...slips.rows, ...legacy.rows] });
     }
@@ -316,7 +319,7 @@ router.get('/register/pdf', async (req, res) => {
   try {
     const { party_id, from_date, to_date, search } = req.query;
     const types = resolveTypesFilter(req);
-    const { rows } = await fetchPaymentRows({ types, party_id, from_date, to_date, search });
+    const { rows } = await fetchPaymentRows({ types, party_id, from_date, to_date, search, companyId: req.companyId });
 
     let totalDebit = 0, totalCredit = 0, totalGst = 0, totalTds = 0;
     const tableRows = rows.map((r) => {
@@ -343,8 +346,7 @@ router.get('/register/pdf', async (req, res) => {
       };
     });
 
-    const agencySetting = await query("SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'");
-    const agencySettings = agencySetting.rows.length > 0 ? JSON.parse(agencySetting.rows[0].setting_value) : null;
+    const agencySettings = await getCompanyProfile(req.companyId);
 
     const includedLabel = ALL_TYPES.every((t) => types.includes(t)) && types.includes(BANK_ENTRY_TYPE)
       ? 'All Payments + Bank Entries'
@@ -410,9 +412,9 @@ router.get('/bank-entries', async (req, res) => {
     if (types.length === 0) {
       return res.json({ success: true, data: [], pagination: { page: 1, limit, total: 0, totalPages: 0 } });
     }
-    let conditions = [`v.voucher_type IN (${types.map(t => `'${t}'`).join(', ')})`, `v.status = 'posted'`];
-    let params = [];
-    let pc = 1;
+    let conditions = [`v.voucher_type IN (${types.map(t => `'${t}'`).join(', ')})`, `v.status = 'posted'`, `v.company_id = $1`];
+    let params = [req.companyId];
+    let pc = 2;
     if (from_date) { conditions.push(`v.voucher_date >= $${pc}`); params.push(from_date); pc++; }
     if (to_date) { conditions.push(`v.voucher_date <= $${pc}`); params.push(to_date); pc++; }
     if (bank_account_id) {
@@ -426,8 +428,8 @@ router.get('/bank-entries', async (req, res) => {
     const where = conditions.join(' AND ');
     const joins = `
        FROM vouchers v
-       LEFT JOIN bank_accounts da ON v.debit_account_id = da.id
-       LEFT JOIN bank_accounts ca ON v.credit_account_id = ca.id`;
+       LEFT JOIN bank_accounts da ON v.debit_account_id = da.id AND da.company_id = v.company_id
+       LEFT JOIN bank_accounts ca ON v.credit_account_id = ca.id AND ca.company_id = v.company_id`;
 
     const result = await query(
       `SELECT v.*, da.account_name as debit_account_name, ca.account_name as credit_account_name
@@ -458,7 +460,7 @@ router.post('/bank-entry', async (req, res) => {
       return res.status(403).json({ success: false, message: 'You do not have permission to record bank entries' });
     }
     const { kind, bank_account_id, to_account_id, amount, entry_date, narration, transaction_ref } = req.body;
-    const voucher = await recordBankEntry({ kind, bank_account_id, to_account_id, amount, entry_date, narration, transaction_ref }, req.user.userId);
+    const voucher = await recordBankEntry({ kind, bank_account_id, to_account_id, amount, entry_date, narration, transaction_ref }, req.user.userId, req.companyId);
     res.status(201).json({ success: true, data: voucher, message: 'Bank entry recorded successfully' });
   } catch (error) {
     logError(error, req, { feature: 'payments' });
@@ -473,7 +475,7 @@ router.put('/bank-entries/:id', async (req, res) => {
     if (!effectivePerms.includes('*') && !effectivePerms.includes('manage_vouchers') && !effectivePerms.includes('edit_vouchers')) {
       return res.status(403).json({ success: false, message: 'You do not have permission to edit bank entries' });
     }
-    const updated = await updateBankEntry(req.params.id, req.body, req.user.userId);
+    const updated = await updateBankEntry(req.params.id, req.body, req.user.userId, req.companyId);
     res.json({ success: true, data: updated, message: 'Bank entry updated successfully' });
   } catch (error) {
     logError(error, req, { feature: 'payments' });
@@ -488,7 +490,7 @@ router.delete('/bank-entries/:id', async (req, res) => {
     if (!effectivePerms.includes('*') && !effectivePerms.includes('manage_vouchers') && !effectivePerms.includes('delete_vouchers')) {
       return res.status(403).json({ success: false, message: 'You do not have permission to delete bank entries' });
     }
-    await deleteBankEntry(req.params.id, req.user.userId);
+    await deleteBankEntry(req.params.id, req.user.userId, req.companyId);
     res.json({ success: true, message: 'Bank entry deleted successfully' });
   } catch (error) {
     logError(error, req, { feature: 'payments' });
@@ -545,7 +547,8 @@ router.post('/', uploadAttachment, async (req, res) => {
           attachment_url,
           notes: req.body.notes,
         },
-        req.user.userId
+        req.user.userId,
+        req.companyId
       );
     } else if (transaction_type === 'vendor_payment') {
       result = await recordVendorPayment(
@@ -564,7 +567,8 @@ router.post('/', uploadAttachment, async (req, res) => {
           tax_rate: req.body.tax_rate,
           is_rcm_applicable: req.body.is_rcm_applicable === 'true' || req.body.is_rcm_applicable === true,
         },
-        req.user.userId
+        req.user.userId,
+        req.companyId
       );
     } else {
       result = await recordSalaryPayment(
@@ -582,7 +586,8 @@ router.post('/', uploadAttachment, async (req, res) => {
           employee_bank_snapshot: req.body.employee_bank_snapshot,
           salary_month: req.body.salary_month,
         },
-        req.user.userId
+        req.user.userId,
+        req.companyId
       );
     }
 
@@ -599,7 +604,7 @@ router.post('/', uploadAttachment, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.put('/:id', uploadAttachment, async (req, res) => {
   try {
-    const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1', [req.params.id]);
+    const txRes = await query('SELECT * FROM payment_transactions WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     if (txRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Payment not found' });
     const tx = txRes.rows[0];
 
@@ -626,7 +631,8 @@ router.put('/:id', uploadAttachment, async (req, res) => {
           attachment_url,
           notes: req.body.notes,
         },
-        req.user.userId
+        req.user.userId,
+        req.companyId
       );
     } else if (tx.transaction_type === 'vendor_payment') {
       result = await updateVendorPayment(
@@ -642,7 +648,8 @@ router.put('/:id', uploadAttachment, async (req, res) => {
           attachment_url,
           notes: req.body.notes,
         },
-        req.user.userId
+        req.user.userId,
+        req.companyId
       );
     } else if (tx.transaction_type === 'salary_payment') {
       result = await updateSalaryPayment(
@@ -658,7 +665,8 @@ router.put('/:id', uploadAttachment, async (req, res) => {
           employee_bank_snapshot: req.body.employee_bank_snapshot,
           salary_month: req.body.salary_month,
         },
-        req.user.userId
+        req.user.userId,
+        req.companyId
       );
     }
 
@@ -676,7 +684,7 @@ router.put('/:id', uploadAttachment, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.delete('/:id', async (req, res) => {
   try {
-    const txRes = await query('SELECT transaction_type FROM payment_transactions WHERE id = $1', [req.params.id]);
+    const txRes = await query('SELECT transaction_type FROM payment_transactions WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     if (txRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Payment not found' });
     const tx = txRes.rows[0];
 
@@ -688,11 +696,11 @@ router.delete('/:id', async (req, res) => {
 
     let result;
     if (tx.transaction_type === 'client_receipt') {
-      result = await deleteClientReceipt(req.params.id, req.user.userId);
+      result = await deleteClientReceipt(req.params.id, req.user.userId, req.companyId);
     } else if (tx.transaction_type === 'vendor_payment') {
-      result = await deleteVendorPayment(req.params.id, req.user.userId);
+      result = await deleteVendorPayment(req.params.id, req.user.userId, req.companyId);
     } else if (tx.transaction_type === 'salary_payment') {
-      result = await deleteSalaryPayment(req.params.id, req.user.userId);
+      result = await deleteSalaryPayment(req.params.id, req.user.userId, req.companyId);
     } else {
       return res.status(400).json({ success: false, message: 'Unsupported transaction type' });
     }

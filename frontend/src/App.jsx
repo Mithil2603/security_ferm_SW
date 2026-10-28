@@ -8,6 +8,9 @@ import Setup from './pages/Setup';
 
 // Pages
 import Login from './pages/Login';
+import Signup from './pages/Signup';
+import SelectCompany from './pages/SelectCompany';
+import Companies from './pages/Companies';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
 import Dashboard from './pages/Dashboard';
@@ -312,12 +315,15 @@ function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+          <Route path="/select-company" element={<SelectCompany />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password/:token" element={<ResetPassword />} />
           <Route path="/developer" element={<DeveloperConsole />} />
           <Route path="/sketchbook" element={<SketchbookOfUsPreview />} />
           <Route element={<Layout />}>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/companies" element={<ProtectedRoute role="admin"><Companies /></ProtectedRoute>} />
             <Route path="/clients" element={<ProtectedRoute permission="manage_invoices"><Clients /></ProtectedRoute>} />
             <Route path="/employees" element={<ProtectedRoute permission="manage_employees"><Employees /></ProtectedRoute>} />
             <Route path="/attendance" element={<ProtectedRoute permission={['manage_employees', 'manage_payroll']}><Attendance /></ProtectedRoute>} />

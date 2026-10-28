@@ -16,7 +16,7 @@ class SalaryStructureService {
   /**
    * Create a new salary structure with components.
    */
-  async create(data) {
+  async create(data, companyId) {
     const {
       name, base_salary, dearness_allowance = 0, house_rent_allowance = 0,
       other_allowances = 0, pf_percentage = 12, esi_applicable = false,
@@ -28,48 +28,48 @@ class SalaryStructureService {
     const ctc = this._calculateCTC(base_salary, dearness_allowance, house_rent_allowance, other_allowances, pf_percentage);
 
     const result = await query(
-      `INSERT INTO salary_structures 
+      `INSERT INTO salary_structures
         (name, base_salary, dearness_allowance, house_rent_allowance, other_allowances,
          pf_percentage, esi_applicable, income_tax_applicable, effective_from, effective_to,
-         description, template_type, ctc, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 1)`,
+         description, template_type, ctc, is_active, company_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 1, $14)`,
       [name, base_salary, dearness_allowance, house_rent_allowance, other_allowances,
        pf_percentage, esi_applicable, income_tax_applicable,
        effective_from || new Date().toISOString().split('T')[0], effective_to,
-       description, template_type, ctc]
+       description, template_type, ctc, companyId]
     );
 
     const structureId = result.insertId;
 
     // Assign components if provided
     if (components.length > 0) {
-      await this.assignComponents(structureId, components);
+      await this.assignComponents(structureId, components, companyId);
     }
 
-    return this.findById(structureId);
+    return this.findById(structureId, companyId);
   }
 
   /**
    * Find a salary structure by ID with its components.
    */
-  async findById(id) {
+  async findById(id, companyId) {
     const result = await query(
-      `SELECT * FROM salary_structures WHERE id = $1`,
-      [id]
+      `SELECT * FROM salary_structures WHERE id = $1 AND company_id = $2`,
+      [id, companyId]
     );
     if (result.rows.length === 0) return null;
 
     const structure = result.rows[0];
 
-    // Fetch assigned components
+    // Fetch assigned components (scoped to the same company as the structure)
     const comps = await query(
       `SELECT ssc.*, sc.code, sc.name as component_name, sc.type, sc.calc_type,
               sc.is_statutory, sc.is_taxable, sc.affects_pf
        FROM salary_structure_components ssc
        JOIN salary_components sc ON ssc.salary_component_id = sc.id
-       WHERE ssc.salary_structure_id = $1
+       WHERE ssc.salary_structure_id = $1 AND ssc.company_id = $2
        ORDER BY sc.display_order`,
-      [id]
+      [id, companyId]
     );
 
     structure.components = comps.rows;
@@ -79,12 +79,12 @@ class SalaryStructureService {
   /**
    * List all salary structures.
    */
-  async findAll(filters = {}) {
+  async findAll(filters = {}, companyId) {
     const { is_active, template_type, page = 1, limit = 50 } = filters;
 
-    let conditions = [];
-    let params = [];
-    let pc = 1;
+    let conditions = ['company_id = $1'];
+    let params = [companyId];
+    let pc = 2;
 
     if (is_active !== undefined) { conditions.push(`is_active = $${pc}`); params.push(is_active ? 1 : 0); pc++; }
     if (template_type) { conditions.push(`template_type = $${pc}`); params.push(template_type); pc++; }
@@ -93,8 +93,8 @@ class SalaryStructureService {
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     const result = await query(
-      `SELECT ss.*, 
-        (SELECT COUNT(*) FROM employees e WHERE e.salary_structure_id = ss.id AND e.is_active = 1) as employee_count
+      `SELECT ss.*,
+        (SELECT COUNT(*) FROM employees e WHERE e.salary_structure_id = ss.id AND e.is_active = 1 AND e.company_id = ss.company_id) as employee_count
        FROM salary_structures ss
        ${where}
        ORDER BY ss.is_active DESC, ss.name ASC
@@ -120,8 +120,8 @@ class SalaryStructureService {
   /**
    * Update a salary structure.
    */
-  async update(id, data) {
-    const existing = await this.findById(id);
+  async update(id, data, companyId) {
+    const existing = await this.findById(id, companyId);
     if (!existing) throw new Error('Salary structure not found');
 
     const fields = [];
@@ -155,37 +155,38 @@ class SalaryStructureService {
 
     if (fields.length === 0) return existing;
 
-    params.push(id);
+    params.push(id, companyId);
     await query(
-      `UPDATE salary_structures SET ${fields.join(', ')} WHERE id = $${pc}`,
+      `UPDATE salary_structures SET ${fields.join(', ')} WHERE id = $${pc} AND company_id = $${pc + 1}`,
       params
     );
 
     // Update components if provided
     if (data.components) {
-      await this.assignComponents(id, data.components);
+      await this.assignComponents(id, data.components, companyId);
     }
 
-    return this.findById(id);
+    return this.findById(id, companyId);
   }
 
   /**
    * Delete a salary structure (soft: deactivate).
    */
-  async delete(id) {
+  async delete(id, companyId) {
     // Check if any employees use this structure
     const empCheck = await query(
-      `SELECT COUNT(*) as count FROM employees WHERE salary_structure_id = $1 AND is_active = 1`,
-      [id]
+      `SELECT COUNT(*) as count FROM employees WHERE salary_structure_id = $1 AND is_active = 1 AND company_id = $2`,
+      [id, companyId]
     );
     if (parseInt(empCheck.rows[0].count) > 0) {
       throw new Error(`Cannot delete: ${empCheck.rows[0].count} active employee(s) use this structure`);
     }
 
-    await query(
-      `UPDATE salary_structures SET is_active = 0 WHERE id = $1`,
-      [id]
+    const result = await query(
+      `UPDATE salary_structures SET is_active = 0 WHERE id = $1 AND company_id = $2`,
+      [id, companyId]
     );
+    if (!result.rowCount) throw new Error('Salary structure not found');
     return { success: true, message: 'Salary structure deactivated' };
   }
 
@@ -204,16 +205,16 @@ class SalaryStructureService {
   /**
    * Assign components to a salary structure.
    */
-  async assignComponents(structureId, components) {
+  async assignComponents(structureId, components, companyId) {
     // Clear existing
-    await query(`DELETE FROM salary_structure_components WHERE salary_structure_id = $1`, [structureId]);
+    await query(`DELETE FROM salary_structure_components WHERE salary_structure_id = $1 AND company_id = $2`, [structureId, companyId]);
 
     // Insert new
     for (const comp of components) {
       await query(
-        `INSERT INTO salary_structure_components (salary_structure_id, salary_component_id, amount, percentage)
-         VALUES ($1, $2, $3, $4)`,
-        [structureId, comp.component_id, comp.amount || 0, comp.percentage || null]
+        `INSERT INTO salary_structure_components (salary_structure_id, salary_component_id, amount, percentage, company_id)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [structureId, comp.component_id, comp.amount || 0, comp.percentage || null, companyId]
       );
     }
   }
@@ -223,7 +224,7 @@ class SalaryStructureService {
   /**
    * Seed predefined salary structure templates for security agencies.
    */
-  async seedTemplates() {
+  async seedTemplates(companyId) {
     const templates = [
       {
         name: 'Security Guard — Grade I',
@@ -272,15 +273,15 @@ class SalaryStructureService {
     for (const t of templates) {
       // Skip if already exists
       const exists = await query(
-        `SELECT id FROM salary_structures WHERE name = $1`,
-        [t.name]
+        `SELECT id FROM salary_structures WHERE name = $1 AND company_id = $2`,
+        [t.name, companyId]
       );
       if (exists.rows.length > 0) continue;
 
       await this.create({
         ...t,
         effective_from: new Date().toISOString().split('T')[0],
-      });
+      }, companyId);
       created++;
     }
 
@@ -292,31 +293,32 @@ class SalaryStructureService {
   /**
    * Assign a salary structure to an employee.
    */
-  async assignToEmployee(employeeId, structureId) {
-    const structure = await this.findById(structureId);
+  async assignToEmployee(employeeId, structureId, companyId) {
+    const structure = await this.findById(structureId, companyId);
     if (!structure) throw new Error('Salary structure not found');
 
-    await query(
-      `UPDATE employees SET salary_structure_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-      [structureId, employeeId]
+    const result = await query(
+      `UPDATE employees SET salary_structure_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND company_id = $3`,
+      [structureId, employeeId, companyId]
     );
+    if (!result.rowCount) throw new Error('Employee not found');
     return { success: true, message: `Structure "${structure.name}" assigned to employee #${employeeId}` };
   }
 
   /**
    * Bulk assign a structure to multiple employees.
    */
-  async bulkAssign(employeeIds, structureId) {
-    const structure = await this.findById(structureId);
+  async bulkAssign(employeeIds, structureId, companyId) {
+    const structure = await this.findById(structureId, companyId);
     if (!structure) throw new Error('Salary structure not found');
 
     let assigned = 0;
     for (const empId of employeeIds) {
-      await query(
-        `UPDATE employees SET salary_structure_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND is_active = 1`,
-        [structureId, empId]
+      const result = await query(
+        `UPDATE employees SET salary_structure_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND is_active = 1 AND company_id = $3`,
+        [structureId, empId, companyId]
       );
-      assigned++;
+      if (result.rowCount) assigned++;
     }
     return { success: true, assigned, message: `Structure assigned to ${assigned} employees` };
   }
@@ -324,13 +326,13 @@ class SalaryStructureService {
   /**
    * Get employees by salary structure.
    */
-  async getEmployeesByStructure(structureId) {
+  async getEmployeesByStructure(structureId, companyId) {
     const result = await query(
       `SELECT id, employee_id, full_name, designation, date_of_joining
-       FROM employees 
-       WHERE salary_structure_id = $1 AND is_active = 1
+       FROM employees
+       WHERE salary_structure_id = $1 AND is_active = 1 AND company_id = $2
        ORDER BY full_name`,
-      [structureId]
+      [structureId, companyId]
     );
     return result.rows;
   }

@@ -90,32 +90,32 @@ class GSTComplianceService {
   // GST Configuration
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getConfig() {
-    const result = await query(`SELECT * FROM gst_configurations WHERE is_active = 1 ORDER BY id DESC LIMIT 1`);
+  async getConfig(companyId) {
+    const result = await query(`SELECT * FROM gst_configurations WHERE is_active = 1 AND company_id = $1 ORDER BY id DESC LIMIT 1`, [companyId]);
     return result.rows[0] || null;
   }
 
-  async saveConfig(data) {
-    const existing = await this.getConfig();
+  async saveConfig(data, companyId) {
+    const existing = await this.getConfig(companyId);
     if (existing) {
       await query(
         `UPDATE gst_configurations SET gstin=$1, legal_name=$2, trade_name=$3, state_code=$4,
          state_name=$5, registration_type=$6, default_tax_rate=$7, financial_year=$8,
-         updated_at=CURRENT_TIMESTAMP WHERE id=$9`,
+         updated_at=CURRENT_TIMESTAMP WHERE id=$9 AND company_id=$10`,
         [data.gstin, data.legal_name, data.trade_name, data.state_code,
          data.state_name, data.registration_type, data.default_tax_rate,
-         data.financial_year, existing.id]
+         data.financial_year, existing.id, companyId]
       );
     } else {
       await query(
         `INSERT INTO gst_configurations (gstin, legal_name, trade_name, state_code, state_name,
-         registration_type, default_tax_rate, financial_year)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+         registration_type, default_tax_rate, financial_year, company_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [data.gstin, data.legal_name, data.trade_name, data.state_code,
-         data.state_name, data.registration_type, data.default_tax_rate, data.financial_year]
+         data.state_name, data.registration_type, data.default_tax_rate, data.financial_year, companyId]
       );
     }
-    return this.getConfig();
+    return this.getConfig(companyId);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -194,8 +194,8 @@ class GSTComplianceService {
   // GSTR-1 Generation
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async generateGSTR1(returnPeriod) {
-    const config = await this.getConfig();
+  async generateGSTR1(returnPeriod, companyId) {
+    const config = await this.getConfig(companyId);
     if (!config) throw new Error('GST configuration not found. Please set up GSTIN first.');
 
     const [year, month] = returnPeriod.split('-').map(Number);
@@ -206,11 +206,11 @@ class GSTComplianceService {
       `SELECT i.*, c.name as buyer_name, c.gst_number as buyer_gstin,
               c.state_code as buyer_state_code, c.address as buyer_address
        FROM invoices i
-       JOIN clients c ON i.client_id = c.id
-       WHERE strftime('%Y-%m', i.invoice_date) = $1
+       JOIN clients c ON i.client_id = c.id AND c.company_id = i.company_id
+       WHERE i.company_id = $1 AND strftime('%Y-%m', i.invoice_date) = $2
          AND i.status IN ('sent', 'paid', 'partially_paid')
        ORDER BY i.invoice_date`,
-      [returnPeriod]
+      [companyId, returnPeriod]
     );
 
     // Classify and group
@@ -343,25 +343,25 @@ class GSTComplianceService {
 
     // Save filing record
     const existing = await query(
-      `SELECT id FROM gstr_filings WHERE return_type = 'GSTR1' AND return_period = $1 AND gstin = $2`,
-      [returnPeriod, config.gstin]
+      `SELECT id FROM gstr_filings WHERE return_type = 'GSTR1' AND return_period = $1 AND gstin = $2 AND company_id = $3`,
+      [returnPeriod, config.gstin, companyId]
     );
     if (existing.rows.length > 0) {
       await query(
         `UPDATE gstr_filings SET json_data=$1, total_taxable_value=$2, total_cgst=$3,
          total_sgst=$4, total_igst=$5, total_invoices=$6, status='generated',
-         generated_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=$7`,
+         generated_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=$7 AND company_id=$8`,
         [JSON.stringify(gstr1Json), totalTaxable, totalCGST, totalSGST, totalIGST,
-         invoices.rows.length, existing.rows[0].id]
+         invoices.rows.length, existing.rows[0].id, companyId]
       );
     } else {
       await query(
         `INSERT INTO gstr_filings (return_type, return_period, financial_year, gstin,
          total_taxable_value, total_cgst, total_sgst, total_igst, total_invoices,
-         status, json_data, generated_at)
-         VALUES ('GSTR1', $1, $2, $3, $4, $5, $6, $7, $8, 'generated', $9, CURRENT_TIMESTAMP)`,
+         status, json_data, generated_at, company_id)
+         VALUES ('GSTR1', $1, $2, $3, $4, $5, $6, $7, $8, 'generated', $9, CURRENT_TIMESTAMP, $10)`,
         [returnPeriod, fy, config.gstin, totalTaxable, totalCGST, totalSGST, totalIGST,
-         invoices.rows.length, JSON.stringify(gstr1Json)]
+         invoices.rows.length, JSON.stringify(gstr1Json), companyId]
       );
     }
 
@@ -392,17 +392,17 @@ class GSTComplianceService {
   // recomputing it, so it can never disagree with what was actually billed.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async previewGSTR1A(from_date, to_date) {
-    const config = await this.getConfig();
+  async previewGSTR1A(from_date, to_date, companyId) {
+    const config = await this.getConfig(companyId);
     if (!config) throw new Error('GST configuration not found. Please set it up under GST Compliance → Configuration first.');
 
     const invoices = await query(
       `SELECT i.*, c.name as buyer_name, c.gst_number as buyer_gstin, c.state_code as buyer_state_code
        FROM invoices i
-       JOIN clients c ON i.client_id = c.id
-       WHERE i.invoice_date BETWEEN $1 AND $2 AND i.status != 'cancelled'
+       JOIN clients c ON i.client_id = c.id AND c.company_id = i.company_id
+       WHERE i.company_id = $1 AND i.invoice_date BETWEEN $2 AND $3 AND i.status != 'cancelled'
        ORDER BY i.invoice_date`,
-      [from_date, to_date]
+      [companyId, from_date, to_date]
     );
 
     const b2b = [], b2cs = [], b2cl = [];
@@ -459,18 +459,18 @@ class GSTComplianceService {
   // built (by bill/invoice received, not by when it was paid).
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getGSTR2B(from_date, to_date) {
+  async getGSTR2B(from_date, to_date, companyId) {
     const result = await query(
       `SELECT e.id, e.expense_date, e.description, e.amount, e.tax_type, e.tax_rate,
               e.cgst_amount, e.sgst_amount, e.igst_amount, e.is_rcm_applicable,
               v.name as vendor_name, v.tax_id as vendor_gstin
        FROM expenses e
-       LEFT JOIN vendors v ON e.vendor_id = v.id
-       WHERE e.expense_date BETWEEN $1 AND $2
+       LEFT JOIN vendors v ON e.vendor_id = v.id AND v.company_id = e.company_id
+       WHERE e.company_id = $1 AND e.expense_date BETWEEN $2 AND $3
          AND e.status != 'pending'
          AND e.tax_type IS NOT NULL AND e.tax_type != 'none'
        ORDER BY e.expense_date`,
-      [from_date, to_date]
+      [companyId, from_date, to_date]
     );
 
     let totalTaxable = 0, totalCGST = 0, totalSGST = 0, totalIGST = 0;
@@ -510,8 +510,8 @@ class GSTComplianceService {
   // GSTR-3B Summary
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async generateGSTR3B(returnPeriod) {
-    const config = await this.getConfig();
+  async generateGSTR3B(returnPeriod, companyId) {
+    const config = await this.getConfig(companyId);
     if (!config) throw new Error('GST configuration not found.');
 
     const [year, month] = returnPeriod.split('-').map(Number);
@@ -519,16 +519,16 @@ class GSTComplianceService {
 
     // Outward supplies
     const outward = await query(
-      `SELECT 
+      `SELECT
          COALESCE(SUM(amount_subtotal), 0) as taxable,
          COALESCE(SUM(cgst_amount), 0) as cgst,
          COALESCE(SUM(sgst_amount), 0) as sgst,
          COALESCE(SUM(igst_amount), 0) as igst,
          COUNT(*) as count
-       FROM invoices 
-       WHERE strftime('%Y-%m', invoice_date) = $1
+       FROM invoices
+       WHERE company_id = $1 AND strftime('%Y-%m', invoice_date) = $2
          AND status IN ('sent', 'paid', 'partially_paid')`,
-      [returnPeriod]
+      [companyId, returnPeriod]
     );
 
     // Input tax credit (from expenses/vendor bills) — expenses store the GST
@@ -540,10 +540,10 @@ class GSTComplianceService {
          COALESCE(SUM(sgst_amount), 0) as sgst,
          COALESCE(SUM(igst_amount), 0) as igst
        FROM expenses
-       WHERE strftime('%Y-%m', expense_date) = $1
+       WHERE company_id = $1 AND strftime('%Y-%m', expense_date) = $2
          AND status != 'rejected'
          AND tax_type IS NOT NULL AND tax_type != 'none'`,
-      [returnPeriod]
+      [companyId, returnPeriod]
     );
 
     const out = outward.rows[0];
@@ -583,24 +583,24 @@ class GSTComplianceService {
 
     // Save filing
     const existing = await query(
-      `SELECT id FROM gstr_filings WHERE return_type = 'GSTR3B' AND return_period = $1 AND gstin = $2`,
-      [returnPeriod, config.gstin]
+      `SELECT id FROM gstr_filings WHERE return_type = 'GSTR3B' AND return_period = $1 AND gstin = $2 AND company_id = $3`,
+      [returnPeriod, config.gstin, companyId]
     );
     if (existing.rows.length > 0) {
       await query(
         `UPDATE gstr_filings SET json_data=$1, total_taxable_value=$2, total_cgst=$3,
          total_sgst=$4, total_igst=$5, total_invoices=$6, status='generated',
-         generated_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=$7`,
-        [JSON.stringify(gstr3b), out.taxable, netCGST, netSGST, netIGST, out.count, existing.rows[0].id]
+         generated_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=$7 AND company_id=$8`,
+        [JSON.stringify(gstr3b), out.taxable, netCGST, netSGST, netIGST, out.count, existing.rows[0].id, companyId]
       );
     } else {
       await query(
         `INSERT INTO gstr_filings (return_type, return_period, financial_year, gstin,
          total_taxable_value, total_cgst, total_sgst, total_igst, total_invoices,
-         status, json_data, generated_at)
-         VALUES ('GSTR3B', $1, $2, $3, $4, $5, $6, $7, $8, 'generated', $9, CURRENT_TIMESTAMP)`,
+         status, json_data, generated_at, company_id)
+         VALUES ('GSTR3B', $1, $2, $3, $4, $5, $6, $7, $8, 'generated', $9, CURRENT_TIMESTAMP, $10)`,
         [returnPeriod, fy, config.gstin, out.taxable, netCGST, netSGST, netIGST,
-         out.count, JSON.stringify(gstr3b)]
+         out.count, JSON.stringify(gstr3b), companyId]
       );
     }
 
@@ -628,14 +628,14 @@ class GSTComplianceService {
   // Filing Management
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getFilings(filters = {}) {
+  async getFilings(filters = {}, companyId) {
     const { return_type, financial_year, page = 1, limit = 24 } = filters;
-    let conditions = [];
-    let params = [];
-    let pc = 1;
+    let conditions = ['company_id = $1'];
+    let params = [companyId];
+    let pc = 2;
     if (return_type) { conditions.push(`return_type = $${pc}`); params.push(return_type); pc++; }
     if (financial_year) { conditions.push(`financial_year = $${pc}`); params.push(financial_year); pc++; }
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const where = `WHERE ${conditions.join(' AND ')}`;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     const result = await query(
@@ -650,8 +650,8 @@ class GSTComplianceService {
     return result.rows;
   }
 
-  async getFiling(id) {
-    const result = await query(`SELECT * FROM gstr_filings WHERE id = $1`, [id]);
+  async getFiling(id, companyId) {
+    const result = await query(`SELECT * FROM gstr_filings WHERE id = $1 AND company_id = $2`, [id, companyId]);
     const filing = result.rows[0];
     if (filing && filing.json_data) {
       filing.json = JSON.parse(filing.json_data);
@@ -659,13 +659,13 @@ class GSTComplianceService {
     return filing;
   }
 
-  async markFiled(id, arnNumber) {
+  async markFiled(id, arnNumber, companyId) {
     await query(
       `UPDATE gstr_filings SET status = 'filed', filed_date = CURRENT_DATE,
-       arn_number = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-      [arnNumber, id]
+       arn_number = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND company_id = $3`,
+      [arnNumber, id, companyId]
     );
-    return this.getFiling(id);
+    return this.getFiling(id, companyId);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

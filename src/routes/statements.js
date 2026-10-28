@@ -2,12 +2,13 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requireRole } = require('../middleware/auth');
+const { authMiddleware, requireRole, requireCompanyContext } = require('../middleware/auth');
 const path = require('path');
 const fs = require('fs');
 const { logError } = require('../utils/errorLogger');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 
 // GET /api/statements — List all saved statements with filters + pagination
 router.get('/', async (req, res) => {
@@ -15,9 +16,9 @@ router.get('/', async (req, res) => {
     const { domain, from_date, to_date, party_name, search, page = 1, limit = 25 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
     
-    let conditions = ['is_archived = 0'];
-    let params = [];
-    let paramIdx = 1;
+    let conditions = ['is_archived = 0', 'company_id = $1'];
+    let params = [req.companyId];
+    let paramIdx = 2;
 
     if (domain) {
       conditions.push(`domain = $${paramIdx++}`);
@@ -83,9 +84,9 @@ router.get('/export', async (req, res) => {
   try {
     const { domain, from_date, to_date, party_name } = req.query;
     
-    let conditions = ['is_archived = 0'];
-    let params = [];
-    let paramIdx = 1;
+    let conditions = ['is_archived = 0', 'company_id = $1'];
+    let params = [req.companyId];
+    let paramIdx = 2;
 
     if (domain) { conditions.push(`domain = $${paramIdx++}`); params.push(domain); }
     if (from_date) { conditions.push(`generated_at >= $${paramIdx++}`); params.push(`${from_date} 00:00:00`); }
@@ -127,7 +128,8 @@ router.get('/export', async (req, res) => {
 router.get('/domain-counts', async (req, res) => {
   try {
     const result = await query(
-      `SELECT domain, COUNT(*) as count FROM saved_statements WHERE is_archived = 0 GROUP BY domain`
+      `SELECT domain, COUNT(*) as count FROM saved_statements WHERE is_archived = 0 AND company_id = $1 GROUP BY domain`,
+      [req.companyId]
     );
     const counts = {};
     result.rows.forEach(r => { counts[r.domain] = r.count; });
@@ -143,8 +145,8 @@ router.get('/domain-counts', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      `SELECT * FROM saved_statements WHERE id = $1 AND is_archived = 0`,
-      [req.params.id]
+      `SELECT * FROM saved_statements WHERE id = $1 AND is_archived = 0 AND company_id = $2`,
+      [req.params.id, req.companyId]
     );
 
     if (result.rows.length === 0) {
@@ -170,10 +172,10 @@ router.get('/:id', async (req, res) => {
                       i.tds_deducted as total_tds, i.payment_due as remaining_due, i.status as invoice_status,
                       c.name as client_name, c.gst_number as client_gst
                FROM payments p
-               JOIN invoices i ON p.invoice_id = i.id
-               JOIN clients c ON i.client_id = c.id
-               WHERE p.id = $1 OR i.id = $2 LIMIT 1`,
-              [stmt.reference_id, stmt.reference_id]
+               JOIN invoices i ON p.invoice_id = i.id AND i.company_id = $3
+               JOIN clients c ON i.client_id = c.id AND c.company_id = $3
+               WHERE (p.id = $1 OR i.id = $2) AND p.company_id = $3 LIMIT 1`,
+              [stmt.reference_id, stmt.reference_id, req.companyId]
             );
             if (pmtRes.rows.length > 0) {
               const p = pmtRes.rows[0];
@@ -200,9 +202,9 @@ router.get('/:id', async (req, res) => {
               `SELECT i.*, c.name as client_name, c.address as client_address, c.city as client_city,
                       c.state as client_state, c.gst_number as client_gst, c.phone as client_phone, c.email as client_email
                FROM invoices i
-               JOIN clients c ON i.client_id = c.id
-               WHERE i.id = $1 OR i.invoice_number = $2 LIMIT 1`,
-              [stmt.reference_id, stmt.statement_number]
+               JOIN clients c ON i.client_id = c.id AND c.company_id = $3
+               WHERE (i.id = $1 OR i.invoice_number = $2) AND i.company_id = $3 LIMIT 1`,
+              [stmt.reference_id, stmt.statement_number, req.companyId]
             );
             if (invRes.rows.length > 0) {
               const inv = invRes.rows[0];
@@ -217,9 +219,9 @@ router.get('/:id', async (req, res) => {
           const payRes = await query(
             `SELECT p.*, e.full_name as employee_name, e.employee_id as emp_id
              FROM payroll p
-             JOIN employees e ON p.employee_id = e.id
-             WHERE p.id = $1 LIMIT 1`,
-            [stmt.reference_id]
+             JOIN employees e ON p.employee_id = e.id AND e.company_id = $2
+             WHERE p.id = $1 AND p.company_id = $2 LIMIT 1`,
+            [stmt.reference_id, req.companyId]
           );
           if (payRes.rows.length > 0) {
             data = { ...payRes.rows[0], ...data, employee_name: payRes.rows[0].employee_name, emp_id: payRes.rows[0].emp_id };
@@ -227,9 +229,9 @@ router.get('/:id', async (req, res) => {
             const slipRes = await query(
               `SELECT s.*, e.full_name as employee_name, e.employee_id as emp_id
                FROM salary_slips s
-               JOIN employees e ON s.employee_id = e.id
-               WHERE s.id = $1 LIMIT 1`,
-              [stmt.reference_id]
+               JOIN employees e ON s.employee_id = e.id AND e.company_id = $2
+               WHERE s.id = $1 AND s.company_id = $2 LIMIT 1`,
+              [stmt.reference_id, req.companyId]
             );
             if (slipRes.rows.length > 0) {
               data = { ...slipRes.rows[0], ...data, employee_name: slipRes.rows[0].employee_name, emp_id: slipRes.rows[0].emp_id };
@@ -243,9 +245,9 @@ router.get('/:id', async (req, res) => {
           const expRes = await query(
             `SELECT e.*, v.name as vendor_name
              FROM expenses e
-             LEFT JOIN vendors v ON e.vendor_id = v.id
-             WHERE e.id = $1 LIMIT 1`,
-            [stmt.reference_id]
+             LEFT JOIN vendors v ON e.vendor_id = v.id AND v.company_id = $2
+             WHERE e.id = $1 AND e.company_id = $2 LIMIT 1`,
+            [stmt.reference_id, req.companyId]
           );
           if (expRes.rows.length > 0) {
             data = { ...expRes.rows[0], ...data };
@@ -259,9 +261,9 @@ router.get('/:id', async (req, res) => {
           const gstRes = await query(
             `SELECT i.*, c.name as client_name, c.gst_number as client_gst
              FROM invoices i
-             JOIN clients c ON i.client_id = c.id
-             WHERE i.id = $1 OR i.invoice_number = $2 LIMIT 1`,
-            [stmt.reference_id, gstInvNum]
+             JOIN clients c ON i.client_id = c.id AND c.company_id = $3
+             WHERE (i.id = $1 OR i.invoice_number = $2) AND i.company_id = $3 LIMIT 1`,
+            [stmt.reference_id, gstInvNum, req.companyId]
           );
           if (gstRes.rows.length > 0) {
             const i = gstRes.rows[0];
@@ -307,8 +309,8 @@ router.get('/:id', async (req, res) => {
 router.delete('/:id', requireRole('admin'), async (req, res) => {
   try {
     await query(
-      `UPDATE saved_statements SET is_archived = 1 WHERE id = $1`,
-      [req.params.id]
+      `UPDATE saved_statements SET is_archived = 1 WHERE id = $1 AND company_id = $2`,
+      [req.params.id, req.companyId]
     );
     res.json({ success: true, message: 'Statement archived' });
   } catch (error) {

@@ -3,20 +3,22 @@ const express = require("express");
 const router = express.Router();
 const Decimal = require("decimal.js");
 const { query } = require("../database/connection");
-const { authMiddleware, requirePermission } = require("../middleware/auth");
+const { authMiddleware, requirePermission, requireCompanyContext } = require("../middleware/auth");
 const { validate, schemas } = require("../middleware/validators");
 const { sendEmail } = require("../utils/email");
 const { generateInvoicePDF } = require("../utils/pdfGenerator");
 const { saveStatement } = require("../utils/statementSaver");
 const { logError } = require("../utils/errorLogger");
+const { getCompanyProfile } = require("../utils/companyProfile");
 const {
   recordClientReceipt,
 } = require("../services/payments/paymentTransactionService");
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission("manage_invoices"));
 
-async function generateInvoiceNumber(dateString = null) {
+async function generateInvoiceNumber(dateString = null, companyId) {
   const targetDate = dateString ? new Date(dateString) : new Date();
   const year = targetDate.getFullYear();
   const month = targetDate.getMonth() + 1;
@@ -30,12 +32,13 @@ async function generateInvoiceNumber(dateString = null) {
   const fyEndDate = `${fyStartYear + 1}-04-01`;
 
   const result = await query(
-    `SELECT invoice_number FROM invoices 
-     WHERE invoice_number LIKE 'INV-%' 
-       AND invoice_date >= $1 
+    `SELECT invoice_number FROM invoices
+     WHERE invoice_number LIKE 'INV-%'
+       AND invoice_date >= $1
        AND invoice_date < $2
+       AND company_id = $3
      ORDER BY id DESC LIMIT 1`,
-    [fyStartDate, fyEndDate],
+    [fyStartDate, fyEndDate, companyId],
   );
 
   let sequence = 1;
@@ -266,9 +269,9 @@ router.get("/", async (req, res) => {
       page = 1,
       limit = 50,
     } = req.query;
-    let conditions = [];
-    let params = [];
-    let pc = 1;
+    let conditions = ["i.company_id = $1"];
+    let params = [req.companyId];
+    let pc = 2;
 
     if (search) {
       conditions.push(
@@ -298,8 +301,7 @@ router.get("/", async (req, res) => {
       pc++;
     }
 
-    const where =
-      conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const where = `WHERE ${conditions.join(" AND ")}`;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     const result = await query(
@@ -307,8 +309,8 @@ router.get("/", async (req, res) => {
         c.address as client_address, c.city as client_city, c.contact_person,
         ba.bank_name, ba.account_name as bank_account_name, ba.account_number as bank_account_number, ba.ifsc_code as bank_ifsc_code
        FROM invoices i
-       JOIN clients c ON i.client_id = c.id
-       LEFT JOIN bank_accounts ba ON i.bank_account_id = ba.id
+       JOIN clients c ON i.client_id = c.id AND c.company_id = i.company_id
+       LEFT JOIN bank_accounts ba ON i.bank_account_id = ba.id AND ba.company_id = i.company_id
        ${where}
        ORDER BY i.invoice_date DESC, i.created_at DESC
        LIMIT $${pc} OFFSET $${pc + 1}`,
@@ -316,7 +318,7 @@ router.get("/", async (req, res) => {
     );
 
     const countResult = await query(
-      `SELECT COUNT(*) AS count FROM invoices i JOIN clients c ON i.client_id = c.id ${where}`,
+      `SELECT COUNT(*) AS count FROM invoices i JOIN clients c ON i.client_id = c.id AND c.company_id = i.company_id ${where}`,
       params,
     );
 
@@ -364,10 +366,10 @@ router.get("/:id", async (req, res) => {
         c.contact_person, c.gst_number as client_gst,
         ba.bank_name, ba.account_name as bank_account_name, ba.account_number as bank_account_number, ba.ifsc_code as bank_ifsc_code
        FROM invoices i
-       JOIN clients c ON i.client_id = c.id
-       LEFT JOIN bank_accounts ba ON i.bank_account_id = ba.id
-       WHERE i.id = $1`,
-      [req.params.id],
+       JOIN clients c ON i.client_id = c.id AND c.company_id = i.company_id
+       LEFT JOIN bank_accounts ba ON i.bank_account_id = ba.id AND ba.company_id = i.company_id
+       WHERE i.id = $1 AND i.company_id = $2`,
+      [req.params.id, req.companyId],
     );
     if (result.rowCount === 0) {
       return res
@@ -377,8 +379,8 @@ router.get("/:id", async (req, res) => {
 
     // Also fetch payments
     const payments = await query(
-      "SELECT * FROM payments WHERE invoice_id = $1 ORDER BY payment_date DESC",
-      [req.params.id],
+      "SELECT * FROM payments WHERE invoice_id = $1 AND company_id = $2 ORDER BY payment_date DESC",
+      [req.params.id, req.companyId],
     );
 
     const inv = result.rows[0];
@@ -472,8 +474,8 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
 
     // Get client details
     const clientResult = await query(
-      "SELECT * FROM clients WHERE id = $1 AND is_active = 1",
-      [client_id],
+      "SELECT * FROM clients WHERE id = $1 AND is_active = 1 AND company_id = $2",
+      [client_id, req.companyId],
     );
     if (clientResult.rows.length === 0) {
       return res
@@ -716,8 +718,8 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
     if (req.body.invoice_number && String(req.body.invoice_number).trim()) {
       invoice_number = String(req.body.invoice_number).trim().toUpperCase();
       const existingNo = await query(
-        "SELECT id FROM invoices WHERE invoice_number = $1",
-        [invoice_number],
+        "SELECT id FROM invoices WHERE invoice_number = $1 AND company_id = $2",
+        [invoice_number, req.companyId],
       );
       if (existingNo.rows.length > 0) {
         return res.status(409).json({
@@ -726,7 +728,7 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
         });
       }
     } else {
-      invoice_number = await generateInvoiceNumber(inv_date);
+      invoice_number = await generateInvoiceNumber(inv_date, req.companyId);
     }
 
     const due_date = new Date(
@@ -742,7 +744,8 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
       : null;
     if (!finalBankId) {
       const defaultBank = await query(
-        "SELECT id FROM bank_accounts WHERE account_number = '252528112019' OR (account_type = 'bank' AND is_active = 1) ORDER BY (account_number = '252528112019') DESC, id ASC LIMIT 1",
+        "SELECT id FROM bank_accounts WHERE company_id = $1 AND (account_number = '252528112019' OR (account_type = 'bank' AND is_active = 1)) ORDER BY (account_number = '252528112019') DESC, id ASC LIMIT 1",
+        [req.companyId],
       );
       if (defaultBank.rows.length > 0) {
         finalBankId = defaultBank.rows[0].id;
@@ -800,9 +803,9 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
       `INSERT INTO invoices (
         invoice_number, client_id, invoice_date, due_date, billing_period_start, billing_period_end,
         amount_subtotal, tax_type, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable, total_amount, discount_amount, round_off, final_amount, payment_due, notes, is_ad_hoc, duty_days_worked, created_by,
-        site_name, bank_account_id, particular, rate_per_day, monthly_rate, guards_count, hsn_code, total_duty_days, bill_items, tds_rate, tax_rate
+        site_name, bank_account_id, particular, rate_per_day, monthly_rate, guards_count, hsn_code, total_duty_days, bill_items, tds_rate, tax_rate, company_id
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32) RETURNING *`,
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33) RETURNING *`,
       [
         invoice_number,
         client_id,
@@ -836,6 +839,7 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
         parsedBillItems ? JSON.stringify(parsedBillItems) : null,
         req.body.tds_rate || 0,
         amounts.tax_rate ?? 0,
+        req.companyId,
       ],
     );
 
@@ -866,6 +870,7 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
       party_name: client.name,
       party_id: client.id,
       generated_by: req.user.userId,
+      company_id: req.companyId,
     });
 
     // Auto-save GST entry if tax is applied
@@ -896,6 +901,7 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
         party_name: client.name,
         party_id: client.id,
         generated_by: req.user.userId,
+        company_id: req.companyId,
       });
     }
 
@@ -955,6 +961,7 @@ router.post(
             notes,
           },
           req.user.userId,
+          req.companyId,
         );
         updatedInv = result.invoice;
       } catch (serviceErr) {
@@ -994,6 +1001,7 @@ router.post(
         party_name: updatedInv.client_name,
         party_id: updatedInv.client_id,
         generated_by: req.user.userId,
+        company_id: req.companyId,
       });
 
       // Auto-save TDS Certificate if TDS was deducted
@@ -1019,6 +1027,7 @@ router.post(
           party_name: updatedInv.client_name,
           party_id: updatedInv.client_id,
           generated_by: req.user.userId,
+          company_id: req.companyId,
         });
       }
 
@@ -1052,8 +1061,8 @@ router.post("/calculate", async (req, res) => {
     const raw_tax_type = req.body.tax_type || "none";
     const tax_type = raw_tax_type === "GST_18" ? "cgst_sgst" : raw_tax_type;
     const clientResult = await query(
-      "SELECT monthly_rate FROM clients WHERE id = $1",
-      [client_id],
+      "SELECT monthly_rate FROM clients WHERE id = $1 AND company_id = $2",
+      [client_id, req.companyId],
     );
     if (clientResult.rows.length === 0) {
       return res
@@ -1081,11 +1090,12 @@ router.post("/calculate", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   try {
     // Delete associated payments first to satisfy foreign key constraints
-    await query("DELETE FROM payments WHERE invoice_id = $1", [req.params.id]);
+    await query("DELETE FROM payments WHERE invoice_id = $1 AND company_id = $2", [req.params.id, req.companyId]);
 
     // We do a hard delete for invoices, but ensure it exists first
-    const result = await query("DELETE FROM invoices WHERE id = $1", [
+    const result = await query("DELETE FROM invoices WHERE id = $1 AND company_id = $2", [
       req.params.id,
+      req.companyId,
     ]);
     if (result.rowCount === 0) {
       return res
@@ -1112,10 +1122,10 @@ router.get("/:id/pdf", async (req, res) => {
       `SELECT i.*, c.name, c.address, c.city, c.state, c.postal_code, c.email, c.phone, c.gst_number,
         ba.bank_name, ba.account_name as bank_account_name, ba.account_number as bank_account_number, ba.ifsc_code as bank_ifsc_code
        FROM invoices i
-       JOIN clients c ON i.client_id = c.id
-       LEFT JOIN bank_accounts ba ON i.bank_account_id = ba.id
-       WHERE i.id = $1`,
-      [req.params.id],
+       JOIN clients c ON i.client_id = c.id AND c.company_id = i.company_id
+       LEFT JOIN bank_accounts ba ON i.bank_account_id = ba.id AND ba.company_id = i.company_id
+       WHERE i.id = $1 AND i.company_id = $2`,
+      [req.params.id, req.companyId],
     );
 
     if (result.rows.length === 0) {
@@ -1136,13 +1146,7 @@ router.get("/:id/pdf", async (req, res) => {
       gst_number: invoice.gst_number,
     };
 
-    const agencySetting = await query(
-      "SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'",
-    );
-    const agencySettings =
-      agencySetting.rows.length > 0
-        ? JSON.parse(agencySetting.rows[0].setting_value)
-        : null;
+    const agencySettings = await getCompanyProfile(req.companyId);
 
     const chunks = [];
     generateInvoicePDF(
@@ -1180,9 +1184,9 @@ router.post("/:id/email", async (req, res) => {
     const result = await query(
       `SELECT i.*, c.name as client_name, c.email as client_email
        FROM invoices i
-       JOIN clients c ON i.client_id = c.id
-       WHERE i.id = $1`,
-      [req.params.id],
+       JOIN clients c ON i.client_id = c.id AND c.company_id = i.company_id
+       WHERE i.id = $1 AND i.company_id = $2`,
+      [req.params.id, req.companyId],
     );
 
     if (result.rows.length === 0) {
@@ -1200,12 +1204,12 @@ router.post("/:id/email", async (req, res) => {
       });
     }
 
-    // Fetch template from system_settings
-    const settingResult = await query(
-      "SELECT setting_value FROM system_settings WHERE setting_key = 'invoice_email_template'",
+    // Fetch template from the company's own profile (per-company now, not global)
+    const companyResult = await query(
+      "SELECT invoice_email_template FROM companies WHERE id = $1",
+      [req.companyId],
     );
-    let template =
-      settingResult.rows.length > 0 ? settingResult.rows[0].setting_value : "";
+    let template = companyResult.rows[0]?.invoice_email_template || "";
 
     if (!template) {
       // Fallback template
@@ -1281,13 +1285,7 @@ router.post("/:id/email", async (req, res) => {
       gst_number: invoice.gst_number,
     };
 
-    const agencySetting = await query(
-      "SELECT setting_value FROM system_settings WHERE setting_key = 'agency_settings'",
-    );
-    const agencySettings =
-      agencySetting.rows.length > 0
-        ? JSON.parse(agencySetting.rows[0].setting_value)
-        : null;
+    const agencySettings = await getCompanyProfile(req.companyId);
 
     // Generate PDF to memory buffer
     const chunks = [];
@@ -1395,16 +1393,16 @@ router.post("/event", async (req, res) => {
 
       // Check if client exists
       const clientCheck = await query(
-        "SELECT id FROM clients WHERE name = $1 OR (phone = $2 AND phone IS NOT NULL AND phone != '')",
-        [client_name, phone],
+        "SELECT id FROM clients WHERE company_id = $1 AND (name = $2 OR (phone = $3 AND phone IS NOT NULL AND phone != ''))",
+        [req.companyId, client_name, phone],
       );
 
       if (clientCheck.rows.length > 0) {
         client_id = clientCheck.rows[0].id;
       } else {
         const newClient = await query(
-          `INSERT INTO clients (name, address, city, state, email, phone, gst_number, client_type, monthly_rate, contract_start_date) 
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'event', 0, CURRENT_DATE) RETURNING id`,
+          `INSERT INTO clients (name, address, city, state, email, phone, gst_number, client_type, monthly_rate, contract_start_date, company_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'event', 0, CURRENT_DATE, $8) RETURNING id`,
           [
             client_name,
             address || "N/A",
@@ -1413,6 +1411,7 @@ router.post("/event", async (req, res) => {
             email,
             phone,
             gst_number,
+            req.companyId,
           ],
         );
         client_id = newClient.rows[0].id;
@@ -1480,8 +1479,8 @@ router.post("/event", async (req, res) => {
     if (req.body.invoice_number && String(req.body.invoice_number).trim()) {
       invoice_number = String(req.body.invoice_number).trim().toUpperCase();
       const existingNo = await query(
-        "SELECT id FROM invoices WHERE invoice_number = $1",
-        [invoice_number],
+        "SELECT id FROM invoices WHERE invoice_number = $1 AND company_id = $2",
+        [invoice_number, req.companyId],
       );
       if (existingNo.rows.length > 0) {
         return res.status(409).json({
@@ -1490,7 +1489,7 @@ router.post("/event", async (req, res) => {
         });
       }
     } else {
-      invoice_number = await generateInvoiceNumber(inv_date);
+      invoice_number = await generateInvoiceNumber(inv_date, req.companyId);
     }
 
     let finalBankId = req.body.bank_account_id
@@ -1498,7 +1497,8 @@ router.post("/event", async (req, res) => {
       : null;
     if (!finalBankId) {
       const defaultBank = await query(
-        "SELECT id FROM bank_accounts WHERE account_number = '252528112019' OR (account_type = 'bank' AND is_active = 1) ORDER BY (account_number = '252528112019') DESC, id ASC LIMIT 1",
+        "SELECT id FROM bank_accounts WHERE company_id = $1 AND (account_number = '252528112019' OR (account_type = 'bank' AND is_active = 1)) ORDER BY (account_number = '252528112019') DESC, id ASC LIMIT 1",
+        [req.companyId],
       );
       if (defaultBank.rows.length > 0) {
         finalBankId = defaultBank.rows[0].id;
@@ -1520,8 +1520,8 @@ router.post("/event", async (req, res) => {
         amount_subtotal, total_amount, round_off, final_amount, payment_due,
         tax_type, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable,
         duty_days_worked, is_ad_hoc, notes, created_by,
-        site_name, bank_account_id, particular, rate_per_day, monthly_rate, guards_count, hsn_code, total_duty_days, tax_rate
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 1, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
+        site_name, bank_account_id, particular, rate_per_day, monthly_rate, guards_count, hsn_code, total_duty_days, tax_rate, company_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 1, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
       RETURNING *`,
       [
         invoice_number,
@@ -1552,14 +1552,16 @@ router.post("/event", async (req, res) => {
         finalHsn,
         finalGuards * finalDays,
         effectiveTaxRate,
+        req.companyId,
       ],
     );
 
     const createdInvoice = result.rows[0];
 
     // Auto-save statement for accounting ledger
-    const cInfo = await query("SELECT * FROM clients WHERE id = $1", [
+    const cInfo = await query("SELECT * FROM clients WHERE id = $1 AND company_id = $2", [
       client_id,
+      req.companyId,
     ]);
     const clientData = cInfo.rows[0] || {};
 
@@ -1586,6 +1588,7 @@ router.post("/event", async (req, res) => {
       party_name: clientData.name || client_name,
       party_id: client_id,
       generated_by: req.user.userId,
+      company_id: req.companyId,
     });
 
     res.status(201).json({
@@ -1645,8 +1648,9 @@ router.put("/:id", async (req, res) => {
           }
         : null;
 
-    const invoiceCheck = await query("SELECT * FROM invoices WHERE id = $1", [
+    const invoiceCheck = await query("SELECT * FROM invoices WHERE id = $1 AND company_id = $2", [
       req.params.id,
+      req.companyId,
     ]);
     if (invoiceCheck.rows.length === 0) {
       return res
@@ -1674,8 +1678,8 @@ router.put("/:id", async (req, res) => {
     ) {
       const trimmedNo = String(new_invoice_number).trim().toUpperCase();
       const numCheck = await query(
-        "SELECT id FROM invoices WHERE invoice_number = $1 AND id != $2",
-        [trimmedNo, req.params.id],
+        "SELECT id FROM invoices WHERE invoice_number = $1 AND id != $2 AND company_id = $3",
+        [trimmedNo, req.params.id, req.companyId],
       );
       if (numCheck.rows.length > 0) {
         return res.status(409).json({
@@ -1846,7 +1850,7 @@ router.put("/:id", async (req, res) => {
         status = $19, site_name = $20, bank_account_id = $21, particular = $22,
         rate_per_day = $23, monthly_rate = $24, guards_count = $25, total_duty_days = $26,
         hsn_code = $27, bill_items = $28, tds_rate = $29, tax_rate = $30, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $31 RETURNING *`,
+       WHERE id = $31 AND company_id = $32 RETURNING *`,
       [
         finalInvoiceNumber,
         invoice_date || invoice.invoice_date,
@@ -1881,6 +1885,7 @@ router.put("/:id", async (req, res) => {
           : invoice.tds_rate || 0,
         newTaxRate,
         req.params.id,
+        req.companyId,
       ],
     );
 
@@ -1919,8 +1924,9 @@ router.put("/:id", async (req, res) => {
 // POST /api/invoices/:id/cancel (Cancel Bill)
 router.post("/:id/cancel", async (req, res) => {
   try {
-    const invoiceCheck = await query("SELECT * FROM invoices WHERE id = $1", [
+    const invoiceCheck = await query("SELECT * FROM invoices WHERE id = $1 AND company_id = $2", [
       req.params.id,
+      req.companyId,
     ]);
     if (invoiceCheck.rows.length === 0) {
       return res
@@ -1937,8 +1943,8 @@ router.post("/:id/cancel", async (req, res) => {
     }
 
     const result = await query(
-      `UPDATE invoices SET status = 'cancelled', payment_due = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`,
-      [req.params.id],
+      `UPDATE invoices SET status = 'cancelled', payment_due = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND company_id = $2 RETURNING *`,
+      [req.params.id, req.companyId],
     );
 
     res.json({

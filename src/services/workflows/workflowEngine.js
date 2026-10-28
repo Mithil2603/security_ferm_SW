@@ -71,11 +71,11 @@ class WorkflowEngine {
   // Rule CRUD
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getRules(filters = {}) {
+  async getRules(filters = {}, companyId) {
     const { trigger_entity, is_active } = filters;
-    let conditions = [];
-    let params = [];
-    let pc = 1;
+    let conditions = ['company_id = $1'];
+    let params = [companyId];
+    let pc = 2;
     if (is_active !== undefined && is_active !== null && is_active !== '') {
       conditions.push(`is_active = $${pc}`);
       params.push(Number(is_active));
@@ -87,7 +87,7 @@ class WorkflowEngine {
       pc++;
     }
 
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const whereClause = `WHERE ${conditions.join(' AND ')}`;
     const result = await query(
       `SELECT * FROM workflow_rules ${whereClause} ORDER BY priority, name`,
       params
@@ -95,25 +95,25 @@ class WorkflowEngine {
     return result.rows;
   }
 
-  async getRule(id) {
-    const result = await query(`SELECT * FROM workflow_rules WHERE id = $1`, [id]);
+  async getRule(id, companyId) {
+    const result = await query(`SELECT * FROM workflow_rules WHERE id = $1 AND company_id = $2`, [id, companyId]);
     return result.rows[0] || null;
   }
 
-  async createRule(data) {
+  async createRule(data, companyId) {
     await query(
       `INSERT INTO workflow_rules (name, description, trigger_entity, trigger_event,
-       condition_json, action_type, action_config, priority, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+       condition_json, action_type, action_config, priority, created_by, company_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [data.name, data.description || null, data.trigger_entity, data.trigger_event,
        JSON.stringify(data.condition || {}), data.action_type,
-       JSON.stringify(data.action_config || {}), data.priority || 5, data.created_by || null]
+       JSON.stringify(data.action_config || {}), data.priority || 5, data.created_by || null, companyId]
     );
-    const result = await query(`SELECT * FROM workflow_rules ORDER BY id DESC LIMIT 1`);
+    const result = await query(`SELECT * FROM workflow_rules WHERE company_id = $1 ORDER BY id DESC LIMIT 1`, [companyId]);
     return result.rows[0];
   }
 
-  async updateRule(id, data) {
+  async updateRule(id, data, companyId) {
     const fields = [];
     const params = [];
     let pc = 1;
@@ -122,30 +122,41 @@ class WorkflowEngine {
     }
     if (data.condition !== undefined) { fields.push(`condition_json = $${pc}`); params.push(JSON.stringify(data.condition)); pc++; }
     if (data.action_config !== undefined) { fields.push(`action_config = $${pc}`); params.push(JSON.stringify(data.action_config)); pc++; }
-    if (fields.length === 0) return this.getRule(id);
+    if (fields.length === 0) return this.getRule(id, companyId);
     fields.push('updated_at = CURRENT_TIMESTAMP');
     params.push(id);
-    await query(`UPDATE workflow_rules SET ${fields.join(', ')} WHERE id = $${pc}`, params);
-    return this.getRule(id);
+    params.push(companyId);
+    await query(`UPDATE workflow_rules SET ${fields.join(', ')} WHERE id = $${pc} AND company_id = $${pc + 1}`, params);
+    return this.getRule(id, companyId);
   }
 
-  async deleteRule(id) {
+  async deleteRule(id, companyId) {
+    // Cascades are scoped through the owning rule so they can only touch rows
+    // belonging to this company's rule; if the id is not ours, nothing matches.
     try {
-      await query(`DELETE FROM workflow_logs WHERE workflow_rule_id = $1`, [id]);
+      await query(
+        `DELETE FROM workflow_logs WHERE workflow_rule_id = $1
+         AND workflow_rule_id IN (SELECT id FROM workflow_rules WHERE id = $1 AND company_id = $2)`,
+        [id, companyId]
+      );
     } catch (_) {}
     try {
-      await query(`UPDATE notifications SET workflow_rule_id = NULL WHERE workflow_rule_id = $1`, [id]);
+      await query(
+        `UPDATE notifications SET workflow_rule_id = NULL WHERE workflow_rule_id = $1
+         AND workflow_rule_id IN (SELECT id FROM workflow_rules WHERE id = $1 AND company_id = $2)`,
+        [id, companyId]
+      );
     } catch (_) {}
-    await query(`DELETE FROM workflow_rules WHERE id = $1`, [id]);
+    await query(`DELETE FROM workflow_rules WHERE id = $1 AND company_id = $2`, [id, companyId]);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Rule Execution
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async executeRulesForEvent(triggerEntity, triggerEvent, entityData) {
+  async executeRulesForEvent(triggerEntity, triggerEvent, entityData, companyId) {
     const startTime = Date.now();
-    const rules = await this.getRules({ trigger_entity: triggerEntity, is_active: 1 });
+    const rules = await this.getRules({ trigger_entity: triggerEntity, is_active: 1 }, companyId);
     const results = [];
 
     for (const rule of rules) {
@@ -170,7 +181,7 @@ class WorkflowEngine {
 
         await query(
           `UPDATE workflow_rules SET execution_count = execution_count + 1,
-           last_executed = CURRENT_TIMESTAMP WHERE id = $1`, [rule.id]
+           last_executed = CURRENT_TIMESTAMP WHERE id = $1 AND company_id = $2`, [rule.id, companyId]
         );
         await this._logExecution(rule.id, entityData, true, JSON.stringify(actionResult), 'success');
         results.push({ rule: rule.name, status: 'executed', result: actionResult });
@@ -278,15 +289,17 @@ class WorkflowEngine {
   // Invoice Overdue Scanner
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async scanOverdueInvoices() {
+  async scanOverdueInvoices(companyId) {
     const overdueInvoices = await query(
       `SELECT i.*, c.company_name, c.email as client_email,
               julianday('now') - julianday(i.due_date) as days_overdue
        FROM invoices i
-       JOIN clients c ON i.client_id = c.id
-       WHERE i.status IN ('sent', 'partially_paid', 'overdue')
+       JOIN clients c ON i.client_id = c.id AND c.company_id = i.company_id
+       WHERE i.company_id = $1
+         AND i.status IN ('sent', 'partially_paid', 'overdue')
          AND i.due_date < date('now')
-       ORDER BY i.due_date ASC`
+       ORDER BY i.due_date ASC`,
+      [companyId]
     );
 
     let reminders = 0;
@@ -306,7 +319,7 @@ class WorkflowEngine {
         days_overdue: daysOverdue, amount: inv.payment_due,
         client_name: inv.company_name, client_email: inv.client_email,
         escalation_level: escalation.level,
-      });
+      }, companyId);
       reminders++;
     }
 
@@ -317,25 +330,25 @@ class WorkflowEngine {
   // Auto-Approval Rules
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getAutoApprovalRules() {
-    const result = await query(`SELECT * FROM auto_approval_rules WHERE is_active = 1 ORDER BY entity_type`);
+  async getAutoApprovalRules(companyId) {
+    const result = await query(`SELECT * FROM auto_approval_rules WHERE is_active = 1 AND company_id = $1 ORDER BY entity_type`, [companyId]);
     return result.rows;
   }
 
-  async createAutoApprovalRule(data) {
+  async createAutoApprovalRule(data, companyId) {
     await query(
       `INSERT INTO auto_approval_rules (name, entity_type, max_amount, category_match,
-       requires_budget_check, applicable_roles)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+       requires_budget_check, applicable_roles, company_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [data.name, data.entity_type, data.max_amount || null,
        data.category_match || null, data.requires_budget_check ? 1 : 0,
-       data.applicable_roles || 'admin']
+       data.applicable_roles || 'admin', companyId]
     );
-    return this.getAutoApprovalRules();
+    return this.getAutoApprovalRules(companyId);
   }
 
-  async deleteAutoApprovalRule(id) {
-    await query(`DELETE FROM auto_approval_rules WHERE id = $1`, [id]);
+  async deleteAutoApprovalRule(id, companyId) {
+    await query(`DELETE FROM auto_approval_rules WHERE id = $1 AND company_id = $2`, [id, companyId]);
     return { success: true };
   }
 

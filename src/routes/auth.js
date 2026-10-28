@@ -39,6 +39,73 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+const signupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { success: false, message: 'Too many signup attempts from this IP, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Shared by /login, /signup, /refresh, /switch-company. Mints an access JWT
+// scoped to `company` (role/permissions never vary by company — only which
+// company's data is active does) plus a rotating refresh token, and sets
+// both as httpOnly cookies. When `company` is null (a business with more
+// than one company and no default chosen yet), issues a short-lived token
+// with no companyId claim — enough to call /switch-company, not enough to
+// pass requireCompanyContext on any data route.
+async function issueSessionTokens(user, company, req, res) {
+  const { getEffectivePermissions } = require('../middleware/auth');
+  const effectivePermissions = getEffectivePermissions(user.role, user.permissions);
+
+  const jwtExpiry = company
+    ? (process.env.JWT_EXPIRY || process.env.JWT_EXPIRES_IN || process.env.JWT_ACCESS_EXPIRY || '8h')
+    : '15m';
+
+  const payload = {
+    userId: user.id,
+    email: user.email,
+    role: user.role,
+    name: user.full_name,
+    permissions: effectivePermissions,
+    businessId: user.business_id,
+  };
+  if (company) {
+    payload.companyId = company.id;
+    payload.companyName = company.name;
+  }
+
+  const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: jwtExpiry });
+
+  let refreshToken = null;
+  if (company) {
+    refreshToken = crypto.randomBytes(40).toString('hex');
+    const refreshExpires = new Date();
+    refreshExpires.setDate(refreshExpires.getDate() + 7);
+
+    await query(
+      'INSERT INTO refresh_tokens (user_id, token, expires_at, ip_address, company_id) VALUES ($1, $2, $3, $4, $5)',
+      [user.id, refreshToken, refreshExpires, req.ip, company.id]
+    );
+
+    res.cookie('refreshToken', refreshToken, {
+      httpOnly: true,
+      secure: false,
+      sameSite: 'strict',
+      maxAge: 7 * 24 * 60 * 60 * 1000
+    });
+  }
+
+  res.cookie('token', token, {
+    httpOnly: true,
+    secure: false,
+    sameSite: 'strict',
+    maxAge: company ? 8 * 60 * 60 * 1000 : 15 * 60 * 1000
+  });
+
+  return { token, refreshToken, effectivePermissions };
+}
+
 // POST /api/auth/login
 router.post('/login', loginLimiter, async (req, res) => {
   try {
@@ -97,43 +164,51 @@ router.post('/login', loginLimiter, async (req, res) => {
     // Update last login
     await query('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = $1', [user.id]);
 
-    const { getEffectivePermissions } = require('../middleware/auth');
-    const effectivePermissions = getEffectivePermissions(user.role, user.permissions);
-    
-    // Create JWT token (default 8h)
-    const jwtExpiry = process.env.JWT_EXPIRY || process.env.JWT_EXPIRES_IN || process.env.JWT_ACCESS_EXPIRY || '8h';
-    const token = jwt.sign(
-      { userId: user.id, email: user.email, role: user.role, name: user.full_name, permissions: effectivePermissions },
-      process.env.JWT_SECRET,
-      { expiresIn: jwtExpiry }
+    // Figure out which company this session should be scoped to. Every user
+    // in a business can access every (active) company that business owns —
+    // there's no per-company grant to check.
+    const companiesResult = await query(
+      'SELECT id, name FROM companies WHERE business_id = $1 AND is_active = 1 ORDER BY id ASC',
+      [user.business_id]
     );
+    const companies = companiesResult.rows;
 
-    // Create refresh token
-    const refreshToken = crypto.randomBytes(40).toString('hex');
-    const refreshExpires = new Date();
-    refreshExpires.setDate(refreshExpires.getDate() + 7);
+    if (companies.length === 0) {
+      logger.warn(`⚠️ Login blocked: no active company for business of user ${email}`);
+      return res.status(403).json({
+        success: false,
+        message: 'No active company found for this account. Contact support.'
+      });
+    }
 
-    await query(
-      'INSERT INTO refresh_tokens (user_id, token, expires_at, ip_address) VALUES ($1, $2, $3, $4)',
-      [user.id, refreshToken, refreshExpires, req.ip]
-    );
+    let activeCompany = null;
+    if (companies.length === 1) {
+      activeCompany = companies[0];
+    } else if (user.default_company_id) {
+      activeCompany = companies.find(c => c.id === user.default_company_id) || null;
+    }
 
-    // Set cookies
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: false,
-      sameSite: 'strict',
-      maxAge: 8 * 60 * 60 * 1000 // 8 hours
-    });
-    
-    res.cookie('refreshToken', refreshToken, {
-      httpOnly: true,
-      secure: false,
-      sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
+    const { token, refreshToken, effectivePermissions } = await issueSessionTokens(user, activeCompany, req, res);
 
     logger.info(`✅ Successful login: ${email} from IP ${req.ip}`);
+
+    const userPayload = {
+      id: user.id,
+      email: user.email,
+      full_name: user.full_name,
+      role: user.role,
+      phone: user.phone,
+      permissions: effectivePermissions
+    };
+
+    if (!activeCompany) {
+      return res.json({
+        success: true,
+        requiresCompanySelection: true,
+        message: 'Select a company to continue',
+        data: { token, companies, user: userPayload }
+      });
+    }
 
     res.json({
       success: true,
@@ -141,14 +216,9 @@ router.post('/login', loginLimiter, async (req, res) => {
       data: {
         token,
         refreshToken,
-        user: {
-          id: user.id,
-          email: user.email,
-          full_name: user.full_name,
-          role: user.role,
-          phone: user.phone,
-          permissions: effectivePermissions
-        }
+        user: userPayload,
+        company: activeCompany,
+        companies
       }
     });
   } catch (error) {
@@ -182,6 +252,62 @@ router.post('/login', loginLimiter, async (req, res) => {
       message: 'An internal server error occurred',
       details: { timestamp: new Date().toISOString() }
     });
+  }
+});
+
+// POST /api/auth/switch-company
+// Switches the active company for the current session. Requires only
+// authMiddleware (not requireCompanyContext) since this is exactly how a
+// "pick a company" pending token — or any existing session — picks/changes
+// which company is active. No re-login, no password re-entry.
+router.post('/switch-company', authMiddleware, async (req, res) => {
+  try {
+    const { companyId } = req.body;
+    if (!companyId) {
+      return res.status(400).json({ success: false, message: 'companyId is required' });
+    }
+
+    const userResult = await query('SELECT * FROM users WHERE id = $1 AND is_active = 1', [req.user.userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(401).json({ success: false, errorCode: ERROR_CODES.USER_INACTIVE, message: 'User is no longer active' });
+    }
+    const user = userResult.rows[0];
+
+    const companyResult = await query(
+      'SELECT id, name FROM companies WHERE id = $1 AND business_id = $2 AND is_active = 1',
+      [companyId, user.business_id]
+    );
+    if (companyResult.rows.length === 0) {
+      return res.status(403).json({ success: false, message: 'Company not found or not accessible' });
+    }
+    const company = companyResult.rows[0];
+
+    // Remember this as the company to land in next time.
+    await query('UPDATE users SET default_company_id = $1 WHERE id = $2', [company.id, user.id]);
+
+    const { token, refreshToken, effectivePermissions } = await issueSessionTokens(user, company, req, res);
+
+    res.json({
+      success: true,
+      message: `Switched to ${company.name}`,
+      data: {
+        token,
+        refreshToken,
+        user: {
+          id: user.id,
+          email: user.email,
+          full_name: user.full_name,
+          role: user.role,
+          phone: user.phone,
+          permissions: effectivePermissions
+        },
+        company
+      }
+    });
+  } catch (error) {
+    logError(error, req, { feature: 'auth' });
+    logger.error('Switch company error:', error);
+    res.status(500).json({ success: false, message: 'Failed to switch company' });
   }
 });
 
@@ -226,12 +352,12 @@ router.post('/refresh', async (req, res) => {
       });
     }
 
-    const userId = result.rows[0].user_id;
+    const tokenRow = result.rows[0];
     const userResult = await query(
       'SELECT * FROM users WHERE id = $1 AND is_active = 1',
-      [userId]
+      [tokenRow.user_id]
     );
-    
+
     if (userResult.rows.length === 0) {
       return res.status(401).json({
         success: false,
@@ -241,43 +367,24 @@ router.post('/refresh', async (req, res) => {
     }
 
     const user = userResult.rows[0];
-    const { getEffectivePermissions } = require('../middleware/auth');
-    const effectivePermissions = getEffectivePermissions(user.role, user.permissions);
-    
-    const jwtExpiry = process.env.JWT_EXPIRY || process.env.JWT_EXPIRES_IN || process.env.JWT_ACCESS_EXPIRY || '8h';
-    const token = jwt.sign(
-      { userId: user.id, email: user.email, role: user.role, name: user.full_name, permissions: effectivePermissions },
-      process.env.JWT_SECRET,
-      { expiresIn: jwtExpiry }
-    );
+
+    // Preserve whichever company this session was scoped to, as long as it's
+    // still active and still belongs to the user's business.
+    let company = null;
+    if (tokenRow.company_id) {
+      const companyResult = await query(
+        'SELECT id, name FROM companies WHERE id = $1 AND business_id = $2 AND is_active = 1',
+        [tokenRow.company_id, user.business_id]
+      );
+      company = companyResult.rows[0] || null;
+    }
 
     // Invalidate old refresh token (Token Rotation)
     await query('DELETE FROM refresh_tokens WHERE token = $1', [refreshToken]);
 
-    // Issue new refresh token
-    const newRefreshToken = crypto.randomBytes(40).toString('hex');
-    const newExpiry = new Date();
-    newExpiry.setDate(newExpiry.getDate() + 7);
-    await query(
-      'INSERT INTO refresh_tokens (user_id, token, expires_at, ip_address) VALUES ($1, $2, $3, $4)',
-      [userId, newRefreshToken, newExpiry, req.ip]
-    );
+    const { token, refreshToken: newRefreshToken } = await issueSessionTokens(user, company, req, res);
 
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: false,
-      sameSite: 'strict',
-      maxAge: 8 * 60 * 60 * 1000 // 8 hours
-    });
-
-    res.cookie('refreshToken', newRefreshToken, {
-      httpOnly: true,
-      secure: false,
-      sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
-
-    res.json({ success: true, token, refreshToken: newRefreshToken });
+    res.json({ success: true, token, refreshToken: newRefreshToken, company });
   } catch (err) {
     logError(err, req, { feature: 'auth' });
     logger.error('Refresh error:', err);
@@ -293,7 +400,7 @@ router.post('/refresh', async (req, res) => {
 router.get('/me', authMiddleware, async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, email, full_name, role, phone, last_login, created_at, permissions FROM users WHERE id = $1',
+      'SELECT id, email, full_name, role, phone, last_login, created_at, permissions, business_id FROM users WHERE id = $1',
       [req.user.userId]
     );
     if (result.rows.length === 0) {
@@ -302,6 +409,18 @@ router.get('/me', authMiddleware, async (req, res) => {
     const userData = result.rows[0];
     const { getEffectivePermissions } = require('../middleware/auth');
     userData.permissions = getEffectivePermissions(userData.role, userData.permissions);
+
+    const [businessResult, companiesResult] = await Promise.all([
+      query('SELECT id, name FROM businesses WHERE id = $1', [userData.business_id]),
+      query('SELECT id, name FROM companies WHERE business_id = $1 AND is_active = 1 ORDER BY id ASC', [userData.business_id]),
+    ]);
+    userData.business = businessResult.rows[0] || null;
+    userData.companies = companiesResult.rows;
+    userData.company = req.user.companyId
+      ? (companiesResult.rows.find(c => c.id === req.user.companyId) || null)
+      : null;
+    delete userData.business_id;
+
     res.json({ success: true, data: userData });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'auth' });
@@ -371,7 +490,8 @@ router.post('/change-password', authMiddleware, async (req, res) => {
 router.get('/users', authMiddleware, requireRole('admin'), async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, email, full_name, role, phone, is_active, last_login, created_at, permissions FROM users ORDER BY created_at DESC'
+      'SELECT id, email, full_name, role, phone, is_active, last_login, created_at, permissions FROM users WHERE business_id = $1 ORDER BY created_at DESC',
+      [req.user.businessId]
     );
     const { getEffectivePermissions } = require('../middleware/auth');
     const rows = result.rows.map(u => {
@@ -399,8 +519,8 @@ router.post('/users', authMiddleware, requireRole('admin'), async (req, res) => 
     const initialPerms = Array.isArray(permissions) ? permissions : roleDefaults;
     const permsJson = JSON.stringify(initialPerms);
     const result = await query(
-      'INSERT INTO users (email, password_hash, full_name, role, phone, created_by, permissions) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, email, full_name, role, permissions',
-      [email.toLowerCase(), hash, full_name, role, phone, req.user.userId, permsJson]
+      'INSERT INTO users (email, password_hash, full_name, role, phone, created_by, permissions, business_id, default_company_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, email, full_name, role, permissions',
+      [email.toLowerCase(), hash, full_name, role, phone, req.user.userId, permsJson, req.user.businessId, req.user.companyId || null]
     );
 
     let createdUser = result.rows && result.rows[0];
@@ -564,6 +684,91 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
+// POST /api/auth/signup
+// Public self-service signup for the SaaS. Creates a brand-new Business +
+// its first Admin user + a default Company, fully isolated from every other
+// business in the system, and logs the admin straight in.
+router.post('/signup', signupLimiter, async (req, res) => {
+  try {
+    const { business_name, email, password, full_name } = req.body;
+
+    if (!business_name || !email || !password || !full_name) {
+      return res.status(400).json({
+        success: false,
+        errorCode: ERROR_CODES.MISSING_FIELDS,
+        message: 'Business name, email, password, and full name are required'
+      });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        errorCode: ERROR_CODES.INVALID_EMAIL_FORMAT,
+        message: 'Invalid email format'
+      });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({
+        success: false,
+        errorCode: ERROR_CODES.PASSWORD_TOO_SHORT,
+        message: 'Password must be at least 8 characters'
+      });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const existing = await query('SELECT id FROM users WHERE email = $1', [cleanEmail]);
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ success: false, message: 'An account with this email already exists' });
+    }
+
+    const hash = await bcrypt.hash(password, parseInt(process.env.BCRYPT_ROUNDS) || 12);
+    const cleanBusinessName = business_name.trim();
+
+    const businessResult = await query('INSERT INTO businesses (name) VALUES ($1)', [cleanBusinessName]);
+    const businessId = businessResult.insertId;
+
+    const companyResult = await query('INSERT INTO companies (business_id, name) VALUES ($1, $2)', [businessId, cleanBusinessName]);
+    const companyId = companyResult.insertId;
+
+    const userResult = await query(
+      `INSERT INTO users (email, password_hash, full_name, role, is_active, business_id, default_company_id)
+       VALUES ($1, $2, $3, 'admin', 1, $4, $5)`,
+      [cleanEmail, hash, full_name, businessId, companyId]
+    );
+    const userId = userResult.insertId;
+
+    const user = { id: userId, email: cleanEmail, full_name, role: 'admin', permissions: null, business_id: businessId };
+    const company = { id: companyId, name: cleanBusinessName };
+
+    const { token, refreshToken, effectivePermissions } = await issueSessionTokens(user, company, req, res);
+
+    logger.info(`✅ New business signed up: "${cleanBusinessName}" (${cleanEmail})`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Account created successfully',
+      data: {
+        token,
+        refreshToken,
+        user: { id: user.id, email: user.email, full_name: user.full_name, role: user.role, phone: null, permissions: effectivePermissions },
+        company
+      }
+    });
+  } catch (error) {
+    logError(error, req, { feature: 'auth' });
+    if (error.code === 'ER_DUP_ENTRY' || error.errno === 1062) {
+      return res.status(400).json({ success: false, message: 'An account with this email already exists' });
+    }
+    logger.error('Signup error:', error);
+    res.status(500).json({
+      success: false,
+      errorCode: ERROR_CODES.INTERNAL_SERVER_ERROR,
+      message: 'Failed to create account'
+    });
+  }
+});
+
 // ============================================================
 // SETUP ENDPOINTS - For first-time initialization
 // ============================================================
@@ -713,14 +918,24 @@ router.post('/setup-init', async (req, res) => {
     // Hash password and create admin
     const hash = bcrypt.hashSync(password, parseInt(process.env.BCRYPT_ROUNDS) || 12);
 
+    // Every user needs a business + a company to land in — create a default
+    // one for this first admin, same as /signup does.
+    const businessName = full_name ? `${full_name}'s Business` : 'My Business';
+    const businessResult = await query('INSERT INTO businesses (name) VALUES ($1)', [businessName]);
+    const businessId = businessResult.insertId;
+    const companyResult = await query('INSERT INTO companies (business_id, name) VALUES ($1, $2)', [businessId, businessName]);
+    const companyId = companyResult.insertId;
+
     const insertResult = await query(`
-      INSERT INTO users (email, password_hash, full_name, role, is_active, created_at)
-      VALUES ($1, $2, $3, $4, 1, CURRENT_TIMESTAMP)
+      INSERT INTO users (email, password_hash, full_name, role, is_active, created_at, business_id, default_company_id)
+      VALUES ($1, $2, $3, $4, 1, CURRENT_TIMESTAMP, $5, $6)
     `, [
       email.toLowerCase().trim(),
       hash,
       full_name || 'Administrator',
-      'admin'
+      'admin',
+      businessId,
+      companyId
     ]);
 
     const newAdminId = insertResult.insertId;

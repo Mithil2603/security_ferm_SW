@@ -2,7 +2,7 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const { validate, schemas } = require('../middleware/validators');
 const { logError } = require('../utils/errorLogger');
 const { logAudit } = require('../middleware/audit');
@@ -33,15 +33,16 @@ const formatDateLocal = (d) => {
 };
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('manage_invoices'));
 
 // GET /api/clients
 router.get('/', async (req, res) => {
   try {
     const { search, city, is_active, page = 1, limit = 50 } = req.query;
-    let whereConditions = [];
-    let params = [];
-    let paramCount = 1;
+    let whereConditions = ['c.company_id = $1'];
+    let params = [req.companyId];
+    let paramCount = 2;
 
     if (search) {
       whereConditions.push(`(c.name LIKE $${paramCount} OR c.contact_person LIKE $${paramCount} OR c.phone LIKE $${paramCount})`);
@@ -64,17 +65,17 @@ router.get('/', async (req, res) => {
       paramCount++;
     }
 
-    const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+    const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     const result = await query(
-      `SELECT c.*, 
-        (SELECT COUNT(*) FROM invoices i WHERE i.client_id = c.id) as total_invoices,
-        (SELECT COALESCE(SUM(i.final_amount), 0) FROM invoices i WHERE i.client_id = c.id AND i.status != 'cancelled') as total_billed,
-        (SELECT COALESCE(SUM(i.payment_received), 0) FROM invoices i WHERE i.client_id = c.id) as total_paid,
-        (SELECT COUNT(*) FROM employees e WHERE e.assigned_client_id = c.id AND e.is_active = 1) as assigned_guards_count,
+      `SELECT c.*,
+        (SELECT COUNT(*) FROM invoices i WHERE i.client_id = c.id AND i.company_id = c.company_id) as total_invoices,
+        (SELECT COALESCE(SUM(i.final_amount), 0) FROM invoices i WHERE i.client_id = c.id AND i.status != 'cancelled' AND i.company_id = c.company_id) as total_billed,
+        (SELECT COALESCE(SUM(i.payment_received), 0) FROM invoices i WHERE i.client_id = c.id AND i.company_id = c.company_id) as total_paid,
+        (SELECT COUNT(*) FROM employees e WHERE e.assigned_client_id = c.id AND e.is_active = 1 AND e.company_id = c.company_id) as assigned_guards_count,
         COALESCE(c.employee_count, 1) as employee_count
-       FROM clients c 
+       FROM clients c
        ${whereClause}
        ORDER BY c.created_at DESC, c.name ASC
        LIMIT $${paramCount} OFFSET $${paramCount + 1}`,
@@ -124,13 +125,13 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      `SELECT c.*, 
-        (SELECT COALESCE(SUM(i.final_amount), 0) FROM invoices i WHERE i.client_id = c.id AND i.status != 'cancelled') as total_billed,
-        (SELECT COALESCE(SUM(i.payment_received), 0) FROM invoices i WHERE i.client_id = c.id) as total_paid,
-        (SELECT COUNT(*) FROM employees e WHERE e.assigned_client_id = c.id AND e.is_active = 1) as assigned_guards_count,
+      `SELECT c.*,
+        (SELECT COALESCE(SUM(i.final_amount), 0) FROM invoices i WHERE i.client_id = c.id AND i.status != 'cancelled' AND i.company_id = c.company_id) as total_billed,
+        (SELECT COALESCE(SUM(i.payment_received), 0) FROM invoices i WHERE i.client_id = c.id AND i.company_id = c.company_id) as total_paid,
+        (SELECT COUNT(*) FROM employees e WHERE e.assigned_client_id = c.id AND e.is_active = 1 AND e.company_id = c.company_id) as assigned_guards_count,
         COALESCE(c.employee_count, 1) as employee_count
-       FROM clients c WHERE c.id = $1`,
-      [req.params.id]
+       FROM clients c WHERE c.id = $1 AND c.company_id = $2`,
+      [req.params.id, req.companyId]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Client not found' });
@@ -172,7 +173,7 @@ router.get('/:id', async (req, res) => {
 router.get('/:id/attendance-summary', async (req, res) => {
   try {
     const { from_date, to_date, start_date, end_date } = req.query;
-    const clientRes = await query('SELECT * FROM clients WHERE id = $1', [req.params.id]);
+    const clientRes = await query('SELECT * FROM clients WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     if (clientRes.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Client not found' });
     }
@@ -224,10 +225,11 @@ router.get('/:id/attendance-summary', async (req, res) => {
     const attRes = await query(
       `SELECT a.status, COUNT(*) as count
        FROM attendance a
-       WHERE (a.client_id = $1 OR a.employee_id IN (SELECT id FROM employees WHERE assigned_client_id = $1))
+       WHERE (a.client_id = $1 OR a.employee_id IN (SELECT id FROM employees WHERE assigned_client_id = $1 AND company_id = $4))
          AND a.attendance_date >= $2 AND a.attendance_date <= $3
+         AND a.company_id = $4
        GROUP BY a.status`,
-      [client.id, start, end]
+      [client.id, start, end, req.companyId]
     );
 
     let presentDays = 0;
@@ -317,9 +319,9 @@ router.post('/import', upload.single('file'), async (req, res) => {
           const contract_start_date = new Date().toISOString().split('T')[0];
           
           query(
-            `INSERT INTO clients (name, address, city, phone, email, monthly_rate, contract_start_date, created_by)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-            [name, address, city, phone, email, monthly_rate, contract_start_date, req.user.userId]
+            `INSERT INTO clients (name, address, city, phone, email, monthly_rate, contract_start_date, created_by, company_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [name, address, city, phone, email, monthly_rate, contract_start_date, req.user.userId, req.companyId]
           );
           importedCount++;
         } catch (e) {
@@ -439,8 +441,8 @@ router.post('/', validate(schemas.createClient), async (req, res) => {
 
     // Check for duplicate client name
     const existingClient = await query(
-      'SELECT id FROM clients WHERE name LIKE $1 AND is_active = 1 LIMIT 1',
-      [name]
+      'SELECT id FROM clients WHERE name LIKE $1 AND is_active = 1 AND company_id = $2 LIMIT 1',
+      [name, req.companyId]
     );
     if (existingClient.rows.length > 0) {
       return res.status(400).json({ success: false, message: 'A client with this exact name already exists. Please use the Edit button (pencil icon) on the existing client instead of creating a new one.' });
@@ -448,16 +450,17 @@ router.post('/', validate(schemas.createClient), async (req, res) => {
 
     const result = await query(
       `INSERT INTO clients (
-        name, address, city, state, postal_code, email, phone, contact_person, gst_number, client_type, 
+        name, address, city, state, postal_code, email, phone, contact_person, gst_number, client_type,
         monthly_rate, contract_start_date, contract_end_date, notes, created_by,
-        employee_count, timeline_unit, timeline_duration, rate_per_day, total_timeline_amount, addon_days, guard_categories, sites
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,0,$21,$22) RETURNING *`,
+        employee_count, timeline_unit, timeline_duration, rate_per_day, total_timeline_amount, addon_days, guard_categories, sites, company_id
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,0,$21,$22,$23) RETURNING *`,
       [
         name, address, city, state, postal_code, email, phone, contact_person, gst_number, client_type || 'regular',
         finalMonthlyRate, finalStartDate, finalEndDate || null, notes, req.user.userId,
         guards, unit, duration, finalRatePerDay, finalTotalAmount,
         parsedCategories ? JSON.stringify(parsedCategories) : null,
-        parsedSites ? JSON.stringify(parsedSites) : null
+        parsedSites ? JSON.stringify(parsedSites) : null,
+        req.companyId
       ]
     );
 
@@ -489,7 +492,7 @@ router.put('/:id', validate(schemas.updateClient), async (req, res) => {
       addon_days, guard_categories, sites
     } = req.body;
 
-    const existingRes = await query('SELECT * FROM clients WHERE id = $1', [req.params.id]);
+    const existingRes = await query('SELECT * FROM clients WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     if (existingRes.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Client not found' });
     }
@@ -581,7 +584,7 @@ router.put('/:id', validate(schemas.updateClient), async (req, res) => {
         guard_categories=CASE WHEN $22 IS NOT NULL THEN $22 ELSE guard_categories END,
         sites=CASE WHEN $23 IS NOT NULL THEN $23 ELSE sites END,
         updated_at=CURRENT_TIMESTAMP
-       WHERE id=$24`,
+       WHERE id=$24 AND company_id=$25`,
       [
         name || existing.name, address || existing.address, city || existing.city, state || existing.state, postal_code || existing.postal_code,
         email !== undefined ? email : existing.email, phone !== undefined ? phone : existing.phone,
@@ -589,11 +592,11 @@ router.put('/:id', validate(schemas.updateClient), async (req, res) => {
         client_type || existing.client_type, finalMonthlyRate, finalStartDate, finalEndDate || null,
         notes !== undefined ? notes : existing.notes, isActiveBool, guards, unit, duration,
         finalRatePerDay, finalTotalAmount, newAddonDays, guardCatsJson !== undefined ? guardCatsJson : null,
-        sitesJson !== undefined ? sitesJson : null, req.params.id
+        sitesJson !== undefined ? sitesJson : null, req.params.id, req.companyId
       ]
     );
 
-    const updated = await query('SELECT * FROM clients WHERE id = $1', [req.params.id]);
+    const updated = await query('SELECT * FROM clients WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     await logAudit(req, 'clients', req.params.id, 'update', `Updated client: ${name || existing.name}${additionalDays > 0 ? ` (+${additionalDays} add-on days)` : ''}`);
 
     const updatedRow = updated.rows[0];
@@ -636,13 +639,13 @@ router.put('/:id', validate(schemas.updateClient), async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const result = await query(
-      'UPDATE clients SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-      [req.params.id]
+      'UPDATE clients SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND company_id = $2',
+      [req.params.id, req.companyId]
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Client not found' });
     }
-    
+
     await logAudit(req, 'clients', req.params.id, 'update', 'Deactivated client');
     
     res.json({ success: true, message: 'Client deactivated successfully' });
@@ -656,8 +659,8 @@ router.delete('/:id', async (req, res) => {
 router.patch('/:id/reactivate', async (req, res) => {
   try {
     const result = await query(
-      'UPDATE clients SET is_active = 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-      [req.params.id]
+      'UPDATE clients SET is_active = 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND company_id = $2',
+      [req.params.id, req.companyId]
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Client not found' });
@@ -675,7 +678,7 @@ router.patch('/:id/reactivate', async (req, res) => {
 // DELETE /api/clients/:id/hard (hard delete)
 router.delete('/:id/hard', async (req, res) => {
   try {
-    const result = await query('DELETE FROM clients WHERE id = $1', [req.params.id]);
+    const result = await query('DELETE FROM clients WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Client not found' });
     }
@@ -711,15 +714,15 @@ router.patch('/:id/renew', async (req, res) => {
       updates.push(`monthly_rate = $${params.length + 1}`);
       params.push(monthly_rate);
     }
-    params.push(req.params.id);
+    params.push(req.params.id, req.companyId);
     const result = await query(
-      `UPDATE clients SET ${updates.join(', ')} WHERE id = $${params.length}`,
+      `UPDATE clients SET ${updates.join(', ')} WHERE id = $${params.length - 1} AND company_id = $${params.length}`,
       params
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Client not found' });
     }
-    const updated = await query('SELECT id, name, contract_end_date, monthly_rate FROM clients WHERE id = $1', [req.params.id]);
+    const updated = await query('SELECT id, name, contract_end_date, monthly_rate FROM clients WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     res.json({ success: true, message: 'Contract renewed successfully', data: updated.rows[0] });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'clients' });
@@ -733,14 +736,14 @@ router.get('/:id/statement', async (req, res) => {
     const { from_date, to_date } = req.query;
     
     // Fetch client details
-    const clientRes = await query('SELECT name, address, city, phone, email, monthly_rate FROM clients WHERE id = $1', [req.params.id]);
+    const clientRes = await query('SELECT name, address, city, phone, email, monthly_rate FROM clients WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     if (clientRes.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Client not found' });
     }
 
     let dateWhere = '';
-    let params = [req.params.id];
-    let pc = 2;
+    let params = [req.params.id, req.companyId];
+    let pc = 3;
     if (from_date && to_date) {
       dateWhere = `AND date >= date($${pc}) AND date <= date($${pc+1})`;
       params.push(from_date, to_date);
@@ -751,10 +754,10 @@ router.get('/:id/statement', async (req, res) => {
     const statementQuery = `
       WITH statement_data AS (
         SELECT id as ref_id, invoice_number as reference, invoice_date as date, 'Invoice' as type, final_amount as debit, 0 as credit
-        FROM invoices WHERE client_id = $1 AND status != 'cancelled'
+        FROM invoices WHERE client_id = $1 AND status != 'cancelled' AND company_id = $2
         UNION ALL
         SELECT p.id as ref_id, p.transaction_reference as reference, p.payment_date as date, 'Payment' as type, 0 as debit, p.amount_paid as credit
-        FROM payments p JOIN invoices i ON p.invoice_id = i.id WHERE i.client_id = $1
+        FROM payments p JOIN invoices i ON p.invoice_id = i.id WHERE i.client_id = $1 AND p.company_id = $2
       )
       SELECT * FROM statement_data
       WHERE 1=1 ${dateWhere}

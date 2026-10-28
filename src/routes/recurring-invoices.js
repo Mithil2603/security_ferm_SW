@@ -22,11 +22,12 @@ const express = require('express');
 const { logError, ERROR_SEVERITY, ERROR_CATEGORY } = require('../utils/errorLogger');
 const router = express.Router();
 const Joi = require('joi');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const recurringInvoiceService = require('../services/invoicing/recurringInvoices');
 const { sendEmail } = require('../utils/email');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('manage_invoices'));
 
 // ─── Validation Schemas ──────────────────────────────────────────────────────
@@ -75,14 +76,14 @@ router.post('/', async (req, res) => {
     // Auto-fetch monthly_rate from client if not provided
     if (!value.monthly_rate) {
       const { query } = require('../database/connection');
-      const clientRow = await query('SELECT monthly_rate FROM clients WHERE id = $1 AND is_active = 1', [value.client_id]);
+      const clientRow = await query('SELECT monthly_rate FROM clients WHERE id = $1 AND is_active = 1 AND company_id = $2', [value.client_id, req.companyId]);
       if (clientRow.rows.length === 0) {
         return res.status(404).json({ success: false, message: 'Client not found or inactive' });
       }
       value.monthly_rate = parseFloat(clientRow.rows[0].monthly_rate);
     }
 
-    const result = await recurringInvoiceService.create(value, req.user.id);
+    const result = await recurringInvoiceService.create(value, req.user.userId, req.companyId);
 
     logger.info(`✅ Recurring invoice created: ID ${result.id} for client ${result.client_name}`);
     res.status(201).json({ success: true, data: result });
@@ -104,7 +105,7 @@ router.post('/', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const { client_id, status, frequency, page, limit } = req.query;
-    const result = await recurringInvoiceService.findAll({ client_id, status, frequency, page, limit });
+    const result = await recurringInvoiceService.findAll({ client_id, status, frequency, page, limit }, req.companyId);
     res.json({ success: true, ...result });
   } catch (err) {
     logError({
@@ -123,7 +124,7 @@ router.get('/', async (req, res) => {
 
 router.get('/stats', async (req, res) => {
   try {
-    const stats = await recurringInvoiceService.getDashboardStats();
+    const stats = await recurringInvoiceService.getDashboardStats(req.companyId);
     res.json({ success: true, data: stats });
   } catch (err) {
     logError({
@@ -142,7 +143,7 @@ router.get('/stats', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   try {
-    const result = await recurringInvoiceService.findById(parseInt(req.params.id));
+    const result = await recurringInvoiceService.findById(parseInt(req.params.id), req.companyId);
     if (!result) return res.status(404).json({ success: false, message: 'Recurring invoice not found' });
     res.json({ success: true, data: result });
   } catch (err) {
@@ -165,7 +166,7 @@ router.put('/:id', async (req, res) => {
     const { error, value } = updateSchema.validate(req.body);
     if (error) return res.status(400).json({ success: false, message: error.details[0].message });
 
-    const result = await recurringInvoiceService.update(parseInt(req.params.id), value);
+    const result = await recurringInvoiceService.update(parseInt(req.params.id), value, req.companyId);
     logger.info(`✅ Recurring invoice updated: ID ${req.params.id}`);
     res.json({ success: true, data: result });
   } catch (err) {
@@ -186,7 +187,7 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const result = await recurringInvoiceService.delete(parseInt(req.params.id));
+    const result = await recurringInvoiceService.delete(parseInt(req.params.id), req.companyId);
     logger.info(`🗑️ Recurring invoice cancelled: ID ${req.params.id}`);
     res.json({ success: true, ...result });
   } catch (err) {
@@ -207,7 +208,7 @@ router.delete('/:id', async (req, res) => {
 
 router.post('/:id/pause', async (req, res) => {
   try {
-    const result = await recurringInvoiceService.pause(parseInt(req.params.id));
+    const result = await recurringInvoiceService.pause(parseInt(req.params.id), req.companyId);
     logger.info(`⏸️ Recurring invoice paused: ID ${req.params.id}`);
     res.json({ success: true, data: result });
   } catch (err) {
@@ -228,7 +229,7 @@ router.post('/:id/pause', async (req, res) => {
 
 router.post('/:id/resume', async (req, res) => {
   try {
-    const result = await recurringInvoiceService.resume(parseInt(req.params.id));
+    const result = await recurringInvoiceService.resume(parseInt(req.params.id), req.companyId);
     logger.info(`▶️ Recurring invoice resumed: ID ${req.params.id}`);
     res.json({ success: true, data: result });
   } catch (err) {
@@ -249,12 +250,18 @@ router.post('/:id/resume', async (req, res) => {
 
 router.post('/:id/generate', async (req, res) => {
   try {
+    // generateInvoice() itself doesn't take companyId (it's also used by the
+    // install-wide cron job with no per-request company context) — verify
+    // ownership here before calling it.
+    const owned = await recurringInvoiceService.findById(parseInt(req.params.id), req.companyId);
+    if (!owned) return res.status(404).json({ success: false, message: 'Recurring invoice not found' });
+
     const result = await recurringInvoiceService.generateInvoice(parseInt(req.params.id));
     logger.info(`📄 Invoice generated from recurring template: ${result.invoice_number}`);
 
     // Try to send email notification
     try {
-      const recurring = await recurringInvoiceService.findById(parseInt(req.params.id));
+      const recurring = await recurringInvoiceService.findById(parseInt(req.params.id), req.companyId);
       if (recurring && recurring.client_email) {
         await sendEmail({
           to: recurring.client_email,
@@ -286,7 +293,7 @@ router.post('/:id/generate', async (req, res) => {
 router.get('/:id/history', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 20;
-    const history = await recurringInvoiceService.getHistory(parseInt(req.params.id), limit);
+    const history = await recurringInvoiceService.getHistory(parseInt(req.params.id), limit, req.companyId);
     res.json({ success: true, data: history });
   } catch (err) {
     logError({

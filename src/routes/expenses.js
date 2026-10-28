@@ -2,7 +2,7 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const { validate, schemas } = require('../middleware/validators');
 const { saveStatement } = require('../utils/statementSaver');
 const multer = require('multer');
@@ -34,15 +34,16 @@ const upload = multer({
 });
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('manage_expenses'));
 
 // GET /api/expenses
 router.get('/', async (req, res) => {
   try {
     const { category, status, from_date, to_date, page = 1, limit = 50 } = req.query;
-    let conditions = [];
-    let params = [];
-    let pc = 1;
+    let conditions = ['e.company_id = $1'];
+    let params = [req.companyId];
+    let pc = 2;
 
     if (category) { conditions.push(`e.category = $${pc}`); params.push(category); pc++; }
     if (status) { conditions.push(`e.status = $${pc}`); params.push(status); pc++; }
@@ -57,7 +58,7 @@ router.get('/', async (req, res) => {
        FROM expenses e
        LEFT JOIN users u ON e.created_by = u.id
        LEFT JOIN users a ON e.approver_id = a.id
-       LEFT JOIN vendors v ON e.vendor_id = v.id
+       LEFT JOIN vendors v ON e.vendor_id = v.id AND v.company_id = e.company_id
        ${where}
        ORDER BY e.expense_date DESC, e.created_at DESC
        LIMIT $${pc} OFFSET $${pc + 1}`,
@@ -88,7 +89,7 @@ router.get('/', async (req, res) => {
 // GET /api/expenses/categories
 router.get('/categories', async (req, res) => {
   try {
-    const result = await query('SELECT * FROM expense_categories WHERE is_active = 1 ORDER BY name ASC');
+    const result = await query('SELECT * FROM expense_categories WHERE is_active = 1 AND company_id = $1 ORDER BY name ASC', [req.companyId]);
     res.json({ success: true, data: result.rows });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'expenses' });
@@ -103,8 +104,8 @@ router.post('/categories', async (req, res) => {
     const { name, description } = req.body;
     if (!name) return res.status(400).json({ success: false, message: 'Category name is required' });
     const result = await query(
-      'INSERT INTO expense_categories (name) VALUES ($1) RETURNING *',
-      [name.toLowerCase().replace(/\s+/g, '_')]
+      'INSERT INTO expense_categories (name, company_id) VALUES ($1, $2) RETURNING *',
+      [name.toLowerCase().replace(/\s+/g, '_'), req.companyId]
     );
     res.status(201).json({ success: true, data: result.rows[0], message: 'Category added' });
   } catch (error) {
@@ -119,10 +120,10 @@ router.post('/categories', async (req, res) => {
 // DELETE /api/expenses/categories/:id
 router.delete('/categories/:id', requirePermission('manage_expenses'), async (req, res) => {
   try {
-    const result = await query('UPDATE expense_categories SET is_active = 0 WHERE id = $1', [req.params.id]);
+    const result = await query('UPDATE expense_categories SET is_active = 0 WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     if (result.rowCount === 0) return res.status(404).json({ success: false, message: 'Category not found' });
-    
-    const updated = await query('SELECT * FROM expense_categories WHERE id = $1', [req.params.id]);
+
+    const updated = await query('SELECT * FROM expense_categories WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     res.json({ success: true, data: updated.rows[0], message: 'Category deactivated successfully' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'expenses' });
@@ -138,9 +139,9 @@ router.get('/:id', async (req, res) => {
        FROM expenses e
        LEFT JOIN users u ON e.created_by = u.id
        LEFT JOIN users a ON e.approver_id = a.id
-       LEFT JOIN vendors v ON e.vendor_id = v.id
-       WHERE e.id = $1`,
-      [req.params.id]
+       LEFT JOIN vendors v ON e.vendor_id = v.id AND v.company_id = e.company_id
+       WHERE e.id = $1 AND e.company_id = $2`,
+      [req.params.id, req.companyId]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Expense not found' });
@@ -189,10 +190,10 @@ router.post('/', upload.single('receipt_file'), validate(schemas.createExpense),
 
     const result = await query(
       `INSERT INTO expenses (expense_date, category, description, amount, payment_method, vendor_id, receipt_number, notes, receipt_url, created_by,
-        tax_type, tax_rate, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable, tds_rate)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+        tax_type, tax_rate, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable, tds_rate, company_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
       [expense_date, category, description, parsedAmount, payment_method, parsedVendorId, parsedReceiptNo, parsedNotes, receipt_url, req.user.userId,
-       finalTaxType, tax_rate || 0, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable ? 1 : 0, tds_rate || 0]
+       finalTaxType, tax_rate || 0, cgst_amount, sgst_amount, igst_amount, is_rcm_applicable ? 1 : 0, tds_rate || 0, req.companyId]
     );
 
     res.status(201).json({ success: true, data: result.rows[0], message: 'Expense recorded successfully' });
@@ -222,19 +223,19 @@ router.put('/:id', upload.single('receipt_file'), async (req, res) => {
     let updateQuery, params;
     if (receipt_url) {
       updateQuery = `UPDATE expenses SET expense_date=$1, category=$2, description=$3, amount=$4, payment_method=$5,
-        vendor_id=$6, receipt_number=$7, notes=$8, receipt_url=$9 WHERE id=$10 AND status='pending'`;
-      params = [expense_date, category, description, parsedAmount, payment_method, parsedVendorId, parsedReceiptNo, parsedNotes, receipt_url, req.params.id];
+        vendor_id=$6, receipt_number=$7, notes=$8, receipt_url=$9 WHERE id=$10 AND company_id=$11 AND status='pending'`;
+      params = [expense_date, category, description, parsedAmount, payment_method, parsedVendorId, parsedReceiptNo, parsedNotes, receipt_url, req.params.id, req.companyId];
     } else {
       updateQuery = `UPDATE expenses SET expense_date=$1, category=$2, description=$3, amount=$4, payment_method=$5,
-        vendor_id=$6, receipt_number=$7, notes=$8 WHERE id=$9 AND status='pending'`;
-      params = [expense_date, category, description, parsedAmount, payment_method, parsedVendorId, parsedReceiptNo, parsedNotes, req.params.id];
+        vendor_id=$6, receipt_number=$7, notes=$8 WHERE id=$9 AND company_id=$10 AND status='pending'`;
+      params = [expense_date, category, description, parsedAmount, payment_method, parsedVendorId, parsedReceiptNo, parsedNotes, req.params.id, req.companyId];
     }
 
     const result = await query(updateQuery, params);
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Expense not found or cannot be edited (only pending expenses can be edited)' });
     }
-    const updated = await query('SELECT * FROM expenses WHERE id = $1', [req.params.id]);
+    const updated = await query('SELECT * FROM expenses WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     res.json({ success: true, data: updated.rows[0], message: 'Expense updated successfully' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'expenses' });
@@ -248,15 +249,15 @@ router.put('/:id/approve', async (req, res) => {
     const { approval_notes } = req.body;
     const result = await query(
       `UPDATE expenses SET status='approved', approver_id=$1, approval_date=CURRENT_TIMESTAMP, approval_notes=$2
-       WHERE id=$3 AND status='pending'`,
-      [req.user.userId, approval_notes, req.params.id]
+       WHERE id=$3 AND company_id=$4 AND status='pending'`,
+      [req.user.userId, approval_notes, req.params.id, req.companyId]
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Expense not found or already processed' });
     }
     const updated = await query(
-      `SELECT e.*, v.name as vendor_name FROM expenses e LEFT JOIN vendors v ON e.vendor_id = v.id WHERE e.id = $1`,
-      [req.params.id]
+      `SELECT e.*, v.name as vendor_name FROM expenses e LEFT JOIN vendors v ON e.vendor_id = v.id AND v.company_id = e.company_id WHERE e.id = $1 AND e.company_id = $2`,
+      [req.params.id, req.companyId]
     );
     const exp = updated.rows[0];
 
@@ -271,7 +272,8 @@ router.put('/:id/approve', async (req, res) => {
       total_amount: parseFloat(exp.amount),
       party_name: exp.vendor_name || 'Unknown',
       party_id: exp.vendor_id,
-      generated_by: req.user.userId
+      generated_by: req.user.userId,
+      company_id: req.companyId
     });
 
     res.json({ success: true, data: exp, message: 'Expense approved' });
@@ -287,13 +289,13 @@ router.put('/:id/reject', async (req, res) => {
     const { approval_notes } = req.body;
     const result = await query(
       `UPDATE expenses SET status='rejected', approver_id=$1, approval_date=CURRENT_TIMESTAMP, approval_notes=$2
-       WHERE id=$3 AND status='pending'`,
-      [req.user.userId, approval_notes, req.params.id]
+       WHERE id=$3 AND company_id=$4 AND status='pending'`,
+      [req.user.userId, approval_notes, req.params.id, req.companyId]
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Expense not found or already processed' });
     }
-    const updated = await query('SELECT * FROM expenses WHERE id = $1', [req.params.id]);
+    const updated = await query('SELECT * FROM expenses WHERE id = $1 AND company_id = $2', [req.params.id, req.companyId]);
     res.json({ success: true, data: updated.rows[0], message: 'Expense rejected' });
   } catch (error) {
     logError(error, typeof req !== 'undefined' ? req : {}, { feature: 'expenses' });
@@ -305,8 +307,8 @@ router.put('/:id/reject', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const result = await query(
-      "DELETE FROM expenses WHERE id = $1 AND status = 'pending'",
-      [req.params.id]
+      "DELETE FROM expenses WHERE id = $1 AND company_id = $2 AND status = 'pending'",
+      [req.params.id, req.companyId]
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Expense not found or cannot be deleted' });
@@ -333,7 +335,8 @@ router.post('/:id/pay', async (req, res) => {
           reference_number, notes, bank_account_id, attachment_url, tds_amount,
           tax_type, tax_rate, is_rcm_applicable
         },
-        req.user.userId
+        req.user.userId,
+        req.companyId
       );
       res.json({ success: true, data: result.expense, message: 'Payment recorded successfully' });
     } catch (serviceErr) {

@@ -2,12 +2,13 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const { saveStatement } = require('../utils/statementSaver');
 const { logError } = require('../utils/errorLogger');
 const ledgerTotalsUtil = require('../utils/ledgerTotals');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('view_balance_sheet', 'manage_payroll', 'view_reports'));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -18,13 +19,13 @@ router.get('/', async (req, res) => {
     const { as_on_date, compare } = req.query;
     const asOnDate = as_on_date || new Date().toISOString().split('T')[0];
 
-    const currentData = await buildBalanceSheet(asOnDate);
+    const currentData = await buildBalanceSheet(asOnDate, req.companyId);
 
     let previousData = null;
     if (compare === 'true') {
       // Previous year same date
       const prevDate = shiftYear(asOnDate, -1);
-      previousData = await buildBalanceSheet(prevDate);
+      previousData = await buildBalanceSheet(prevDate, req.companyId);
     }
 
     res.json({
@@ -50,7 +51,7 @@ router.post('/generate', async (req, res) => {
     const { as_on_date } = req.body;
     const asOnDate = as_on_date || new Date().toISOString().split('T')[0];
 
-    const data = await buildBalanceSheet(asOnDate);
+    const data = await buildBalanceSheet(asOnDate, req.companyId);
 
     saveStatement({
       domain: 'balance_sheet',
@@ -65,7 +66,8 @@ router.post('/generate', async (req, res) => {
       period_to: asOnDate,
       party_name: 'Agency Balance Sheet',
       party_id: null,
-      generated_by: req.user.userId
+      generated_by: req.user.userId,
+      company_id: req.companyId
     });
 
     res.json({
@@ -93,7 +95,7 @@ function formatDateShort(dateStr) {
   } catch { return dateStr; }
 }
 
-async function buildBalanceSheet(asOnDate) {
+async function buildBalanceSheet(asOnDate, companyId) {
   // ══════════════════════════════════════════════════════════════════════════
   // ASSETS
   // ══════════════════════════════════════════════════════════════════════════
@@ -103,13 +105,14 @@ async function buildBalanceSheet(asOnDate) {
     SELECT ba.id, ba.account_name, ba.account_type,
            COALESCE(ba.opening_balance, 0) as opening_balance,
            COALESCE(ba.opening_balance, 0) +
-             COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.debit_account_id = ba.id AND v.status = 'posted' AND v.voucher_date <= $1), 0) -
-             COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.credit_account_id = ba.id AND v.status = 'posted' AND v.voucher_date <= $1), 0)
+             COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.debit_account_id = ba.id AND v.company_id = $2 AND v.status = 'posted' AND v.voucher_date <= $1), 0) -
+             COALESCE((SELECT SUM(v.amount) FROM vouchers v WHERE v.credit_account_id = ba.id AND v.company_id = $2 AND v.status = 'posted' AND v.voucher_date <= $1), 0)
              as balance
     FROM bank_accounts ba
     WHERE ba.is_active = 1
+      AND ba.company_id = $2
     ORDER BY ba.account_type, ba.account_name
-  `, [asOnDate]);
+  `, [asOnDate, companyId]);
 
   const cashBalances = bankAccounts.rows.filter(a => a.account_type === 'cash');
   const bankBalances = bankAccounts.rows.filter(a => a.account_type === 'bank');
@@ -121,28 +124,30 @@ async function buildBalanceSheet(asOnDate) {
            SUM(i.payment_due) as amount_due,
            COUNT(i.id) as invoice_count
     FROM invoices i
-    JOIN clients c ON i.client_id = c.id
+    JOIN clients c ON i.client_id = c.id AND c.company_id = $2
     WHERE i.status NOT IN ('cancelled', 'paid')
       AND i.payment_due > 0
       AND i.invoice_date <= $1
+      AND i.company_id = $2
     GROUP BY c.name
     ORDER BY amount_due DESC
-  `, [asOnDate]);
+  `, [asOnDate, companyId]);
   const totalReceivables = receivables.rows.reduce((sum, r) => sum + (r.amount_due || 0), 0);
 
   // 3. Advances — salary advances given (from employee ledger, unsettled additions)
   const advances = await query(`
     SELECT COALESCE(SUM(l.amount), 0) as total
     FROM employee_ledger l
-    LEFT JOIN payroll p ON l.payroll_id = p.id
+    LEFT JOIN payroll p ON l.payroll_id = p.id AND p.company_id = $2
     WHERE l.type = 'addition'
       AND (l.payroll_id IS NULL OR p.payment_status = 'pending')
       AND l.transaction_date <= $1
-  `, [asOnDate]);
+      AND l.company_id = $2
+  `, [asOnDate, companyId]);
   const totalAdvances = advances.rows[0]?.total || 0;
 
   // 3b. Custom ledgers (posted vouchers up to the as-on date)
-  const bsLedgers = await ledgerTotalsUtil.ledgerTotals({ to: asOnDate });
+  const bsLedgers = await ledgerTotalsUtil.ledgerTotals({ to: asOnDate, companyId });
   const assetLedgers = bsLedgers.filter(r => r.nature === 'asset');
   const liabilityLedgers = bsLedgers.filter(r => r.nature === 'liability');
   const capitalLedgers = bsLedgers.filter(r => r.nature === 'capital');
@@ -160,7 +165,8 @@ async function buildBalanceSheet(asOnDate) {
     FROM payroll
     WHERE payment_status = 'pending'
       AND payroll_month <= $1
-  `, [asOnDate]);
+      AND company_id = $2
+  `, [asOnDate, companyId]);
   const totalSalaryPayable = salaryPayable.rows[0]?.total || 0;
 
   // 5. Statutory Dues — PF, ESI payable
@@ -172,7 +178,8 @@ async function buildBalanceSheet(asOnDate) {
     FROM payroll
     WHERE payment_status = 'pending'
       AND payroll_month <= $1
-  `, [asOnDate]);
+      AND company_id = $2
+  `, [asOnDate, companyId]);
   const pfPayable = statutoryDues.rows[0]?.pf_payable || 0;
   const esiPayable = statutoryDues.rows[0]?.esi_payable || 0;
   const tdsPayable = statutoryDues.rows[0]?.tds_payable || 0;
@@ -184,7 +191,8 @@ async function buildBalanceSheet(asOnDate) {
     FROM invoices
     WHERE status NOT IN ('cancelled')
       AND invoice_date <= $1
-  `, [asOnDate]);
+      AND company_id = $2
+  `, [asOnDate, companyId]);
   const gstPayable = gstData.rows[0]?.gst_collected || 0;
 
   // 7. Vendor Payables — outstanding vendor payments
@@ -192,11 +200,12 @@ async function buildBalanceSheet(asOnDate) {
     SELECT v.name as vendor_name,
            COALESCE(SUM(vp.amount), 0) as total_paid
     FROM vendors v
-    LEFT JOIN vendor_payments vp ON v.id = vp.vendor_id AND vp.payment_date <= $1
+    LEFT JOIN vendor_payments vp ON v.id = vp.vendor_id AND vp.payment_date <= $1 AND vp.company_id = $2
     WHERE v.is_active = 1
+      AND v.company_id = $2
     GROUP BY v.name
     HAVING total_paid > 0
-  `, [asOnDate]);
+  `, [asOnDate, companyId]);
   // Note: We don't have vendor invoices, so vendor payables = vendor payments already made
   // For a proper B/S, we'd need vendor bills. For now, show pending expenses as payables.
   const expensePayables = await query(`
@@ -204,7 +213,8 @@ async function buildBalanceSheet(asOnDate) {
     FROM expenses
     WHERE status = 'approved'
       AND expense_date <= $1
-  `, [asOnDate]);
+      AND company_id = $2
+  `, [asOnDate, companyId]);
   const totalExpensePayables = expensePayables.rows[0]?.total || 0;
 
   // 8. Credit Notes liability
@@ -212,7 +222,8 @@ async function buildBalanceSheet(asOnDate) {
     SELECT COALESCE(SUM(amount), 0) as total
     FROM vouchers
     WHERE voucher_type = 'credit_note' AND status = 'posted' AND voucher_date <= $1
-  `, [asOnDate]);
+      AND company_id = $2
+  `, [asOnDate, companyId]);
   const totalCreditNotes = creditNotesTotal.rows[0]?.total || 0;
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -230,23 +241,26 @@ async function buildBalanceSheet(asOnDate) {
     FROM invoices
     WHERE status != 'cancelled'
       AND invoice_date >= $1 AND invoice_date <= $2
-  `, [fyStart, asOnDate]);
+      AND company_id = $3
+  `, [fyStart, asOnDate, companyId]);
 
   const totalExpenses = await query(`
     SELECT COALESCE(SUM(amount), 0) as total
     FROM expenses
     WHERE status IN ('approved', 'paid')
       AND expense_date >= $1 AND expense_date <= $2
-  `, [fyStart, asOnDate]);
+      AND company_id = $3
+  `, [fyStart, asOnDate, companyId]);
 
   const totalPayroll = await query(`
     SELECT COALESCE(SUM(gross_salary), 0) as total
     FROM payroll
     WHERE payroll_month >= $1 AND payroll_month <= $2
-  `, [fyStart, asOnDate]);
+      AND company_id = $3
+  `, [fyStart, asOnDate, companyId]);
 
   // Custom income / expense ledgers for the same FY window
-  const plLedgers = await ledgerTotalsUtil.ledgerTotals({ from: fyStart, to: asOnDate });
+  const plLedgers = await ledgerTotalsUtil.ledgerTotals({ from: fyStart, to: asOnDate, companyId });
   const ledgerIncome = ledgerTotalsUtil.sum(plLedgers.filter(r => r.nature === 'income'));
   const ledgerExpense = ledgerTotalsUtil.sum(plLedgers.filter(r => r.nature === 'expense'));
 

@@ -14,7 +14,7 @@ const DEBIT_NATURES = ['expense', 'asset'];
 // already counts those from their own tables, so they are not added here.
 const BANK_ENTRY_SIDES = { bank_charge: 'debit', other_debit: 'debit', interest_credited: 'credit', other_credit: 'credit' };
 
-async function bankEntryRows(params, dateSql) {
+async function bankEntryRows(companyId, params, dateSql) {
   try {
     const r = await query(`
       SELECT l.id, l.name, l.source_key, g.name AS group_name, g.nature, g.is_direct, g.sort_order,
@@ -23,8 +23,9 @@ async function bankEntryRows(params, dateSql) {
         JOIN ledger_groups g ON g.id = l.group_id
         JOIN vouchers v ON v.category = l.source_key AND v.voucher_type = 'journal'
                        AND v.debit_ledger_id IS NULL AND v.credit_ledger_id IS NULL
-       WHERE l.source_type = 'bank_entry' AND v.status = 'posted'${dateSql}
-       GROUP BY l.id, l.name, l.source_key, g.name, g.nature, g.is_direct, g.sort_order`, params);
+                       AND v.company_id = l.company_id
+       WHERE l.source_type = 'bank_entry' AND v.status = 'posted' AND l.company_id = $1${dateSql}
+       GROUP BY l.id, l.name, l.source_key, g.name, g.nature, g.is_direct, g.sort_order`, [companyId, ...params]);
     return r.rows;
   } catch (err) {
     if (/source_|ledger/i.test(err.message || '')) return [];
@@ -33,13 +34,13 @@ async function bankEntryRows(params, dateSql) {
 }
 
 /**
- * @param {{ from?: string, to: string }} range  voucher_date bounds (from optional)
+ * @param {{ from?: string, to: string, companyId: number }} range  voucher_date bounds (from optional)
  * @returns rows { id, name, group_name, nature, is_direct, sort_order, debit, credit, amount }
  */
-async function ledgerTotals({ from, to }) {
-  const params = [to];
+async function ledgerTotals({ from, to, companyId }) {
+  const params = [to, companyId];
   let fromSql = '';
-  if (from) { params.push(from); fromSql = ' AND v.voucher_date >= $2'; }
+  if (from) { params.push(from); fromSql = ' AND v.voucher_date >= $3'; }
 
   let result;
   try {
@@ -49,8 +50,8 @@ async function ledgerTotals({ from, to }) {
              COALESCE(SUM(CASE WHEN v.credit_ledger_id = l.id THEN v.amount ELSE 0 END), 0) AS credit
         FROM ledgers l
         JOIN ledger_groups g ON g.id = l.group_id
-        JOIN vouchers v ON (v.debit_ledger_id = l.id OR v.credit_ledger_id = l.id)
-       WHERE v.status = 'posted' AND v.voucher_date <= $1${fromSql}
+        JOIN vouchers v ON (v.debit_ledger_id = l.id OR v.credit_ledger_id = l.id) AND v.company_id = l.company_id
+       WHERE v.status = 'posted' AND v.voucher_date <= $1 AND l.company_id = $2${fromSql}
        GROUP BY l.id, l.name, g.name, g.nature, g.is_direct, g.sort_order
        ORDER BY g.sort_order, l.name
     `, params);
@@ -60,9 +61,13 @@ async function ledgerTotals({ from, to }) {
     throw err;
   }
 
-  // merge bank-entry amounts into the voucher totals
+  // merge bank-entry amounts into the voucher totals (dateSql here references
+  // $1=to only — companyId goes first as $1 in bankEntryRows' own call, so
+  // the date params passed through must be renumbered starting at $2)
   const byId = new Map(result.rows.map((r) => [r.id, { ...r }]));
-  for (const b of await bankEntryRows(params, ` AND v.voucher_date <= $1${from ? ' AND v.voucher_date >= $2' : ''}`)) {
+  const dateParams = from ? [to, from] : [to];
+  const dateSql = from ? ' AND v.voucher_date <= $2 AND v.voucher_date >= $3' : ' AND v.voucher_date <= $2';
+  for (const b of await bankEntryRows(companyId, dateParams, dateSql)) {
     const row = byId.get(b.id) || { ...b, debit: 0, credit: 0 };
     const amt = parseFloat(b.amt) || 0;
     if (BANK_ENTRY_SIDES[b.source_key] === 'debit') row.debit = (parseFloat(row.debit) || 0) + amt;
@@ -79,7 +84,7 @@ async function ledgerTotals({ from, to }) {
 }
 
 /** Month-wise (YYYY-MM) ledger income and expense for the P&L trend. */
-async function ledgerMonthly(fromYm, toYm) {
+async function ledgerMonthly(fromYm, toYm, companyId) {
   try {
     const result = await query(`
       SELECT strftime('%Y-%m', v.voucher_date) AS ym, g.nature,
@@ -87,22 +92,23 @@ async function ledgerMonthly(fromYm, toYm) {
              COALESCE(SUM(CASE WHEN v.credit_ledger_id = l.id THEN v.amount ELSE 0 END), 0) AS credit
         FROM ledgers l
         JOIN ledger_groups g ON g.id = l.group_id
-        JOIN vouchers v ON (v.debit_ledger_id = l.id OR v.credit_ledger_id = l.id)
-       WHERE v.status = 'posted' AND g.nature IN ('income', 'expense')
+        JOIN vouchers v ON (v.debit_ledger_id = l.id OR v.credit_ledger_id = l.id) AND v.company_id = l.company_id
+       WHERE v.status = 'posted' AND g.nature IN ('income', 'expense') AND l.company_id = $3
          AND strftime('%Y-%m', v.voucher_date) >= $1
          AND strftime('%Y-%m', v.voucher_date) <= $2
        GROUP BY ym, g.nature
-    `, [fromYm, toYm]);
+    `, [fromYm, toYm, companyId]);
     const map = new Map();
     const be = await query(`
       SELECT strftime('%Y-%m', v.voucher_date) AS ym, l.source_key, COALESCE(SUM(v.amount), 0) AS amt
         FROM ledgers l
         JOIN vouchers v ON v.category = l.source_key AND v.voucher_type = 'journal'
                        AND v.debit_ledger_id IS NULL AND v.credit_ledger_id IS NULL
-       WHERE l.source_type = 'bank_entry' AND v.status = 'posted'
+                       AND v.company_id = l.company_id
+       WHERE l.source_type = 'bank_entry' AND v.status = 'posted' AND l.company_id = $3
          AND strftime('%Y-%m', v.voucher_date) >= $1
          AND strftime('%Y-%m', v.voucher_date) <= $2
-       GROUP BY ym, l.source_key`, [fromYm, toYm]).catch(() => ({ rows: [] }));
+       GROUP BY ym, l.source_key`, [fromYm, toYm, companyId]).catch(() => ({ rows: [] }));
     for (const r of be.rows) {
       const m = map.get(r.ym) || { income: 0, expense: 0 };
       if (BANK_ENTRY_SIDES[r.source_key] === 'debit') m.expense += parseFloat(r.amt) || 0;

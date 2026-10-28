@@ -2,13 +2,14 @@ const logger = require('../utils/logger.js');
 const express = require('express');
 const router = express.Router();
 const { query } = require('../database/connection');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, requireCompanyContext } = require('../middleware/auth');
 const { logError } = require('../utils/errorLogger');
 const { sendReport } = require('../utils/tableExport');
 const { deleteVoucher } = require('../utils/voucherDelete');
 const { VOUCHER_TYPE_LABELS } = require('../utils/voucherNumbering');
 
 router.use(authMiddleware);
+router.use(requireCompanyContext);
 router.use(requirePermission('manage_bank_reconciliation', 'manage_payroll', 'manage_expenses', 'view_balance_sheet'));
 
 const today = () => new Date().toISOString().split('T')[0];
@@ -17,13 +18,13 @@ const safeName = (str) => String(str || 'Account').replace(/[^A-Za-z0-9]+/g, '_'
 
 // Posted vouchers touching the account (optionally only unreconciled), plus the
 // book balance up to to_date. Used by the screen and the Excel/PDF export.
-async function loadEntries(accountId, { from_date, to_date, show_reconciled } = {}) {
-  const account = await query('SELECT * FROM bank_accounts WHERE id = $1', [accountId]);
+async function loadEntries(accountId, companyId, { from_date, to_date, show_reconciled } = {}) {
+  const account = await query('SELECT * FROM bank_accounts WHERE id = $1 AND company_id = $2', [accountId, companyId]);
   if (account.rows.length === 0) return null;
 
   let dateFilter = '';
-  const params = [accountId, accountId];
-  let pc = 3;
+  const params = [accountId, accountId, companyId];
+  let pc = 4;
   if (from_date) { dateFilter += ` AND v.voucher_date >= $${pc}`; params.push(from_date); pc++; }
   if (to_date) { dateFilter += ` AND v.voucher_date <= $${pc}`; params.push(to_date); pc++; }
 
@@ -40,9 +41,10 @@ async function loadEntries(accountId, { from_date, to_date, show_reconciled } = 
            br.bank_statement_ref,
            br.bank_amount
     FROM vouchers v
-    LEFT JOIN bank_reconciliation br ON br.voucher_id = v.id AND br.bank_account_id = $1
+    LEFT JOIN bank_reconciliation br ON br.voucher_id = v.id AND br.bank_account_id = $1 AND br.company_id = $3
     WHERE (v.debit_account_id = $1 OR v.credit_account_id = $2)
       AND v.status = 'posted'
+      AND v.company_id = $3
       ${dateFilter}
       ${show_reconciled !== 'true' ? 'AND (br.is_reconciled IS NULL OR br.is_reconciled = 0)' : ''}
     ORDER BY v.voucher_date ASC, v.created_at ASC
@@ -51,6 +53,7 @@ async function loadEntries(accountId, { from_date, to_date, show_reconciled } = 
   // Book balance = opening + all debits - all credits (up to to_date).
   // (Its own parameter list — reusing pc from above pointed at a missing param
   // whenever both dates were set.)
+  const allVouchersParams = to_date ? [accountId, companyId, to_date] : [accountId, companyId];
   const allVouchers = await query(`
     SELECT
       COALESCE(SUM(CASE WHEN v.debit_account_id = $1 THEN v.amount ELSE 0 END), 0) as total_debits,
@@ -58,8 +61,9 @@ async function loadEntries(accountId, { from_date, to_date, show_reconciled } = 
     FROM vouchers v
     WHERE (v.debit_account_id = $1 OR v.credit_account_id = $1)
       AND v.status = 'posted'
-      ${to_date ? 'AND v.voucher_date <= $2' : ''}
-  `, to_date ? [accountId, to_date] : [accountId]);
+      AND v.company_id = $2
+      ${to_date ? 'AND v.voucher_date <= $3' : ''}
+  `, allVouchersParams);
 
   const openingBalance = parseFloat(account.rows[0].opening_balance) || 0;
   const bookBalance = openingBalance +
@@ -89,9 +93,9 @@ async function loadEntries(accountId, { from_date, to_date, show_reconciled } = 
 }
 
 // Bank Reconciliation Statement as on a date.
-async function loadStatement(accountId, as_on_date) {
+async function loadStatement(accountId, companyId, as_on_date) {
   const asOnDate = as_on_date || today();
-  const account = await query('SELECT * FROM bank_accounts WHERE id = $1', [accountId]);
+  const account = await query('SELECT * FROM bank_accounts WHERE id = $1 AND company_id = $2', [accountId, companyId]);
   if (account.rows.length === 0) return null;
 
   const bookData = await query(`
@@ -101,8 +105,9 @@ async function loadStatement(accountId, as_on_date) {
     FROM vouchers v
     WHERE (v.debit_account_id = $1 OR v.credit_account_id = $1)
       AND v.status = 'posted'
-      AND v.voucher_date <= $2
-  `, [accountId, asOnDate]);
+      AND v.company_id = $2
+      AND v.voucher_date <= $3
+  `, [accountId, companyId, asOnDate]);
 
   const bookBalance = (parseFloat(account.rows[0].opening_balance) || 0) +
     (parseFloat(bookData.rows[0]?.total_debits) || 0) -
@@ -112,25 +117,27 @@ async function loadStatement(accountId, as_on_date) {
   const depositsNotCleared = await query(`
     SELECT v.id, v.voucher_number, v.voucher_date, v.amount, v.narration, v.cheque_number
     FROM vouchers v
-    LEFT JOIN bank_reconciliation br ON br.voucher_id = v.id AND br.bank_account_id = $1
+    LEFT JOIN bank_reconciliation br ON br.voucher_id = v.id AND br.bank_account_id = $1 AND br.company_id = $2
     WHERE v.debit_account_id = $1
       AND v.status = 'posted'
-      AND v.voucher_date <= $2
+      AND v.company_id = $2
+      AND v.voucher_date <= $3
       AND (br.is_reconciled IS NULL OR br.is_reconciled = 0)
     ORDER BY v.voucher_date ASC
-  `, [accountId, asOnDate]);
+  `, [accountId, companyId, asOnDate]);
 
   // Cheques not yet presented (credits in book, not reconciled)
   const chequesNotPresented = await query(`
     SELECT v.id, v.voucher_number, v.voucher_date, v.amount, v.narration, v.cheque_number
     FROM vouchers v
-    LEFT JOIN bank_reconciliation br ON br.voucher_id = v.id AND br.bank_account_id = $1
+    LEFT JOIN bank_reconciliation br ON br.voucher_id = v.id AND br.bank_account_id = $1 AND br.company_id = $2
     WHERE v.credit_account_id = $1
       AND v.status = 'posted'
-      AND v.voucher_date <= $2
+      AND v.company_id = $2
+      AND v.voucher_date <= $3
       AND (br.is_reconciled IS NULL OR br.is_reconciled = 0)
     ORDER BY v.voucher_date ASC
-  `, [accountId, asOnDate]);
+  `, [accountId, companyId, asOnDate]);
 
   const totalDepositsNotCleared = depositsNotCleared.rows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
   const totalChequesNotPresented = chequesNotPresented.rows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
@@ -159,7 +166,7 @@ async function loadStatement(accountId, as_on_date) {
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/:accountId', async (req, res) => {
   try {
-    const data = await loadEntries(req.params.accountId, req.query);
+    const data = await loadEntries(req.params.accountId, req.companyId, req.query);
     if (!data) return res.status(404).json({ success: false, message: 'Bank account not found' });
     res.json({ success: true, data });
   } catch (error) {
@@ -186,10 +193,22 @@ router.post('/reconcile', async (req, res) => {
 
       if (!voucher_id || !bank_account_id) continue;
 
+      // Confirm both the voucher and the bank account belong to this company
+      // before touching anything — prevents a cross-company id in the payload
+      // from reconciling (or creating a reconciliation row for) another
+      // company's data.
+      const ownershipCheck = await query(
+        `SELECT 1 FROM vouchers WHERE id = $1 AND company_id = $2
+         UNION ALL
+         SELECT 1 FROM bank_accounts WHERE id = $3 AND company_id = $2`,
+        [voucher_id, req.companyId, bank_account_id]
+      );
+      if (ownershipCheck.rows.length < 2) continue;
+
       // Upsert reconciliation record
       const existing = await query(
-        'SELECT id FROM bank_reconciliation WHERE voucher_id = $1 AND bank_account_id = $2',
-        [voucher_id, bank_account_id]
+        'SELECT id FROM bank_reconciliation WHERE voucher_id = $1 AND bank_account_id = $2 AND company_id = $3',
+        [voucher_id, bank_account_id, req.companyId]
       );
 
       if (existing.rows.length > 0) {
@@ -202,13 +221,13 @@ router.post('/reconcile', async (req, res) => {
               bank_amount = $3,
               reconciled_by = $4,
               reconciled_at = CURRENT_TIMESTAMP
-          WHERE voucher_id = $5 AND bank_account_id = $6
-        `, [bank_statement_date || null, bank_statement_ref || null, bank_amount || null, req.user.userId, voucher_id, bank_account_id]);
+          WHERE voucher_id = $5 AND bank_account_id = $6 AND company_id = $7
+        `, [bank_statement_date || null, bank_statement_ref || null, bank_amount || null, req.user.userId, voucher_id, bank_account_id, req.companyId]);
       } else {
         await query(`
-          INSERT INTO bank_reconciliation (bank_account_id, voucher_id, reconciliation_date, bank_statement_date, bank_statement_ref, bank_amount, is_reconciled, reconciled_at, reconciled_by)
-          VALUES ($1, $2, CURRENT_TIMESTAMP, $3, $4, $5, 1, CURRENT_TIMESTAMP, $6)
-        `, [bank_account_id, voucher_id, bank_statement_date || null, bank_statement_ref || null, bank_amount || null, req.user.userId]);
+          INSERT INTO bank_reconciliation (bank_account_id, voucher_id, reconciliation_date, bank_statement_date, bank_statement_ref, bank_amount, is_reconciled, reconciled_at, reconciled_by, company_id)
+          VALUES ($1, $2, CURRENT_TIMESTAMP, $3, $4, $5, 1, CURRENT_TIMESTAMP, $6, $7)
+        `, [bank_account_id, voucher_id, bank_statement_date || null, bank_statement_ref || null, bank_amount || null, req.user.userId, req.companyId]);
       }
       reconciled++;
     }
@@ -239,8 +258,8 @@ router.post('/unreconcile', async (req, res) => {
     await query(`
       UPDATE bank_reconciliation
       SET is_reconciled = 0, reconciled_at = NULL, reconciled_by = NULL
-      WHERE voucher_id IN (${placeholders}) AND bank_account_id = $${voucher_ids.length + 1}
-    `, [...voucher_ids, bank_account_id]);
+      WHERE voucher_id IN (${placeholders}) AND bank_account_id = $${voucher_ids.length + 1} AND company_id = $${voucher_ids.length + 2}
+    `, [...voucher_ids, bank_account_id, req.companyId]);
 
     res.json({ success: true, message: `${voucher_ids.length} entries unreconciled` });
   } catch (error) {
@@ -254,7 +273,7 @@ router.post('/unreconcile', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/statement/:accountId', async (req, res) => {
   try {
-    const data = await loadStatement(req.params.accountId, req.query.as_on_date);
+    const data = await loadStatement(req.params.accountId, req.companyId, req.query.as_on_date);
     if (!data) return res.status(404).json({ success: false, message: 'Account not found' });
     res.json({ success: true, data });
   } catch (error) {
@@ -270,7 +289,7 @@ router.get('/statement/:accountId', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.delete('/entry/:voucherId', requirePermission('manage_vouchers', 'delete_vouchers', 'manage_bank_reconciliation'), async (req, res) => {
   try {
-    const result = await deleteVoucher(req.params.voucherId);
+    const result = await deleteVoucher(req.params.voucherId, req.companyId);
     if (!result.ok) return res.status(result.status || 400).json({ success: false, message: result.message });
     res.json({ success: true, message: result.message });
   } catch (error) {
@@ -287,7 +306,7 @@ router.delete('/entry/:voucherId', requirePermission('manage_vouchers', 'delete_
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/export/entries/:accountId', async (req, res) => {
   try {
-    const data = await loadEntries(req.params.accountId, req.query);
+    const data = await loadEntries(req.params.accountId, req.companyId, req.query);
     if (!data) return res.status(404).json({ success: false, message: 'Bank account not found' });
     const { account, entries, summary } = data;
     const { from_date, to_date, show_reconciled, format = 'xlsx' } = req.query;
@@ -333,7 +352,7 @@ router.get('/export/entries/:accountId', async (req, res) => {
         rows: rows.length > 0 ? rows : [{ date: 'No entries for this selection' }],
         totalsRow: rows.length > 0 ? { ref: 'TOTAL', debit: totalDebit, credit: totalCredit } : undefined,
       }],
-    });
+    }, req.companyId);
   } catch (error) {
     logError(error, req, { feature: 'bank-reconciliation' });
     if (!res.headersSent) res.status(500).json({ success: false, message: 'Failed to export reconciliation' });
@@ -342,7 +361,7 @@ router.get('/export/entries/:accountId', async (req, res) => {
 
 router.get('/export/statement/:accountId', async (req, res) => {
   try {
-    const data = await loadStatement(req.params.accountId, req.query.as_on_date);
+    const data = await loadStatement(req.params.accountId, req.companyId, req.query.as_on_date);
     if (!data) return res.status(404).json({ success: false, message: 'Account not found' });
     const { format = 'xlsx' } = req.query;
     const { account, as_on_date, book_balance, bank_balance, deposits_not_cleared, cheques_not_presented } = data;
@@ -393,7 +412,7 @@ router.get('/export/statement/:accountId', async (req, res) => {
           totalsRow: deposits_not_cleared.items.length > 0 ? { narration: 'TOTAL', amount: deposits_not_cleared.total } : undefined,
         },
       ],
-    });
+    }, req.companyId);
   } catch (error) {
     logError(error, req, { feature: 'bank-reconciliation' });
     if (!res.headersSent) res.status(500).json({ success: false, message: 'Failed to export BRS' });

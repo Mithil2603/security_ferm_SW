@@ -68,10 +68,10 @@ const processRecurringVouchers = async () => {
 
       const lastCounterRes = await query(
         `
-        SELECT last_number FROM voucher_counters 
-        WHERE voucher_type = $1 AND financial_year = $2
+        SELECT last_number FROM voucher_counters
+        WHERE company_id = $1 AND voucher_type = $2 AND financial_year = $3
       `,
-        [rv.voucher_type, year.toString()],
+        [rv.company_id, rv.voucher_type, year.toString()],
       );
       const lastCounter = lastCounterRes.rows[0];
 
@@ -85,10 +85,10 @@ const processRecurringVouchers = async () => {
       } else {
         await query(
           `
-          INSERT INTO voucher_counters (voucher_type, financial_year, last_number) 
-          VALUES ($1, $2, $3)
+          INSERT INTO voucher_counters (company_id, voucher_type, financial_year, last_number)
+          VALUES ($1, $2, $3, $4)
         `,
-          [rv.voucher_type, year.toString(), 1],
+          [rv.company_id, rv.voucher_type, year.toString(), 1],
         );
       }
 
@@ -100,12 +100,12 @@ const processRecurringVouchers = async () => {
           voucher_number, voucher_type, voucher_date, amount, debit_account_id, credit_account_id,
           party_type, party_id, party_name, reference_type, reference_id, narration,
           status, due_date, category, created_by,
-          debit_ledger_id, credit_ledger_id, party_side
+          debit_ledger_id, credit_ledger_id, party_side, company_id
         ) VALUES (
           $1, $2, date('now'), $3, $4, $5,
           $6, $7, $8, $9, $10, $11,
           'pending_approval', $12, $13, $14,
-          $15, $16, $17
+          $15, $16, $17, $18
         )
       `,
         [
@@ -126,6 +126,7 @@ const processRecurringVouchers = async () => {
           rv.debit_ledger_id || null,
           rv.credit_ledger_id || null,
           rv.party_side || null,
+          rv.company_id,
         ],
       );
 

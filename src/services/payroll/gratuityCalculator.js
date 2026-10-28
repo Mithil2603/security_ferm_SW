@@ -61,13 +61,13 @@ class GratuityCalculator {
   // Employee Gratuity Estimate
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getEmployeeEstimate(employeeId) {
+  async getEmployeeEstimate(employeeId, companyId) {
     const result = await query(
       `SELECT e.*, ss.base_salary, ss.dearness_allowance
        FROM employees e
-       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
-       WHERE e.id = $1`,
-      [employeeId]
+       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id AND ss.company_id = e.company_id
+       WHERE e.id = $1 AND e.company_id = $2`,
+      [employeeId, companyId]
     );
     if (result.rows.length === 0) throw new Error('Employee not found');
     const emp = result.rows[0];
@@ -89,21 +89,21 @@ class GratuityCalculator {
   // Monthly Accrual (Provisioning)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async processMonthlyAccrual(employeeId, accrualMonth) {
+  async processMonthlyAccrual(employeeId, accrualMonth, companyId) {
     const result = await query(
       `SELECT e.*, ss.base_salary, ss.dearness_allowance
        FROM employees e
-       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
-       WHERE e.id = $1 AND e.is_active = 1`,
-      [employeeId]
+       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id AND ss.company_id = e.company_id
+       WHERE e.id = $1 AND e.is_active = 1 AND e.company_id = $2`,
+      [employeeId, companyId]
     );
     if (result.rows.length === 0) throw new Error('Active employee not found');
     const emp = result.rows[0];
 
     // Check duplicate
     const existing = await query(
-      `SELECT id FROM gratuity_accruals WHERE employee_id = $1 AND accrual_month = $2`,
-      [employeeId, accrualMonth]
+      `SELECT id FROM gratuity_accruals WHERE employee_id = $1 AND accrual_month = $2 AND company_id = $3`,
+      [employeeId, accrualMonth, companyId]
     );
     if (existing.rows.length > 0) throw new Error(`Accrual already recorded for ${accrualMonth}`);
 
@@ -112,19 +112,19 @@ class GratuityCalculator {
 
     // Get cumulative
     const cumResult = await query(
-      `SELECT COALESCE(SUM(monthly_provision), 0) as cum FROM gratuity_accruals WHERE employee_id = $1`,
-      [employeeId]
+      `SELECT COALESCE(SUM(monthly_provision), 0) as cum FROM gratuity_accruals WHERE employee_id = $1 AND company_id = $2`,
+      [employeeId, companyId]
     );
     const cumulative = parseFloat(cumResult.rows[0].cum) + gratuity.monthly_provision;
 
     await query(
       `INSERT INTO gratuity_accruals (employee_id, accrual_month, basic_plus_da, years_of_service,
-       gratuity_amount, monthly_provision, cumulative_provision, is_eligible)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+       gratuity_amount, monthly_provision, cumulative_provision, is_eligible, company_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         employeeId, accrualMonth, gratuity.basic_plus_da, years,
         gratuity.capped_amount, gratuity.monthly_provision, cumulative,
-        gratuity.is_eligible ? 1 : 0,
+        gratuity.is_eligible ? 1 : 0, companyId,
       ]
     );
 
@@ -134,23 +134,24 @@ class GratuityCalculator {
   /**
    * Batch process monthly gratuity accruals for all active employees.
    */
-  async batchAccrual(accrualMonth) {
+  async batchAccrual(accrualMonth, companyId) {
     const employees = await query(
       `SELECT e.id, e.full_name
        FROM employees e
-       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
-       WHERE e.is_active = 1 AND ss.base_salary IS NOT NULL`
+       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id AND ss.company_id = e.company_id
+       WHERE e.is_active = 1 AND ss.base_salary IS NOT NULL AND e.company_id = $1`,
+      [companyId]
     );
 
     let processed = 0, skipped = 0, errors = 0;
     for (const emp of employees.rows) {
       try {
         const existing = await query(
-          `SELECT id FROM gratuity_accruals WHERE employee_id = $1 AND accrual_month = $2`,
-          [emp.id, accrualMonth]
+          `SELECT id FROM gratuity_accruals WHERE employee_id = $1 AND accrual_month = $2 AND company_id = $3`,
+          [emp.id, accrualMonth, companyId]
         );
         if (existing.rows.length > 0) { skipped++; continue; }
-        await this.processMonthlyAccrual(emp.id, accrualMonth);
+        await this.processMonthlyAccrual(emp.id, accrualMonth, companyId);
         processed++;
       } catch (err) {
         errors++;
@@ -163,13 +164,13 @@ class GratuityCalculator {
   // Gratuity Payout (on separation)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async createPayout(employeeId, separationDate, separationReason) {
+  async createPayout(employeeId, separationDate, separationReason, companyId) {
     const result = await query(
       `SELECT e.*, ss.base_salary, ss.dearness_allowance
        FROM employees e
-       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
-       WHERE e.id = $1`,
-      [employeeId]
+       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id AND ss.company_id = e.company_id
+       WHERE e.id = $1 AND e.company_id = $2`,
+      [employeeId, companyId]
     );
     if (result.rows.length === 0) throw new Error('Employee not found');
     const emp = result.rows[0];
@@ -182,52 +183,52 @@ class GratuityCalculator {
     }
 
     await query(
-      `INSERT INTO gratuity_payouts 
+      `INSERT INTO gratuity_payouts
         (employee_id, last_drawn_basic, last_drawn_da, years_of_service,
-         calculated_amount, capped_amount, separation_date, separation_reason)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+         calculated_amount, capped_amount, separation_date, separation_reason, company_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         employeeId, emp.base_salary || 0, emp.dearness_allowance || 0,
         years, gratuity.calculated_amount, gratuity.capped_amount,
-        separationDate, separationReason,
+        separationDate, separationReason, companyId,
       ]
     );
 
     const payout = await query(
-      `SELECT * FROM gratuity_payouts WHERE employee_id = $1 ORDER BY id DESC LIMIT 1`,
-      [employeeId]
+      `SELECT * FROM gratuity_payouts WHERE employee_id = $1 AND company_id = $2 ORDER BY id DESC LIMIT 1`,
+      [employeeId, companyId]
     );
     return payout.rows[0];
   }
 
-  async approvePayout(payoutId, userId) {
+  async approvePayout(payoutId, userId, companyId) {
     await query(
       `UPDATE gratuity_payouts SET status = 'approved', approved_by = $1,
        approved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2 AND status = 'pending'`,
-      [userId, payoutId]
+       WHERE id = $2 AND status = 'pending' AND company_id = $3`,
+      [userId, payoutId, companyId]
     );
-    const result = await query(`SELECT * FROM gratuity_payouts WHERE id = $1`, [payoutId]);
+    const result = await query(`SELECT * FROM gratuity_payouts WHERE id = $1 AND company_id = $2`, [payoutId, companyId]);
     return result.rows[0];
   }
 
-  async markPayoutPaid(payoutId, paymentDetails = {}) {
+  async markPayoutPaid(payoutId, paymentDetails = {}, companyId) {
     await query(
       `UPDATE gratuity_payouts SET status = 'paid', payment_date = CURRENT_DATE,
        payment_method = $1, transaction_reference = $2, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $3 AND status = 'approved'`,
+       WHERE id = $3 AND status = 'approved' AND company_id = $4`,
       [paymentDetails.payment_method || 'bank_transfer',
-       paymentDetails.transaction_reference || null, payoutId]
+       paymentDetails.transaction_reference || null, payoutId, companyId]
     );
-    const result = await query(`SELECT * FROM gratuity_payouts WHERE id = $1`, [payoutId]);
+    const result = await query(`SELECT * FROM gratuity_payouts WHERE id = $1 AND company_id = $2`, [payoutId, companyId]);
     return result.rows[0];
   }
 
-  async getPayouts(filters = {}) {
+  async getPayouts(filters = {}, companyId) {
     const { employee_id, status, page = 1, limit = 50 } = filters;
-    let conditions = [];
-    let params = [];
-    let pc = 1;
+    let conditions = ['gp.company_id = $1'];
+    let params = [companyId];
+    let pc = 2;
 
     if (employee_id) { conditions.push(`gp.employee_id = $${pc}`); params.push(employee_id); pc++; }
     if (status) { conditions.push(`gp.status = $${pc}`); params.push(status); pc++; }
@@ -238,7 +239,7 @@ class GratuityCalculator {
     const result = await query(
       `SELECT gp.*, e.full_name, e.employee_id as emp_code, e.designation
        FROM gratuity_payouts gp
-       JOIN employees e ON gp.employee_id = e.id
+       JOIN employees e ON gp.employee_id = e.id AND e.company_id = gp.company_id
        ${where}
        ORDER BY gp.created_at DESC
        LIMIT $${pc} OFFSET $${pc + 1}`,
@@ -252,17 +253,18 @@ class GratuityCalculator {
   // Liability Report
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getLiabilityReport() {
+  async getLiabilityReport(companyId) {
     const result = await query(
       `SELECT e.id, e.full_name, e.designation, e.date_of_joining,
               ss.base_salary, ss.dearness_allowance,
               COALESCE(SUM(ga.monthly_provision), 0) as total_provisioned
        FROM employees e
-       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
-       LEFT JOIN gratuity_accruals ga ON e.id = ga.employee_id
-       WHERE e.is_active = 1
+       LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id AND ss.company_id = e.company_id
+       LEFT JOIN gratuity_accruals ga ON e.id = ga.employee_id AND ga.company_id = e.company_id
+       WHERE e.is_active = 1 AND e.company_id = $1
        GROUP BY e.id
-       ORDER BY e.date_of_joining ASC`
+       ORDER BY e.date_of_joining ASC`,
+      [companyId]
     );
 
     let totalLiability = 0;
