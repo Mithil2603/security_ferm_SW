@@ -383,10 +383,16 @@ function generateInvoicePDF(invoice, client, agencySettings, dataCallback, endCa
     const tableTop = drawTopGrid(gridTop);
     const dataTop = drawTableHeader(tableTop);
 
-    // Height of items block: matches benchmark photo filler vertical lines when rows <= 4
+    // Height of items block: matches benchmark photo filler vertical lines when rows <= 4,
+    // but stretches to fill the rest of the A4 page (minus the bottom summary box and
+    // footer notes) when there are few items, instead of leaving a large empty gap.
     const rowHeight = 22;
     const minTableHeight = 140;
-    const tableBlockHeight = Math.max(minTableHeight, items.length * rowHeight);
+    const bottomBoxHeight = 96; // drawBottomSummaryBox's fixed box height
+    const footerSpace = 30; // footer note + "For, <agency>" line below the box
+    const pageBottom = doc.page.height - doc.page.margins.bottom;
+    const availableForTable = pageBottom - dataTop - bottomBoxHeight - footerSpace;
+    const tableBlockHeight = Math.max(minTableHeight, items.length * rowHeight, availableForTable);
 
     doc.lineWidth(1).strokeColor('#000000').rect(startX, dataTop, tableWidth, tableBlockHeight).stroke();
 
@@ -536,7 +542,7 @@ function generateInvoicePDF(invoice, client, agencySettings, dataCallback, endCa
       const subDataTop = drawTableHeader(subTableTop);
 
       const subTableHeight = isLastPage
-        ? Math.max(70, pageChunk.length * rowHeight + 10)
+        ? Math.max(70, pageChunk.length * rowHeight + 10, doc.page.height - doc.page.margins.bottom - subDataTop - 96 - 30)
         : pageChunk.length * rowHeight + 10;
 
       doc.lineWidth(1).strokeColor('#000000').rect(startX, subDataTop, tableWidth, subTableHeight).stroke();

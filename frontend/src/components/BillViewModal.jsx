@@ -183,7 +183,7 @@ export default function BillViewModal({ isOpen, onClose, invoice, onEdit, onCanc
   // Shared bill markup, rendered once for the on-screen preview and once
   // (via portal) for print — keeping both perfectly in sync, including the logo.
   const renderBillDocument = () => (
-    <div className="max-w-[780px] mx-auto relative bg-white">
+    <div className="max-w-[780px] mx-auto relative bg-white print:flex print:flex-col print:flex-1 print:h-full print:min-h-0 print:w-[780px]">
       {/* Cancelled Watermark */}
       {isCancelled && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
@@ -194,32 +194,36 @@ export default function BillViewModal({ isOpen, onClose, invoice, onEdit, onCanc
       )}
 
       {/* Top Company Header (Logo, Maroon Title, Black Address/Phone, Blue GST/PAN) */}
-      <div className="text-center mb-3">
-        {effectiveLogoUrl && (
-          <img src={effectiveLogoUrl} alt="Agency Logo" className="h-14 mx-auto mb-1 object-contain" />
-        )}
-        <h1 className="text-2xl sm:text-3xl font-extrabold tracking-widest text-[#8B1E1E] font-serif uppercase">
-          {agencyName}
-        </h1>
-        <p className="text-[12px] sm:text-[13px] text-black mt-0.5 font-normal">
-          {agencyAddress}
-        </p>
-        <p className="text-[12px] sm:text-[13px] text-black font-normal">
+      <div className="mb-3">
+        <div className="flex items-center justify-center gap-3">
+          {effectiveLogoUrl && (
+            <img src={effectiveLogoUrl} alt="Agency Logo" className="h-16 w-16 max-w-full object-contain shrink-0" />
+          )}
+          <div className="text-center">
+            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-widest text-[#8B1E1E] font-serif uppercase">
+              {agencyName}
+            </h1>
+            <p className="text-[12px] sm:text-[13px] text-black mt-0.5 font-normal">
+              {agencyAddress}
+            </p>
+          </div>
+        </div>
+        <p className="text-[12px] sm:text-[13px] text-black text-center font-normal">
           {agencyMobile}
         </p>
-        <p className="text-[12px] sm:text-[13px] text-black font-normal">
+        <p className="text-[12px] sm:text-[13px] text-black text-center font-normal">
           {agencyEmail}
         </p>
-        <p className="text-base sm:text-lg font-bold text-[#1a365d] mt-1 tracking-wide">
+        <p className="text-base sm:text-lg font-bold text-[#1a365d] text-center mt-1 tracking-wide">
           {agencyGst}
         </p>
-        <p className="text-base sm:text-lg font-bold text-[#1a365d] tracking-wide">
+        <p className="text-base sm:text-lg font-bold text-[#1a365d] text-center tracking-wide">
           {agencyPan}
         </p>
       </div>
 
       {/* Boxed Grid Layout - Exactly Matching Reference Format */}
-      <div className="border border-black bg-white">
+      <div className="border border-black bg-white print:flex print:flex-col print:flex-1 print:min-h-0">
         {/* Row 1: PARTY NAME & INVOICE BILL */}
         <div className="grid grid-cols-12 border-b border-black font-bold">
           <div className="col-span-7 p-1.5 pl-2 text-xs sm:text-sm border-r border-black uppercase tracking-wider text-slate-800">
@@ -298,7 +302,7 @@ export default function BillViewModal({ isOpen, onClose, invoice, onEdit, onCanc
         </div>
 
         {/* Items Table Data Rows */}
-        <div className={`flex flex-col text-xs sm:text-sm ${displayItems.length <= 4 ? 'min-h-[140px] sm:min-h-[160px]' : ''}`}>
+        <div className={`flex flex-col text-xs sm:text-sm print:flex-1 print:min-h-0 ${displayItems.length <= 4 ? 'min-h-[140px] sm:min-h-[160px]' : ''}`}>
           {displayItems.map((it, idx) => {
             const m = parseFloat(it.monthly_rate);
             const r = parseFloat(it.rate_per_day);
@@ -363,35 +367,37 @@ export default function BillViewModal({ isOpen, onClose, invoice, onEdit, onCanc
           </div>
 
           {/* Right: Totals Mini-Table with vertical & horizontal dividers */}
-          <div className="w-[38%] flex flex-col justify-between text-xs sm:text-sm">
+          <div className="w-[38%] flex flex-col text-xs sm:text-sm">
             {/* TOTAL */}
-            <div className="flex flex-row border-b border-black font-bold h-7 sm:h-7.5 items-center">
-              <div className="w-[58%] pl-2 border-r border-black flex items-center h-full">TOTAL</div>
-              <div className={`w-[42%] pr-2 text-right tabular-nums truncate flex items-center justify-end h-full ${getAmtScaleClass(subtotal.toFixed(2), true)}`}>
+            <div className="flex-1 flex flex-row border-b border-black font-bold items-stretch min-h-[26px]">
+              <div style={{ width: '57.895%' }} className="pl-2 border-r border-black flex items-center">TOTAL</div>
+              <div style={{ width: '42.105%' }} className={`pr-2 text-right tabular-nums truncate flex items-center justify-end ${getAmtScaleClass(subtotal.toFixed(2), true)}`}>
                 {subtotal.toFixed(2)}
               </div>
             </div>
 
             {/* SGST */}
-            <div className="flex flex-row border-b border-black font-bold h-7 sm:h-7.5 items-center">
-              <div className="w-[58%] pl-2 border-r border-black flex items-center h-full">SGST &nbsp; 9%</div>
-              <div className={`w-[42%] pr-2 text-right tabular-nums truncate flex items-center justify-end h-full ${getAmtScaleClass(invoice.sgst_amount, true)}`}>
-                {!isRcm && invoice.tax_type === 'cgst_sgst' && invoice.sgst_amount > 0 ? parseFloat(invoice.sgst_amount).toFixed(2) : ''}
+            <div className="flex-1 flex flex-row border-b border-black font-bold items-stretch min-h-[26px]">
+              <div style={{ width: '57.895%' }} className="pl-2 border-r border-black flex items-center">{invoice.tax_type === 'igst' ? 'IGST \u00A0 18%' : 'SGST \u00A0 9%'}</div>
+              <div style={{ width: '42.105%' }} className={`pr-2 text-right tabular-nums truncate flex items-center justify-end ${getAmtScaleClass(invoice.sgst_amount || invoice.igst_amount, true)}`}>
+                {!isRcm && invoice.tax_type === 'cgst_sgst' && invoice.sgst_amount > 0 
+                  ? parseFloat(invoice.sgst_amount).toFixed(2) 
+                  : (invoice.tax_type === 'igst' && invoice.igst_amount > 0 ? parseFloat(invoice.igst_amount).toFixed(2) : '')}
               </div>
             </div>
 
             {/* CGST */}
-            <div className="flex flex-row border-b border-black font-bold h-7 sm:h-7.5 items-center">
-              <div className="w-[58%] pl-2 border-r border-black flex items-center h-full">CGST &nbsp; 9%</div>
-              <div className={`w-[42%] pr-2 text-right tabular-nums truncate flex items-center justify-end h-full ${getAmtScaleClass(invoice.cgst_amount, true)}`}>
+            <div className="flex-1 flex flex-row border-b border-black font-bold items-stretch min-h-[26px]">
+              <div style={{ width: '57.895%' }} className="pl-2 border-r border-black flex items-center">CGST &nbsp; 9%</div>
+              <div style={{ width: '42.105%' }} className={`pr-2 text-right tabular-nums truncate flex items-center justify-end ${getAmtScaleClass(invoice.cgst_amount, true)}`}>
                 {!isRcm && invoice.tax_type === 'cgst_sgst' && invoice.cgst_amount > 0 ? parseFloat(invoice.cgst_amount).toFixed(2) : ''}
               </div>
             </div>
 
             {/* GROUND TOTAL */}
-            <div className="flex flex-row font-bold text-xs sm:text-sm h-8 sm:h-8.5 items-center bg-slate-50/50">
-              <div className="w-[58%] pl-2 border-r border-black flex items-center h-full uppercase tracking-tight">GROUND TOTAL</div>
-              <div className={`w-[42%] pr-2 text-right tabular-nums font-extrabold flex items-center justify-end h-full ${getAmtScaleClass(finalAmount.toFixed(2), true)}`}>
+            <div className="flex-1 flex flex-row font-bold text-xs sm:text-sm items-stretch min-h-[28px] bg-slate-50/50">
+              <div style={{ width: '57.895%' }} className="pl-2 border-r border-black flex items-center uppercase tracking-tight">GROUND TOTAL</div>
+              <div style={{ width: '42.105%' }} className={`pr-2 text-right tabular-nums font-extrabold flex items-center justify-end ${getAmtScaleClass(finalAmount.toFixed(2), true)}`}>
                 {finalAmount.toFixed(2)}
               </div>
             </div>
@@ -504,7 +510,7 @@ export default function BillViewModal({ isOpen, onClose, invoice, onEdit, onCanc
               }
             }
           `}} />
-          <div className="p-0">
+          <div className="p-0 print:flex print:flex-col print:h-[285mm]">
             {renderBillDocument()}
           </div>
         </div>,
