@@ -34,6 +34,8 @@ import PLAccount from './pages/PLAccount';
 import Vouchers from './pages/Vouchers';
 import Ledgers from './pages/Ledgers';
 import BalanceSheet from './pages/BalanceSheet';
+import TrialBalance from './pages/TrialBalance';
+import AccountStatementReport from './pages/AccountStatementReport';
 import Budgets from './pages/Budgets';
 import BankReconciliation from './pages/BankReconciliation';
 import TaxCalculator from './pages/TaxCalculator';
@@ -351,6 +353,9 @@ function App() {
             <Route path="/vouchers" element={<ProtectedRoute permission={['view_vouchers', 'create_vouchers', 'edit_vouchers', 'delete_vouchers', 'approve_vouchers', 'manage_vouchers']}><Vouchers /></ProtectedRoute>} />
             <Route path="/ledgers" element={<ProtectedRoute permission={['view_vouchers', 'create_vouchers', 'edit_vouchers', 'manage_vouchers', 'manage_bank_accounts']}><Ledgers /></ProtectedRoute>} />
             <Route path="/balance-sheet" element={<ProtectedRoute permission="view_balance_sheet"><BalanceSheet /></ProtectedRoute>} />
+            <Route path="/trial-balance" element={<ProtectedRoute permission={['view_balance_sheet', 'view_reports']}><TrialBalance /></ProtectedRoute>} />
+            <Route path="/bank-report" element={<ProtectedRoute permission="view_reports"><AccountStatementReport accountType="bank" /></ProtectedRoute>} />
+            <Route path="/cash-report" element={<ProtectedRoute permission="view_reports"><AccountStatementReport accountType="cash" /></ProtectedRoute>} />
             <Route path="/bank-reconciliation" element={<ProtectedRoute permission="manage_bank_reconciliation"><BankReconciliation /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute permission="manage_settings"><Settings /></ProtectedRoute>} />
             <Route path="/audit-logs" element={<ProtectedRoute permission="manage_settings"><AuditLogs /></ProtectedRoute>} />

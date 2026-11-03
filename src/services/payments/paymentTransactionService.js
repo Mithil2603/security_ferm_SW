@@ -45,7 +45,7 @@ async function resolveDefaultBankAccountId(paymentMethod, companyId) {
     if (cash.rows.length > 0) return cash.rows[0].id;
   }
   const bank = await query(
-    "SELECT id FROM bank_accounts WHERE company_id = $1 AND (account_number = '252528112019' OR (account_type = 'bank' AND is_active = 1)) ORDER BY (account_number = '252528112019') DESC, id ASC LIMIT 1",
+    "SELECT id FROM bank_accounts WHERE company_id = $1 AND account_type = 'bank' AND is_active = 1 ORDER BY is_default DESC, id ASC LIMIT 1",
     [companyId]
   );
   return bank.rows.length > 0 ? bank.rows[0].id : null;

@@ -116,7 +116,7 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
       api.get('/bank-accounts')
         .then(res => {
           const accounts = res.data || [];
-          setBankAccounts(accounts.filter(b => b.is_active));
+          setBankAccounts(accounts.filter(b => b.is_active && b.account_type === 'bank'));
         })
         .catch(err => console.error('Failed to load bank accounts', err));
 
@@ -302,7 +302,12 @@ export default function EditInvoiceModal({ isOpen, onClose, onSuccess, invoice }
                 onChange={e => setForm({ ...form, bank_account_id: e.target.value })}
                 className={inputCls}
               >
-                <option value="">Default (IndusInd Bank - 252528112019)</option>
+                <option value="">
+                  {(() => {
+                    const d = bankAccounts.find(ba => ba.is_default);
+                    return d ? `Default (${d.bank_name || d.account_name} - ${d.account_number})` : '-- Default Firm Bank --';
+                  })()}
+                </option>
                 {bankAccounts.map(ba => (
                   <option key={ba.id} value={ba.id}>
                     {ba.bank_name || ba.account_name} ({ba.account_number})

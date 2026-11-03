@@ -97,11 +97,22 @@ router.post('/', async (req, res) => {
       account_type = 'bank'; // map detailed types to 'bank' for DB constraint
     }
 
+    // First bank-type account for this company becomes the default
+    // automatically, so invoices always have a sensible one to fall back to.
+    let isDefault = 0;
+    if (account_type === 'bank') {
+      const existingDefault = await query(
+        `SELECT id FROM bank_accounts WHERE company_id = $1 AND account_type = 'bank' AND is_default = 1`,
+        [req.companyId]
+      );
+      if (existingDefault.rows.length === 0) isDefault = 1;
+    }
+
     const result = await query(`
-      INSERT INTO bank_accounts (account_name, account_type, account_number, bank_name, ifsc_code, branch, opening_balance, opening_balance_date, created_by, company_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      INSERT INTO bank_accounts (account_name, account_type, account_number, bank_name, ifsc_code, branch, opening_balance, opening_balance_date, created_by, company_id, is_default)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *
-    `, [account_name, account_type, account_number || null, bank_name || null, ifsc_code || null, branch || null, opening_balance, opening_balance_date || null, req.user.userId, req.companyId]);
+    `, [account_name, account_type, account_number || null, bank_name || null, ifsc_code || null, branch || null, opening_balance, opening_balance_date || null, req.user.userId, req.companyId, isDefault]);
 
     res.status(201).json({ success: true, data: result.rows[0], message: 'Bank account created successfully' });
   } catch (error) {
@@ -245,6 +256,154 @@ router.get('/:id/statement', async (req, res) => {
   } catch (error) {
     logError(error, req, { feature: 'bank-accounts' });
     res.status(500).json({ success: false, message: 'Failed to fetch account statement' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/bank-accounts/:id/statement/export — Bank Report / Cash Report.
+// Same Tally-style letterhead+table as Trial Balance. format=pdf|xlsx
+// downloads a file; anything else (default) returns the JSON the report
+// pages render on screen, with a correct opening balance as of from_date
+// (unlike /statement above, which always starts from the account's original
+// opening_balance even when a from_date narrows the range).
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/:id/statement/export', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { from_date, to_date, format } = req.query;
+
+    const accountResult = await query('SELECT * FROM bank_accounts WHERE id = $1 AND company_id = $2', [id, req.companyId]);
+    if (accountResult.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Account not found' });
+    }
+    const account = accountResult.rows[0];
+
+    let openingBalance = parseFloat(account.opening_balance) || 0;
+    if (from_date) {
+      const before = await query(`
+        SELECT
+          COALESCE(SUM(CASE WHEN debit_account_id = $1 THEN amount ELSE 0 END), 0) AS debit,
+          COALESCE(SUM(CASE WHEN credit_account_id = $1 THEN amount ELSE 0 END), 0) AS credit
+        FROM vouchers
+        WHERE (debit_account_id = $1 OR credit_account_id = $1)
+          AND status = 'posted' AND company_id = $2 AND voucher_date < $3
+      `, [id, req.companyId, from_date]);
+      openingBalance += (parseFloat(before.rows[0].debit) || 0) - (parseFloat(before.rows[0].credit) || 0);
+    }
+
+    const params = [id, req.companyId];
+    let dateFilter = '';
+    if (from_date) { params.push(from_date); dateFilter += ` AND v.voucher_date >= $${params.length}`; }
+    if (to_date) { params.push(to_date); dateFilter += ` AND v.voucher_date <= $${params.length}`; }
+
+    const result = await query(`
+      SELECT v.id, v.voucher_number, v.voucher_type, v.voucher_date, v.narration, v.cheque_number, v.transaction_ref,
+             v.party_name,
+             CASE WHEN v.debit_account_id = $1 THEN v.amount ELSE 0 END AS debit_amount,
+             CASE WHEN v.credit_account_id = $1 THEN v.amount ELSE 0 END AS credit_amount
+        FROM vouchers v
+       WHERE (v.debit_account_id = $1 OR v.credit_account_id = $1)
+         AND v.status = 'posted' AND v.company_id = $2${dateFilter}
+       ORDER BY v.voucher_date ASC, v.created_at ASC
+    `, params);
+
+    let running = Math.round(openingBalance * 100) / 100;
+    const entries = result.rows.map((r) => {
+      running = Math.round((running + (parseFloat(r.debit_amount) || 0) - (parseFloat(r.credit_amount) || 0)) * 100) / 100;
+      return { ...r, debit_amount: parseFloat(r.debit_amount) || 0, credit_amount: parseFloat(r.credit_amount) || 0, running_balance: running };
+    });
+    const totalDebit = Math.round(entries.reduce((s, e) => s + e.debit_amount, 0) * 100) / 100;
+    const totalCredit = Math.round(entries.reduce((s, e) => s + e.credit_amount, 0) * 100) / 100;
+
+    if (!format || format === 'json') {
+      return res.json({ success: true, data: { account, opening_balance: openingBalance, entries, total_debit: totalDebit, total_credit: totalCredit, closing_balance: running } });
+    }
+
+    const { getCompanyProfile } = require('../utils/companyProfile');
+    const { generateTallyStylePDF } = require('../utils/tallyReportPdf');
+    const { sendExcel } = require('../utils/tableExport');
+    const companyProfile = await getCompanyProfile(req.companyId);
+    const reportTitle = account.account_type === 'cash' ? 'Cash Report' : 'Bank Report';
+    const formatDateLong = (d) => { try { return new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }).replace(/ /g, '-'); } catch { return d; } };
+    const displayName = account.bank_name || account.account_name;
+    const subtitle = `${displayName}${from_date ? ` — ${formatDateLong(from_date)} to ${formatDateLong(to_date || new Date())}` : ''}`;
+
+    const columns = [
+      { key: 'date', label: 'Date', width: 1.1, align: 'left' },
+      { key: 'particulars', label: 'Particulars', width: 2.4, align: 'left' },
+      { key: 'vch_type', label: 'Vch Type', width: 1.1, align: 'left' },
+      { key: 'vch_no', label: 'Vch No.', width: 1.9, align: 'left' },
+      { key: 'debit', label: 'Debit', width: 1.3, align: 'right', money: true },
+      { key: 'credit', label: 'Credit', width: 1.3, align: 'right', money: true },
+      { key: 'balance', label: 'Balance', width: 1.4, align: 'right', money: true },
+    ];
+    const rows = [
+      { type: 'group', indent: 0, values: { particulars: 'Opening Balance', balance: openingBalance } },
+      ...entries.map((e) => ({
+        type: 'detail',
+        indent: 0,
+        values: {
+          date: formatDateLong(e.voucher_date),
+          particulars: e.party_name || e.narration || '-',
+          vch_type: String(e.voucher_type || '').replace(/_/g, ' '),
+          vch_no: e.voucher_number,
+          debit: e.debit_amount || '',
+          credit: e.credit_amount || '',
+          balance: e.running_balance,
+        },
+      })),
+      { type: 'total', indent: 0, values: { particulars: 'Closing Balance', debit: totalDebit, credit: totalCredit, balance: running } },
+    ];
+
+    if (format === 'xlsx' || format === 'excel') {
+      return sendExcel(res, {
+        filename: `${reportTitle.replace(/\s+/g, '-')}-${account.account_name}`,
+        title: reportTitle,
+        subtitleLines: [subtitle],
+        sections: [{ columns: columns.map((c) => ({ ...c, excelWidth: c.key === 'particulars' ? 32 : 14 })), rows: rows.filter((r) => r.type === 'detail').map((r) => r.values), totalsRow: rows[rows.length - 1].values }],
+      });
+    }
+
+    const chunks = [];
+    generateTallyStylePDF(
+      { companyProfile, title: reportTitle, subtitle, columns, rows },
+      (c) => chunks.push(c),
+      () => {
+        const buf = Buffer.concat(chunks);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Length', buf.length);
+        res.setHeader('Content-Disposition', `attachment; filename="${reportTitle.replace(/\s+/g, '-')}-${account.account_name}.pdf"`);
+        res.end(buf);
+      }
+    );
+  } catch (error) {
+    logError(error, req, { feature: 'bank-accounts' });
+    logger.error('Statement export error:', error);
+    if (!res.headersSent) res.status(500).json({ success: false, message: 'Failed to generate report' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PUT /api/bank-accounts/:id/default — mark this account as the one invoice
+// generation falls back to when nobody explicitly picks a bank. Only one
+// account per company can be the default; setting a new one clears the rest.
+// ─────────────────────────────────────────────────────────────────────────────
+router.put('/:id/default', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await query('SELECT id FROM bank_accounts WHERE id = $1 AND company_id = $2', [id, req.companyId]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Account not found' });
+    }
+
+    await query('UPDATE bank_accounts SET is_default = 0 WHERE company_id = $1', [req.companyId]);
+    await query('UPDATE bank_accounts SET is_default = 1 WHERE id = $1 AND company_id = $2', [id, req.companyId]);
+
+    const updated = await query('SELECT * FROM bank_accounts WHERE id = $1 AND company_id = $2', [id, req.companyId]);
+    res.json({ success: true, data: updated.rows[0], message: 'Set as default bank account' });
+  } catch (error) {
+    logError(error, req, { feature: 'bank-accounts' });
+    res.status(500).json({ success: false, message: 'Failed to set default account' });
   }
 });
 

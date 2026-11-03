@@ -7,7 +7,8 @@ import {
   Settings as SettingsIcon, Banknote, Users, Building2,
   Plus, Edit2, Trash2, X, CheckCircle2, AlertCircle,
   Shield, ShieldCheck, ShieldOff, Eye, EyeOff, RotateCcw,
-  IndianRupee, Percent, Clock, UserPlus, Key, Mail, Receipt, Settings2, Database
+  IndianRupee, Percent, Clock, UserPlus, Key, Mail, Receipt, Settings2, Database,
+  Landmark, Star
 } from 'lucide-react';
 import { getServerBaseUrl, getApiBaseUrl } from '../utils/apiUrl';
 import Toast from '../components/Toast';
@@ -27,6 +28,7 @@ const TABS = [
   { id: 'salary', label: 'Salary Structures', icon: Banknote },
   { id: 'team',   label: 'Team Management',   icon: Users },
   { id: 'agency', label: 'Agency Profile',     icon: Building2 },
+  { id: 'bank',   label: 'Bank Accounts',      icon: Landmark },
   { id: 'backup', label: 'Database & Storage', icon: Database },
   { id: 'expenses', label: 'Expense Categories', icon: Receipt },
   { id: 'vendors', label: 'Vendors', icon: Building2 },
@@ -90,6 +92,7 @@ export default function Settings() {
       {activeTab === 'salary' && <SalaryStructuresTab />}
       {activeTab === 'team'   && <TeamManagementTab />}
       {activeTab === 'agency' && <AgencyProfileTab />}
+      {activeTab === 'bank'   && <BankDetailsTab />}
       {activeTab === 'backup' && <DatabaseBackupTab />}
       {activeTab === 'expenses' && <ExpenseCategoriesTab />}
       {activeTab === 'vendors' && <VendorsTab />}
@@ -1291,22 +1294,6 @@ function AgencyProfileTab() {
             />
           </label>
 
-          <h4 className="text-sm font-bold text-slate-800 mt-6 mb-2 border-b pb-2">Bank Details for Invoice</h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Bank Name</label>
-              <input value={agencySettings.bank_name || ''} onChange={e => setAgencySettings({...agencySettings, bank_name: e.target.value})} placeholder="e.g. Indusind Bank" className={inputCls} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Account Number</label>
-              <input value={agencySettings.bank_account_number || ''} onChange={e => setAgencySettings({...agencySettings, bank_account_number: e.target.value})} placeholder="e.g. 252528112019" className={inputCls} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">IFSC Code</label>
-              <input value={agencySettings.bank_ifsc || ''} onChange={e => setAgencySettings({...agencySettings, bank_ifsc: e.target.value})} placeholder="e.g. INDB0000676" className={inputCls} />
-            </div>
-          </div>
-
           <button onClick={handleSaveAgency} className="w-full mt-4 px-4 py-2.5 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 shadow-sm transition-colors flex items-center justify-center gap-2">
             {saved ? <><CheckCircle2 className="w-4 h-4" /> Saved!</> : 'Save Settings'}
           </button>
@@ -1486,6 +1473,255 @@ function AgencyProfileTab() {
         />
       )}
     </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TAB: BANK DETAILS
+// ═══════════════════════════════════════════════════════════════
+function BankDetailsTab() {
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+      <BankAccountsSection />
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Bank Accounts — lives inside the Bank Details tab. Add/edit/archive any
+// number of bank or cash accounts, and pick which one invoice generation
+// falls back to when nobody explicitly chooses a bank on the invoice itself.
+// ═══════════════════════════════════════════════════════════════
+function BankAccountsSection() {
+  const [accounts, setAccounts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showInactive, setShowInactive] = useState(false);
+  const [modal, setModal] = useState(null); // null | { account: null | row }
+  const [busyId, setBusyId] = useState(null);
+
+  const emptyForm = { account_name: '', account_type: 'bank', account_number: '', bank_name: '', ifsc_code: '', branch: '', opening_balance: 0 };
+  const [form, setForm] = useState(emptyForm);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await api.get('/bank-accounts');
+      if (res.success) setAccounts(res.data || []);
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to load bank accounts');
+    }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+
+  const visible = accounts.filter(a => showInactive || a.is_active);
+
+  const openCreate = () => { setModal({ account: null }); setForm(emptyForm); setFormError(''); };
+  const openEdit = (a) => {
+    setModal({ account: a });
+    setForm({
+      account_name: a.account_name || '', account_type: a.account_type || 'bank', account_number: a.account_number || '',
+      bank_name: a.bank_name || '', ifsc_code: a.ifsc_code || '', branch: a.branch || '', opening_balance: a.opening_balance || 0,
+    });
+    setFormError('');
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSaving(true); setFormError('');
+    try {
+      const body = { ...form, opening_balance: parseFloat(form.opening_balance) || 0 };
+      const res = modal.account
+        ? await api.put(`/bank-accounts/${modal.account.id}`, body)
+        : await api.post('/bank-accounts', body);
+      if (res.success) {
+        toast.success(modal.account ? 'Bank account updated' : 'Bank account added');
+        setModal(null);
+        load();
+      } else {
+        setFormError(res.message || 'Failed to save account');
+      }
+    } catch (err) {
+      setFormError(err.response?.data?.message || err.message || 'Failed to save account');
+    }
+    setSaving(false);
+  };
+
+  const handleDelete = async (a) => {
+    const ok = await confirmDialog({
+      title: 'Delete bank account?',
+      message: `Delete "${a.bank_name || a.account_name}"? If it has posted vouchers it will be deactivated (hidden, history kept) instead of removed.`,
+      confirmText: 'Delete',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    setBusyId(a.id);
+    try {
+      const res = await api.delete(`/bank-accounts/${a.id}`);
+      toast.success(res.message || 'Account removed');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to delete account');
+    }
+    setBusyId(null);
+  };
+
+  const handleSetDefault = async (a) => {
+    setBusyId(a.id);
+    try {
+      await api.put(`/bank-accounts/${a.id}/default`);
+      toast.success(`${a.bank_name || a.account_name} is now the default for invoices`);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to set default');
+    }
+    setBusyId(null);
+  };
+
+  return (
+    <>
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+            <Landmark className="w-5 h-5 text-teal-600" />
+            Bank Accounts
+          </h3>
+          <p className="text-xs text-slate-500 mt-0.5">Add as many bank or cash accounts as you need. The one marked Default is what new invoices use unless you pick a different one.</p>
+        </div>
+        <button onClick={openCreate} className="flex items-center gap-2 bg-teal-600 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-teal-700 transition-colors shadow-sm cursor-pointer shrink-0">
+          <Plus className="w-4 h-4" /> Add Bank Account
+        </button>
+      </div>
+
+      <label className="inline-flex items-center gap-2 text-xs text-slate-500 mb-3 cursor-pointer">
+        <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} />
+        Show inactive accounts
+      </label>
+
+      <div className="overflow-x-auto border border-slate-200 rounded-xl">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 border-b border-slate-200">
+            <tr>
+              {['Account', 'Type', 'Number', 'Opening Balance', 'Status', 'Actions'].map(h => (
+                <th key={h} className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wide">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {loading ? (
+              <tr><td colSpan={6} className="px-6 py-10 text-center text-slate-400">Loading...</td></tr>
+            ) : visible.length === 0 ? (
+              <tr><td colSpan={6} className="px-6 py-10 text-center text-slate-400">No bank accounts yet. Click "Add Bank Account" to create one.</td></tr>
+            ) : visible.map(a => (
+              <tr key={a.id} className={`hover:bg-slate-50 transition-colors ${!a.is_active ? 'opacity-50' : ''}`}>
+                <td className="px-4 py-3">
+                  <div className="font-semibold text-slate-800 flex items-center gap-2">
+                    {a.bank_name || a.account_name}
+                    {a.is_default === 1 && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded-full">
+                        <Star className="w-3 h-3 fill-teal-600 text-teal-600" /> Default
+                      </span>
+                    )}
+                  </div>
+                  {a.account_name !== (a.bank_name || a.account_name) && <div className="text-xs text-slate-400">{a.account_name}</div>}
+                </td>
+                <td className="px-4 py-3 text-slate-500 capitalize">{a.account_type}</td>
+                <td className="px-4 py-3 text-slate-500 font-mono text-xs">{a.account_number || '—'}</td>
+                <td className="px-4 py-3 text-slate-600">₹{(parseFloat(a.opening_balance) || 0).toLocaleString('en-IN')}</td>
+                <td className="px-4 py-3">
+                  {a.is_active ? (
+                    <span className="text-xs font-medium text-emerald-700">Active</span>
+                  ) : (
+                    <span className="text-xs font-medium text-slate-400">Inactive</span>
+                  )}
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-1">
+                    {a.account_type === 'bank' && a.is_active && !a.is_default && (
+                      <button onClick={() => handleSetDefault(a)} disabled={busyId === a.id} title="Set as default for invoices" className="p-1.5 text-slate-400 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition-colors disabled:opacity-50 cursor-pointer">
+                        <Star className="w-4 h-4" />
+                      </button>
+                    )}
+                    <button onClick={() => openEdit(a)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer" title="Edit">
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => handleDelete(a)} disabled={busyId === a.id} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50 cursor-pointer" title="Delete">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {modal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in" onClick={() => setModal(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 animate-slide-up" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-5">
+              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <Landmark className="w-5 h-5 text-teal-600" />
+                {modal.account ? 'Edit Bank Account' : 'Add Bank Account'}
+              </h3>
+              <button onClick={() => setModal(null)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+
+            {formError && <div className="mb-4 p-3 bg-red-50 text-red-600 border border-red-200 rounded-lg text-sm flex items-start gap-2"><AlertCircle className="w-4 h-4 mt-0.5 shrink-0" /> {formError}</div>}
+
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Account Name *</label>
+                  <input required value={form.account_name} onChange={e => setForm(f => ({ ...f, account_name: e.target.value }))} placeholder="e.g. Main Current Account" className={inputCls} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Account Type *</label>
+                  <Select value={form.account_type} onChange={e => setForm(f => ({ ...f, account_type: e.target.value }))} className={inputCls}>
+                    <option value="bank">Bank Account</option>
+                    <option value="cash">Cash Account</option>
+                  </Select>
+                </div>
+                {form.account_type === 'bank' && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Bank Name</label>
+                      <input value={form.bank_name} onChange={e => setForm(f => ({ ...f, bank_name: e.target.value }))} placeholder="e.g. HDFC Bank" className={inputCls} />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Account Number</label>
+                      <input value={form.account_number} onChange={e => setForm(f => ({ ...f, account_number: e.target.value }))} className={inputCls} />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">IFSC Code</label>
+                      <input value={form.ifsc_code} onChange={e => setForm(f => ({ ...f, ifsc_code: e.target.value }))} placeholder="e.g. HDFC0001234" className={inputCls} />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Branch</label>
+                      <input value={form.branch} onChange={e => setForm(f => ({ ...f, branch: e.target.value }))} className={inputCls} />
+                    </div>
+                  </>
+                )}
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Opening Balance (₹)</label>
+                  <input type="number" step="0.01" value={form.opening_balance} onChange={e => setForm(f => ({ ...f, opening_balance: e.target.value }))} className={inputCls} />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button type="button" onClick={() => setModal(null)} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
+                <button type="submit" disabled={saving} className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 shadow-sm disabled:opacity-50 flex items-center gap-2">
+                  {saving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div> : <CheckCircle2 className="w-4 h-4" />}
+                  {modal.account ? 'Save Changes' : 'Create Account'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

@@ -202,6 +202,7 @@ app.use("/api/payments", require("./routes/payments"));
 app.use("/api/bank-accounts", require("./routes/bank-accounts"));
 app.use("/api/ledger-accounts", require("./routes/ledger-accounts"));
 app.use("/api/balance-sheet", require("./routes/balance-sheet"));
+app.use("/api/trial-balance", require("./routes/trial-balance"));
 app.use("/api/bank-reconciliation", require("./routes/bank-reconciliation"));
 app.use("/api/recurring-invoices", require("./routes/recurring-invoices"));
 app.use("/api/salary-structures", require("./routes/salary-structures"));

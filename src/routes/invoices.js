@@ -738,13 +738,14 @@ router.post("/", validate(schemas.createInvoice), async (req, res) => {
       .toISOString()
       .split("T")[0];
 
-    // Chosen bank account or default IndusInd Bank
+    // Chosen bank account, or the company's designated default (falling
+    // back to the first active bank-type account if none is set yet).
     let finalBankId = req.body.bank_account_id
       ? parseInt(req.body.bank_account_id)
       : null;
     if (!finalBankId) {
       const defaultBank = await query(
-        "SELECT id FROM bank_accounts WHERE company_id = $1 AND (account_number = '252528112019' OR (account_type = 'bank' AND is_active = 1)) ORDER BY (account_number = '252528112019') DESC, id ASC LIMIT 1",
+        "SELECT id FROM bank_accounts WHERE company_id = $1 AND account_type = 'bank' AND is_active = 1 ORDER BY is_default DESC, id ASC LIMIT 1",
         [req.companyId],
       );
       if (defaultBank.rows.length > 0) {
@@ -1497,7 +1498,7 @@ router.post("/event", async (req, res) => {
       : null;
     if (!finalBankId) {
       const defaultBank = await query(
-        "SELECT id FROM bank_accounts WHERE company_id = $1 AND (account_number = '252528112019' OR (account_type = 'bank' AND is_active = 1)) ORDER BY (account_number = '252528112019') DESC, id ASC LIMIT 1",
+        "SELECT id FROM bank_accounts WHERE company_id = $1 AND account_type = 'bank' AND is_active = 1 ORDER BY is_default DESC, id ASC LIMIT 1",
         [req.companyId],
       );
       if (defaultBank.rows.length > 0) {

@@ -45,14 +45,14 @@ async function ledgerTotals({ from, to, companyId }) {
   let result;
   try {
     result = await query(`
-      SELECT l.id, l.name, g.name AS group_name, g.nature, g.is_direct, g.sort_order,
+      SELECT l.id, l.name, g.id AS group_id, g.name AS group_name, g.nature, g.is_direct, g.sort_order,
              COALESCE(SUM(CASE WHEN v.debit_ledger_id = l.id THEN v.amount ELSE 0 END), 0) AS debit,
              COALESCE(SUM(CASE WHEN v.credit_ledger_id = l.id THEN v.amount ELSE 0 END), 0) AS credit
         FROM ledgers l
         JOIN ledger_groups g ON g.id = l.group_id
         JOIN vouchers v ON (v.debit_ledger_id = l.id OR v.credit_ledger_id = l.id) AND v.company_id = l.company_id
        WHERE v.status = 'posted' AND v.voucher_date <= $1 AND l.company_id = $2${fromSql}
-       GROUP BY l.id, l.name, g.name, g.nature, g.is_direct, g.sort_order
+       GROUP BY l.id, l.name, g.id, g.name, g.nature, g.is_direct, g.sort_order
        ORDER BY g.sort_order, l.name
     `, params);
   } catch (err) {

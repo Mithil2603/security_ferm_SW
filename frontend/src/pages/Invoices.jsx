@@ -243,7 +243,9 @@ export default function Invoices() {
     try {
       const res = await api.get('/bank-accounts');
       const all = res.data || [];
-      const active = all.filter(b => b.is_active);
+      // Only bank-type accounts make sense here — the invoice's "Bank
+      // Details" section shows account number/IFSC, which cash accounts don't have.
+      const active = all.filter(b => b.is_active && b.account_type === 'bank');
       setBankAccounts(active);
       return active;
     } catch (err) {
@@ -286,8 +288,8 @@ export default function Invoices() {
   const openCreateModal = async () => {
     await fetchClients();
     const accounts = await fetchBankAccounts();
-    const indusind = accounts.find(b => b.bank_name?.toLowerCase().includes('indusind'));
-    const defaultBankId = indusind ? indusind.id : (accounts[0]?.id || '');
+    const defaultAccount = accounts.find(b => b.is_default) || accounts.find(b => b.account_type === 'bank');
+    const defaultBankId = defaultAccount ? defaultAccount.id : (accounts[0]?.id || '');
     const now = new Date();
     const todayStr = format(now, 'yyyy-MM-dd');
     const oneMonthOut = oneMonthCycleEnd(todayStr);

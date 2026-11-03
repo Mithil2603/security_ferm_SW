@@ -23,6 +23,7 @@ import {
   HelpCircle,
   X,
   Target,
+  Scale,
   Truck,
   Building2,
   CreditCard,
@@ -93,7 +94,16 @@ const navGroups = [
     label: 'Reports & Compliance',
     icon: PieChart,
     children: [
-      { name: 'Reports', path: '/reports', icon: PieChart, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
+      {
+        name: 'Reports',
+        icon: PieChart,
+        children: [
+          { name: 'Overview', path: '/reports', icon: PieChart, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
+          { name: 'Bank Report', path: '/bank-report', icon: Landmark, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
+          { name: 'Cash Report', path: '/cash-report', icon: Wallet, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
+          { name: 'Trial Balance', path: '/trial-balance', icon: Scale, roles: ['admin', 'accountant'], permission: ['view_balance_sheet', 'view_reports'] },
+        ],
+      },
       { name: 'Tax Reports', path: '/tax-reports', icon: Receipt, roles: ['admin', 'manager', 'accountant'], permission: 'view_reports' },
       { name: 'GST Compliance', path: '/gst-compliance', icon: FileText, roles: ['admin', 'accountant'], permission: 'manage_payroll' },
       { name: 'Financial Reports', path: '/financial-reports', icon: BarChart3, roles: ['admin', 'accountant'], permission: 'view_reports' },
@@ -224,10 +234,25 @@ export default function Sidebar({ sidebarOpen, setSidebarOpen, mobileMenuOpen, s
     return false;
   };
 
+  // A child entry is either a navigable link (has `path`) or a nested
+  // sub-group (has `children`) — filter recursively so a sub-group only
+  // shows up once it has at least one visible grandchild.
+  const filterItems = (items) => items
+    .map(item => {
+      if (item.children) {
+        const children = filterItems(item.children);
+        return children.length > 0 ? { ...item, children } : null;
+      }
+      return hasAccess(item) ? item : null;
+    })
+    .filter(Boolean);
+
+  const pathMatches = (item, path) => item.path === path || (item.children && item.children.some(c => pathMatches(c, path)));
+
   const filteredTop = topItems.filter(hasAccess);
   const filteredBottom = bottomItems.filter(hasAccess);
   const filteredGroups = navGroups
-    .map(g => ({ ...g, children: g.children.filter(hasAccess) }))
+    .map(g => ({ ...g, children: filterItems(g.children) }))
     .filter(g => g.children.length > 0);
 
   // Accordion behavior: only one group open at a time. Navigating to a page
@@ -235,16 +260,33 @@ export default function Sidebar({ sidebarOpen, setSidebarOpen, mobileMenuOpen, s
   // manually clicking a group's own header toggles it independently of the
   // route, so the group you're currently in can still be collapsed on
   // purpose without snapping back open until you actually navigate again.
-  const activeGroupKey = navGroups.find(g => g.children.some(c => c.path === location.pathname))?.key || null;
+  const activeGroupKey = navGroups.find(g => g.children.some(c => pathMatches(c, location.pathname)))?.key || null;
   const [openGroup, setOpenGroup] = useState(activeGroupKey);
+
+  // Same accordion behavior, one level deeper, for a child that is itself a
+  // sub-group (e.g. "Reports" nesting Bank/Cash/Trial Balance).
+  const activeSubGroupName = (() => {
+    for (const g of navGroups) {
+      for (const c of g.children) {
+        if (c.children?.some(cc => pathMatches(cc, location.pathname))) return c.name;
+      }
+    }
+    return null;
+  })();
+  const [openSubGroup, setOpenSubGroup] = useState(activeSubGroupName);
 
   useEffect(() => {
     setOpenGroup(activeGroupKey);
+    setOpenSubGroup(activeSubGroupName);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
 
   const toggleGroup = (key) => {
     setOpenGroup(prev => (prev === key ? null : key));
+  };
+
+  const toggleSubGroup = (name) => {
+    setOpenSubGroup(prev => (prev === name ? null : name));
   };
 
   const [appVersion, setAppVersion] = useState('');
@@ -319,7 +361,7 @@ export default function Sidebar({ sidebarOpen, setSidebarOpen, mobileMenuOpen, s
             {/* Nav Groups */}
             {filteredGroups.map(group => {
               const GroupIcon = group.icon;
-              const hasActiveChild = group.children.some(c => c.path === location.pathname);
+              const hasActiveChild = group.children.some(c => pathMatches(c, location.pathname));
               const isGroupOpen = openGroup === group.key;
 
               return (
@@ -363,6 +405,55 @@ export default function Sidebar({ sidebarOpen, setSidebarOpen, mobileMenuOpen, s
                     isDrawerOpen && isGroupOpen ? "max-h-96 opacity-100 my-1" : "max-h-0 opacity-0 pointer-events-none"
                   )}>
                     {group.children.map(child => {
+                      if (child.children) {
+                        const SubIcon = child.icon;
+                        const isSubOpen = openSubGroup === child.name;
+                        const hasActiveGrandchild = child.children.some(cc => cc.path === location.pathname);
+                        return (
+                          <div key={child.name} className="space-y-1">
+                            <button
+                              type="button"
+                              onClick={() => toggleSubGroup(child.name)}
+                              className={classNames(
+                                'flex items-center h-8 w-full pl-9 pr-2.5 rounded-lg text-xs font-medium transition-colors select-none whitespace-nowrap group cursor-pointer',
+                                hasActiveGrandchild || isSubOpen
+                                  ? 'bg-teal-500/10 text-teal-400 font-semibold'
+                                  : 'text-slate-400 hover:text-white hover:bg-slate-800/80'
+                              )}
+                            >
+                              <SubIcon className="h-4 w-4 shrink-0 mr-2.5 transition-colors" />
+                              <span className="truncate flex-1 text-left">{child.name}</span>
+                              <ChevronDown className={classNames('h-3.5 w-3.5 shrink-0 transition-transform duration-200', isSubOpen ? 'rotate-180' : '')} />
+                            </button>
+                            <div className={classNames(
+                              'overflow-hidden transition-all duration-200 space-y-1',
+                              isSubOpen ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0 pointer-events-none'
+                            )}>
+                              {child.children.map(grandchild => {
+                                const GrandchildIcon = grandchild.icon;
+                                const isGrandchildActive = location.pathname === grandchild.path;
+                                return (
+                                  <NavLink
+                                    key={grandchild.name}
+                                    to={grandchild.path}
+                                    onClick={closeSidebar}
+                                    className={classNames(
+                                      'flex items-center h-8 pl-14 pr-2.5 rounded-lg text-xs font-medium transition-colors select-none whitespace-nowrap group',
+                                      isGrandchildActive
+                                        ? 'bg-teal-500/15 text-teal-400 font-semibold border-r-2 border-teal-500'
+                                        : 'text-slate-400 hover:text-white hover:bg-slate-800/80'
+                                    )}
+                                  >
+                                    <GrandchildIcon className="h-3.5 w-3.5 shrink-0 mr-2.5 transition-colors" />
+                                    <span className="truncate">{grandchild.name}</span>
+                                  </NavLink>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      }
+
                       const ChildIcon = child.icon;
                       const isChildActive = location.pathname === child.path;
                       return (
