@@ -1,6 +1,6 @@
 /**
  * src/services/gst/gstComplianceService.js
- * 
+ *
  * GST Compliance Service for GSTR-1 and GSTR-3B return generation.
  * Handles:
  *  - HSN/SAC code management
@@ -10,43 +10,72 @@
  *  - Filing status tracking
  */
 
-const Decimal = require('decimal.js');
-const { query } = require('../../database/connection');
-const logger = require('../../utils/logger');
+const Decimal = require("decimal.js");
+const { query } = require("../../database/connection");
+const logger = require("../../utils/logger");
 
 // Indian State Code Map (first 2 digits of GSTIN)
 const STATE_CODES = {
-  '01': 'Jammu & Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab',
-  '04': 'Chandigarh', '05': 'Uttarakhand', '06': 'Haryana',
-  '07': 'Delhi', '08': 'Rajasthan', '09': 'Uttar Pradesh',
-  '10': 'Bihar', '11': 'Sikkim', '12': 'Arunachal Pradesh',
-  '13': 'Nagaland', '14': 'Manipur', '15': 'Mizoram',
-  '16': 'Tripura', '17': 'Meghalaya', '18': 'Assam',
-  '19': 'West Bengal', '20': 'Jharkhand', '21': 'Odisha',
-  '22': 'Chhattisgarh', '23': 'Madhya Pradesh', '24': 'Gujarat',
-  '25': 'Daman & Diu', '26': 'Dadra & Nagar Haveli', '27': 'Maharashtra',
-  '29': 'Karnataka', '30': 'Goa', '32': 'Kerala',
-  '33': 'Tamil Nadu', '34': 'Puducherry', '36': 'Telangana',
-  '37': 'Andhra Pradesh',
+  "01": "Jammu & Kashmir",
+  "02": "Himachal Pradesh",
+  "03": "Punjab",
+  "04": "Chandigarh",
+  "05": "Uttarakhand",
+  "06": "Haryana",
+  "07": "Delhi",
+  "08": "Rajasthan",
+  "09": "Uttar Pradesh",
+  10: "Bihar",
+  11: "Sikkim",
+  12: "Arunachal Pradesh",
+  13: "Nagaland",
+  14: "Manipur",
+  15: "Mizoram",
+  16: "Tripura",
+  17: "Meghalaya",
+  18: "Assam",
+  19: "West Bengal",
+  20: "Jharkhand",
+  21: "Odisha",
+  22: "Chhattisgarh",
+  23: "Madhya Pradesh",
+  24: "Gujarat",
+  25: "Daman & Diu",
+  26: "Dadra & Nagar Haveli",
+  27: "Maharashtra",
+  29: "Karnataka",
+  30: "Goa",
+  32: "Kerala",
+  33: "Tamil Nadu",
+  34: "Puducherry",
+  36: "Telangana",
+  37: "Andhra Pradesh",
 };
 
 class GSTComplianceService {
-
   // ═══════════════════════════════════════════════════════════════════════════
   // HSN/SAC Code Management
   // ═══════════════════════════════════════════════════════════════════════════
 
   async getHSNSACCodes(filters = {}) {
     const { type, search, is_active = 1 } = filters;
-    let conditions = ['is_active = $1'];
+    let conditions = ["is_active = $1"];
     let params = [is_active];
     let pc = 2;
-    if (type) { conditions.push(`type = $${pc}`); params.push(type); pc++; }
-    if (search) { conditions.push(`(code LIKE $${pc} OR description LIKE $${pc})`); params.push(`%${search}%`); pc++; }
+    if (type) {
+      conditions.push(`type = $${pc}`);
+      params.push(type);
+      pc++;
+    }
+    if (search) {
+      conditions.push(`(code LIKE $${pc} OR description LIKE $${pc})`);
+      params.push(`%${search}%`);
+      pc++;
+    }
 
     const result = await query(
-      `SELECT * FROM hsn_sac_codes WHERE ${conditions.join(' AND ')} ORDER BY code`,
-      params
+      `SELECT * FROM hsn_sac_codes WHERE ${conditions.join(" AND ")} ORDER BY code`,
+      params,
     );
     return result.rows;
   }
@@ -55,25 +84,40 @@ class GSTComplianceService {
     await query(
       `INSERT INTO hsn_sac_codes (code, type, description, gst_rate, cgst_rate, sgst_rate, igst_rate)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [data.code, data.type, data.description, data.gst_rate,
-       data.cgst_rate || data.gst_rate / 2, data.sgst_rate || data.gst_rate / 2,
-       data.igst_rate || data.gst_rate]
+      [
+        data.code,
+        data.type,
+        data.description,
+        data.gst_rate,
+        data.cgst_rate || data.gst_rate / 2,
+        data.sgst_rate || data.gst_rate / 2,
+        data.igst_rate || data.gst_rate,
+      ],
     );
     return this.getHSNSACCodes();
   }
 
   async updateHSNSACCode(id, data) {
-    const existing = await query('SELECT id FROM hsn_sac_codes WHERE id = $1', [id]);
-    if (existing.rows.length === 0) throw new Error('HSN/SAC code not found');
+    const existing = await query("SELECT id FROM hsn_sac_codes WHERE id = $1", [
+      id,
+    ]);
+    if (existing.rows.length === 0) throw new Error("HSN/SAC code not found");
 
     await query(
       `UPDATE hsn_sac_codes
        SET code = $1, type = $2, description = $3, gst_rate = $4,
            cgst_rate = $5, sgst_rate = $6, igst_rate = $7
        WHERE id = $8`,
-      [data.code, data.type, data.description, data.gst_rate,
-       data.cgst_rate || data.gst_rate / 2, data.sgst_rate || data.gst_rate / 2,
-       data.igst_rate || data.gst_rate, id]
+      [
+        data.code,
+        data.type,
+        data.description,
+        data.gst_rate,
+        data.cgst_rate || data.gst_rate / 2,
+        data.sgst_rate || data.gst_rate / 2,
+        data.igst_rate || data.gst_rate,
+        id,
+      ],
     );
     return this.getHSNSACCodes();
   }
@@ -82,7 +126,7 @@ class GSTComplianceService {
   // hard delete could orphan historical rows. Hiding it from getHSNSACCodes'
   // default is_active=1 filter is enough to keep it out of new invoices.
   async deactivateHSNSACCode(id) {
-    await query('UPDATE hsn_sac_codes SET is_active = 0 WHERE id = $1', [id]);
+    await query("UPDATE hsn_sac_codes SET is_active = 0 WHERE id = $1", [id]);
     return this.getHSNSACCodes();
   }
 
@@ -91,7 +135,10 @@ class GSTComplianceService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   async getConfig(companyId) {
-    const result = await query(`SELECT * FROM gst_configurations WHERE is_active = 1 AND company_id = $1 ORDER BY id DESC LIMIT 1`, [companyId]);
+    const result = await query(
+      `SELECT * FROM gst_configurations WHERE is_active = 1 AND company_id = $1 ORDER BY id DESC LIMIT 1`,
+      [companyId],
+    );
     return result.rows[0] || null;
   }
 
@@ -102,17 +149,35 @@ class GSTComplianceService {
         `UPDATE gst_configurations SET gstin=$1, legal_name=$2, trade_name=$3, state_code=$4,
          state_name=$5, registration_type=$6, default_tax_rate=$7, financial_year=$8,
          updated_at=CURRENT_TIMESTAMP WHERE id=$9 AND company_id=$10`,
-        [data.gstin, data.legal_name, data.trade_name, data.state_code,
-         data.state_name, data.registration_type, data.default_tax_rate,
-         data.financial_year, existing.id, companyId]
+        [
+          data.gstin,
+          data.legal_name,
+          data.trade_name,
+          data.state_code,
+          data.state_name,
+          data.registration_type,
+          data.default_tax_rate,
+          data.financial_year,
+          existing.id,
+          companyId,
+        ],
       );
     } else {
       await query(
         `INSERT INTO gst_configurations (gstin, legal_name, trade_name, state_code, state_name,
          registration_type, default_tax_rate, financial_year, company_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [data.gstin, data.legal_name, data.trade_name, data.state_code,
-         data.state_name, data.registration_type, data.default_tax_rate, data.financial_year, companyId]
+        [
+          data.gstin,
+          data.legal_name,
+          data.trade_name,
+          data.state_code,
+          data.state_name,
+          data.registration_type,
+          data.default_tax_rate,
+          data.financial_year,
+          companyId,
+        ],
       );
     }
     return this.getConfig(companyId);
@@ -129,17 +194,22 @@ class GSTComplianceService {
    * B2CS: Unregistered buyer, intra-state OR inter-state invoice <= 2.5L
    * EXPORT: Foreign buyer
    */
-  classifySupplyType(buyerGstin, sellerStateCode, buyerStateCode, invoiceAmount) {
+  classifySupplyType(
+    buyerGstin,
+    sellerStateCode,
+    buyerStateCode,
+    invoiceAmount,
+  ) {
     if (buyerGstin && buyerGstin.length === 15) {
-      return 'B2B';
+      return "B2B";
     }
     if (!buyerStateCode || buyerStateCode === sellerStateCode) {
-      return 'B2CS'; // intra-state unregistered
+      return "B2CS"; // intra-state unregistered
     }
     if (invoiceAmount > 250000) {
-      return 'B2CL'; // inter-state unregistered > 2.5L
+      return "B2CL"; // inter-state unregistered > 2.5L
     }
-    return 'B2CS';
+    return "B2CS";
   }
 
   /**
@@ -147,9 +217,9 @@ class GSTComplianceService {
    */
   determineTaxType(sellerStateCode, buyerStateCode) {
     if (sellerStateCode === buyerStateCode) {
-      return 'cgst_sgst';
+      return "cgst_sgst";
     }
-    return 'igst';
+    return "igst";
   }
 
   // Invoices never persist their own tax_rate (the column defaults to 0 and
@@ -174,9 +244,14 @@ class GSTComplianceService {
     const val = D(taxableValue);
     const rate = D(gstRate);
 
-    if (taxType === 'igst') {
+    if (taxType === "igst") {
       const igst = val.times(rate).dividedBy(100).toDecimalPlaces(2);
-      return { cgst: 0, sgst: 0, igst: parseFloat(igst.toString()), total_gst: parseFloat(igst.toString()) };
+      return {
+        cgst: 0,
+        sgst: 0,
+        igst: parseFloat(igst.toString()),
+        total_gst: parseFloat(igst.toString()),
+      };
     }
     const halfRate = rate.dividedBy(2);
     const cgst = val.times(halfRate).dividedBy(100).toDecimalPlaces(2);
@@ -196,10 +271,16 @@ class GSTComplianceService {
 
   async generateGSTR1(returnPeriod, companyId) {
     const config = await this.getConfig(companyId);
-    if (!config) throw new Error('GST configuration not found. Please set up GSTIN first.');
+    if (!config)
+      throw new Error(
+        "GST configuration not found. Please set up GSTIN first.",
+      );
 
-    const [year, month] = returnPeriod.split('-').map(Number);
-    const fy = month >= 4 ? `${year}-${(year + 1).toString().slice(2)}` : `${year - 1}-${year.toString().slice(2)}`;
+    const [year, month] = returnPeriod.split("-").map(Number);
+    const fy =
+      month >= 4
+        ? `${year}-${(year + 1).toString().slice(2)}`
+        : `${year - 1}-${year.toString().slice(2)}`;
 
     // Get all paid/sent invoices for the period
     const invoices = await query(
@@ -210,7 +291,7 @@ class GSTComplianceService {
        WHERE i.company_id = $1 AND strftime('%Y-%m', i.invoice_date) = $2
          AND i.status IN ('sent', 'paid', 'partially_paid')
        ORDER BY i.invoice_date`,
-      [companyId, returnPeriod]
+      [companyId, returnPeriod],
     );
 
     // Classify and group
@@ -218,13 +299,20 @@ class GSTComplianceService {
     const b2cs = [];
     const b2cl = [];
     const hsnSummary = {};
-    let totalTaxable = 0, totalCGST = 0, totalSGST = 0, totalIGST = 0;
+    let totalTaxable = 0,
+      totalCGST = 0,
+      totalSGST = 0,
+      totalIGST = 0;
 
     for (const inv of invoices.rows) {
       const supplyType = this.classifySupplyType(
-        inv.buyer_gstin, config.state_code,
-        inv.buyer_state_code || (inv.buyer_gstin ? inv.buyer_gstin.substring(0, 2) : config.state_code),
-        inv.final_amount
+        inv.buyer_gstin,
+        config.state_code,
+        inv.buyer_state_code ||
+          (inv.buyer_gstin
+            ? inv.buyer_gstin.substring(0, 2)
+            : config.state_code),
+        inv.final_amount,
       );
       const taxableValue = parseFloat(inv.amount_subtotal || 0);
       // Use the invoice's own stored, already-billed GST split rather than
@@ -249,20 +337,25 @@ class GSTComplianceService {
         invoice_date: this._formatDate(inv.invoice_date),
         invoice_value: parseFloat(inv.final_amount || 0),
         taxable_value: taxableValue,
-        tax_rate: this._effectiveTaxRate(inv.tax_rate, taxableValue, gstAmounts.cgst + gstAmounts.sgst + gstAmounts.igst),
+        tax_rate: this._effectiveTaxRate(
+          inv.tax_rate,
+          taxableValue,
+          gstAmounts.cgst + gstAmounts.sgst + gstAmounts.igst,
+        ),
         cgst: gstAmounts.cgst,
         sgst: gstAmounts.sgst,
         igst: gstAmounts.igst,
-        place_of_supply: inv.place_of_supply || inv.buyer_state_code || config.state_code,
+        place_of_supply:
+          inv.place_of_supply || inv.buyer_state_code || config.state_code,
         // hsn_code is what invoice creation actually populates on every real
         // invoice; sac_code is a separate, never-set column left at its
         // migration default — prefer the real value.
-        sac_code: inv.hsn_code || inv.sac_code || '998525',
+        sac_code: inv.hsn_code || inv.sac_code || "998525",
         supply_type: supplyType,
       };
 
-      if (supplyType === 'B2B') {
-        const existing = b2b.find(b => b.buyer_gstin === inv.buyer_gstin);
+      if (supplyType === "B2B") {
+        const existing = b2b.find((b) => b.buyer_gstin === inv.buyer_gstin);
         if (existing) {
           existing.invoices.push(record);
         } else {
@@ -272,8 +365,12 @@ class GSTComplianceService {
             invoices: [record],
           });
         }
-      } else if (supplyType === 'B2CL') {
-        b2cl.push({ ...record, buyer_name: inv.buyer_name, buyer_state: inv.buyer_state_code });
+      } else if (supplyType === "B2CL") {
+        b2cl.push({
+          ...record,
+          buyer_name: inv.buyer_name,
+          buyer_state: inv.buyer_state_code,
+        });
       } else {
         b2cs.push(record);
       }
@@ -281,10 +378,20 @@ class GSTComplianceService {
       // HSN Summary — field names/uqc match the real GSTN HSN summary schema
       // (hsn_sc/desc/uqc/qty/val/txval/camt/samt/iamt/csamt), not ad-hoc names,
       // so this section of the exported JSON is upload-shaped like the rest.
-      const sac = inv.hsn_code || inv.sac_code || '998525';
+      const sac = inv.hsn_code || inv.sac_code || "998525";
       if (!hsnSummary[sac]) {
-        hsnSummary[sac] = { hsn_sc: sac, desc: 'Security Services', uqc: 'OTH-OTHERS', qty: 0,
-          val: 0, txval: 0, iamt: 0, camt: 0, samt: 0, csamt: 0 };
+        hsnSummary[sac] = {
+          hsn_sc: sac,
+          desc: "Security Services",
+          uqc: "OTH-OTHERS",
+          qty: 0,
+          val: 0,
+          txval: 0,
+          iamt: 0,
+          camt: 0,
+          samt: 0,
+          csamt: 0,
+        };
       }
       hsnSummary[sac].qty++;
       hsnSummary[sac].val += parseFloat(inv.final_amount || 0);
@@ -297,62 +404,85 @@ class GSTComplianceService {
     // Build GSTR-1 JSON (simplified government format)
     const gstr1Json = {
       gstin: config.gstin,
-      fp: returnPeriod.replace('-', ''),
-      gt: parseFloat((totalTaxable + totalCGST + totalSGST + totalIGST).toFixed(2)),
-      b2b: b2b.map(buyer => ({
+      fp: returnPeriod.replace("-", ""),
+      gt: parseFloat(
+        (totalTaxable + totalCGST + totalSGST + totalIGST).toFixed(2),
+      ),
+      b2b: b2b.map((buyer) => ({
         ctin: buyer.buyer_gstin,
-        inv: buyer.invoices.map(i => ({
+        inv: buyer.invoices.map((i) => ({
           inum: i.invoice_number,
           idt: i.invoice_date,
           val: i.invoice_value,
           pos: i.place_of_supply,
-          rchrg: 'N',
-          inv_typ: 'R',
-          itms: [{
-            num: 1,
-            itm_det: {
-              txval: i.taxable_value,
-              rt: i.tax_rate,
-              camt: i.cgst,
-              samt: i.sgst,
-              iamt: i.igst,
-              csamt: 0,
-            }
-          }]
-        }))
+          rchrg: "N",
+          inv_typ: "R",
+          itms: [
+            {
+              num: 1,
+              itm_det: {
+                txval: i.taxable_value,
+                rt: i.tax_rate,
+                camt: i.cgst,
+                samt: i.sgst,
+                iamt: i.igst,
+                csamt: 0,
+              },
+            },
+          ],
+        })),
       })),
       // B2CS covers unregistered buyers both intra-state (CGST+SGST) and
       // inter-state up to ₹2.5L (IGST) — _aggregateB2CS must carry igst
       // through per row, not just camt/samt, or inter-state small-buyer tax
       // silently vanishes from the filed return.
       b2cs: this._aggregateB2CS(b2cs, config.state_code),
-      b2cl: b2cl.map(i => ({
+      b2cl: b2cl.map((i) => ({
         pos: i.buyer_state,
-        inv: [{
-          inum: i.invoice_number,
-          idt: i.invoice_date,
-          val: i.invoice_value,
-          itms: [{
-            num: 1,
-            itm_det: { txval: i.taxable_value, rt: i.tax_rate, iamt: i.igst, csamt: 0 }
-          }]
-        }]
+        inv: [
+          {
+            inum: i.invoice_number,
+            idt: i.invoice_date,
+            val: i.invoice_value,
+            itms: [
+              {
+                num: 1,
+                itm_det: {
+                  txval: i.taxable_value,
+                  rt: i.tax_rate,
+                  iamt: i.igst,
+                  csamt: 0,
+                },
+              },
+            ],
+          },
+        ],
       })),
-      hsn: { data: Object.values(hsnSummary).map((h, i) => ({ num: i + 1, ...h })) },
+      hsn: {
+        data: Object.values(hsnSummary).map((h, i) => ({ num: i + 1, ...h })),
+      },
     };
 
     // Save filing record
     const existing = await query(
       `SELECT id FROM gstr_filings WHERE return_type = 'GSTR1' AND return_period = $1 AND gstin = $2 AND company_id = $3`,
-      [returnPeriod, config.gstin, companyId]
+      [returnPeriod, config.gstin, companyId],
     );
     if (existing.rows.length > 0) {
       await query(
         `UPDATE gstr_filings SET json_data=$1, total_taxable_value=$2, total_cgst=$3,
          total_sgst=$4, total_igst=$5, total_invoices=$6, status='generated',
          generated_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=$7 AND company_id=$8`,
-        [JSON.stringify(gstr1Json), totalTaxable, totalCGST, totalSGST, totalIGST,
-         invoices.rows.length, existing.rows[0].id, companyId]
+        [
+          JSON.stringify(gstr1Json),
+          totalTaxable,
+          totalCGST,
+          totalSGST,
+          totalIGST,
+          invoices.rows.length,
+          existing.rows[0].id,
+          companyId,
+        ],
       );
     } else {
       await query(
@@ -360,13 +490,23 @@ class GSTComplianceService {
          total_taxable_value, total_cgst, total_sgst, total_igst, total_invoices,
          status, json_data, generated_at, company_id)
          VALUES ('GSTR1', $1, $2, $3, $4, $5, $6, $7, $8, 'generated', $9, CURRENT_TIMESTAMP, $10)`,
-        [returnPeriod, fy, config.gstin, totalTaxable, totalCGST, totalSGST, totalIGST,
-         invoices.rows.length, JSON.stringify(gstr1Json), companyId]
+        [
+          returnPeriod,
+          fy,
+          config.gstin,
+          totalTaxable,
+          totalCGST,
+          totalSGST,
+          totalIGST,
+          invoices.rows.length,
+          JSON.stringify(gstr1Json),
+          companyId,
+        ],
       );
     }
 
     return {
-      return_type: 'GSTR1',
+      return_type: "GSTR1",
       return_period: returnPeriod,
       summary: {
         total_invoices: invoices.rows.length,
@@ -394,7 +534,10 @@ class GSTComplianceService {
 
   async previewGSTR1A(from_date, to_date, companyId) {
     const config = await this.getConfig(companyId);
-    if (!config) throw new Error('GST configuration not found. Please set it up under GST Compliance → Configuration first.');
+    if (!config)
+      throw new Error(
+        "GST configuration not found. Please set it up under GST Compliance → Configuration first.",
+      );
 
     const invoices = await query(
       `SELECT i.*, c.name as buyer_name, c.gst_number as buyer_gstin, c.state_code as buyer_state_code
@@ -402,21 +545,36 @@ class GSTComplianceService {
        JOIN clients c ON i.client_id = c.id AND c.company_id = i.company_id
        WHERE i.company_id = $1 AND i.invoice_date BETWEEN $2 AND $3 AND i.status != 'cancelled'
        ORDER BY i.invoice_date`,
-      [companyId, from_date, to_date]
+      [companyId, from_date, to_date],
     );
 
-    const b2b = [], b2cs = [], b2cl = [];
-    let totalTaxable = 0, totalCGST = 0, totalSGST = 0, totalIGST = 0;
+    const b2b = [],
+      b2cs = [],
+      b2cl = [];
+    let totalTaxable = 0,
+      totalCGST = 0,
+      totalSGST = 0,
+      totalIGST = 0;
 
     for (const inv of invoices.rows) {
-      const buyerState = inv.buyer_state_code || (inv.buyer_gstin ? inv.buyer_gstin.substring(0, 2) : config.state_code);
-      const supplyType = this.classifySupplyType(inv.buyer_gstin, config.state_code, buyerState, inv.final_amount);
+      const buyerState =
+        inv.buyer_state_code ||
+        (inv.buyer_gstin ? inv.buyer_gstin.substring(0, 2) : config.state_code);
+      const supplyType = this.classifySupplyType(
+        inv.buyer_gstin,
+        config.state_code,
+        buyerState,
+        inv.final_amount,
+      );
 
       const taxableValue = parseFloat(inv.amount_subtotal || 0);
       const cgst = parseFloat(inv.cgst_amount || 0);
       const sgst = parseFloat(inv.sgst_amount || 0);
       const igst = parseFloat(inv.igst_amount || 0);
-      totalTaxable += taxableValue; totalCGST += cgst; totalSGST += sgst; totalIGST += igst;
+      totalTaxable += taxableValue;
+      totalCGST += cgst;
+      totalSGST += sgst;
+      totalIGST += igst;
 
       const record = {
         invoice_number: inv.invoice_number,
@@ -425,23 +583,33 @@ class GSTComplianceService {
         buyer_gstin: inv.buyer_gstin || null,
         invoice_value: parseFloat(inv.final_amount || 0),
         taxable_value: taxableValue,
-        tax_rate: this._effectiveTaxRate(inv.tax_rate, taxableValue, cgst + sgst + igst),
-        cgst, sgst, igst,
+        tax_rate: this._effectiveTaxRate(
+          inv.tax_rate,
+          taxableValue,
+          cgst + sgst + igst,
+        ),
+        cgst,
+        sgst,
+        igst,
         place_of_supply: inv.place_of_supply || buyerState,
         supply_type: supplyType,
       };
 
-      if (supplyType === 'B2B') b2b.push(record);
-      else if (supplyType === 'B2CL') b2cl.push(record);
+      if (supplyType === "B2B") b2b.push(record);
+      else if (supplyType === "B2CL") b2cl.push(record);
       else b2cs.push(record);
     }
 
     return {
       period: { from: from_date, to: to_date },
-      b2b, b2cs, b2cl,
+      b2b,
+      b2cs,
+      b2cl,
       summary: {
         total_invoices: invoices.rows.length,
-        b2b_count: b2b.length, b2cs_count: b2cs.length, b2cl_count: b2cl.length,
+        b2b_count: b2b.length,
+        b2cs_count: b2cs.length,
+        b2cl_count: b2cl.length,
         total_taxable: parseFloat(totalTaxable.toFixed(2)),
         total_cgst: parseFloat(totalCGST.toFixed(2)),
         total_sgst: parseFloat(totalSGST.toFixed(2)),
@@ -470,24 +638,38 @@ class GSTComplianceService {
          AND e.status != 'pending'
          AND e.tax_type IS NOT NULL AND e.tax_type != 'none'
        ORDER BY e.expense_date`,
-      [companyId, from_date, to_date]
+      [companyId, from_date, to_date],
     );
 
-    let totalTaxable = 0, totalCGST = 0, totalSGST = 0, totalIGST = 0;
-    const rows = result.rows.map(r => {
+    let totalTaxable = 0,
+      totalCGST = 0,
+      totalSGST = 0,
+      totalIGST = 0;
+    const rows = result.rows.map((r) => {
       const cgst = parseFloat(r.cgst_amount || 0);
       const sgst = parseFloat(r.sgst_amount || 0);
       const igst = parseFloat(r.igst_amount || 0);
-      const taxableValue = parseFloat((parseFloat(r.amount || 0) - cgst - sgst - igst).toFixed(2));
-      totalTaxable += taxableValue; totalCGST += cgst; totalSGST += sgst; totalIGST += igst;
+      const taxableValue = parseFloat(
+        (parseFloat(r.amount || 0) - cgst - sgst - igst).toFixed(2),
+      );
+      totalTaxable += taxableValue;
+      totalCGST += cgst;
+      totalSGST += sgst;
+      totalIGST += igst;
       return {
         bill_date: this._formatDate(r.expense_date),
-        vendor_name: r.vendor_name || 'Unknown Vendor',
-        vendor_gstin: r.vendor_gstin || 'N/A',
+        vendor_name: r.vendor_name || "Unknown Vendor",
+        vendor_gstin: r.vendor_gstin || "N/A",
         description: r.description,
         taxable_value: taxableValue,
-        tax_rate: this._effectiveTaxRate(r.tax_rate, taxableValue, cgst + sgst + igst),
-        cgst, sgst, igst,
+        tax_rate: this._effectiveTaxRate(
+          r.tax_rate,
+          taxableValue,
+          cgst + sgst + igst,
+        ),
+        cgst,
+        sgst,
+        igst,
         is_rcm_applicable: !!r.is_rcm_applicable,
       };
     });
@@ -512,10 +694,13 @@ class GSTComplianceService {
 
   async generateGSTR3B(returnPeriod, companyId) {
     const config = await this.getConfig(companyId);
-    if (!config) throw new Error('GST configuration not found.');
+    if (!config) throw new Error("GST configuration not found.");
 
-    const [year, month] = returnPeriod.split('-').map(Number);
-    const fy = month >= 4 ? `${year}-${(year + 1).toString().slice(2)}` : `${year - 1}-${year.toString().slice(2)}`;
+    const [year, month] = returnPeriod.split("-").map(Number);
+    const fy =
+      month >= 4
+        ? `${year}-${(year + 1).toString().slice(2)}`
+        : `${year - 1}-${year.toString().slice(2)}`;
 
     // Outward supplies
     const outward = await query(
@@ -528,7 +713,7 @@ class GSTComplianceService {
        FROM invoices
        WHERE company_id = $1 AND strftime('%Y-%m', invoice_date) = $2
          AND status IN ('sent', 'paid', 'partially_paid')`,
-      [companyId, returnPeriod]
+      [companyId, returnPeriod],
     );
 
     // Input tax credit (from expenses/vendor bills) — expenses store the GST
@@ -543,7 +728,7 @@ class GSTComplianceService {
        WHERE company_id = $1 AND strftime('%Y-%m', expense_date) = $2
          AND status != 'rejected'
          AND tax_type IS NOT NULL AND tax_type != 'none'`,
-      [companyId, returnPeriod]
+      [companyId, returnPeriod],
     );
 
     const out = outward.rows[0];
@@ -555,43 +740,52 @@ class GSTComplianceService {
 
     const gstr3b = {
       gstin: config.gstin,
-      ret_period: returnPeriod.replace('-', ''),
-      '3.1': {
+      ret_period: returnPeriod.replace("-", ""),
+      3.1: {
         osup_det: {
           txval: parseFloat(parseFloat(out.taxable).toFixed(2)),
           camt: parseFloat(parseFloat(out.cgst).toFixed(2)),
           samt: parseFloat(parseFloat(out.sgst).toFixed(2)),
           iamt: parseFloat(parseFloat(out.igst).toFixed(2)),
-        }
+        },
       },
-      '4': {
+      4: {
         itc_avl: {
           camt: parseFloat(parseFloat(inp.cgst).toFixed(2)),
           samt: parseFloat(parseFloat(inp.sgst).toFixed(2)),
           iamt: parseFloat(parseFloat(inp.igst).toFixed(2)),
-        }
+        },
       },
-      '6.1': {
+      6.1: {
         tax_payable: {
           camt: netCGST,
           samt: netSGST,
           iamt: netIGST,
           total: parseFloat((netCGST + netSGST + netIGST).toFixed(2)),
-        }
-      }
+        },
+      },
     };
 
     // Save filing
     const existing = await query(
       `SELECT id FROM gstr_filings WHERE return_type = 'GSTR3B' AND return_period = $1 AND gstin = $2 AND company_id = $3`,
-      [returnPeriod, config.gstin, companyId]
+      [returnPeriod, config.gstin, companyId],
     );
     if (existing.rows.length > 0) {
       await query(
         `UPDATE gstr_filings SET json_data=$1, total_taxable_value=$2, total_cgst=$3,
          total_sgst=$4, total_igst=$5, total_invoices=$6, status='generated',
          generated_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=$7 AND company_id=$8`,
-        [JSON.stringify(gstr3b), out.taxable, netCGST, netSGST, netIGST, out.count, existing.rows[0].id, companyId]
+        [
+          JSON.stringify(gstr3b),
+          out.taxable,
+          netCGST,
+          netSGST,
+          netIGST,
+          out.count,
+          existing.rows[0].id,
+          companyId,
+        ],
       );
     } else {
       await query(
@@ -599,13 +793,23 @@ class GSTComplianceService {
          total_taxable_value, total_cgst, total_sgst, total_igst, total_invoices,
          status, json_data, generated_at, company_id)
          VALUES ('GSTR3B', $1, $2, $3, $4, $5, $6, $7, $8, 'generated', $9, CURRENT_TIMESTAMP, $10)`,
-        [returnPeriod, fy, config.gstin, out.taxable, netCGST, netSGST, netIGST,
-         out.count, JSON.stringify(gstr3b), companyId]
+        [
+          returnPeriod,
+          fy,
+          config.gstin,
+          out.taxable,
+          netCGST,
+          netSGST,
+          netIGST,
+          out.count,
+          JSON.stringify(gstr3b),
+          companyId,
+        ],
       );
     }
 
     return {
-      return_type: 'GSTR3B',
+      return_type: "GSTR3B",
       return_period: returnPeriod,
       outward_supplies: {
         taxable: parseFloat(parseFloat(out.taxable).toFixed(2)),
@@ -618,8 +822,12 @@ class GSTComplianceService {
         sgst: parseFloat(parseFloat(inp.sgst).toFixed(2)),
         igst: parseFloat(parseFloat(inp.igst).toFixed(2)),
       },
-      tax_payable: { cgst: netCGST, sgst: netSGST, igst: netIGST,
-        total: parseFloat((netCGST + netSGST + netIGST).toFixed(2)) },
+      tax_payable: {
+        cgst: netCGST,
+        sgst: netSGST,
+        igst: netIGST,
+        total: parseFloat((netCGST + netSGST + netIGST).toFixed(2)),
+      },
       json: gstr3b,
     };
   }
@@ -630,12 +838,20 @@ class GSTComplianceService {
 
   async getFilings(filters = {}, companyId) {
     const { return_type, financial_year, page = 1, limit = 24 } = filters;
-    let conditions = ['company_id = $1'];
+    let conditions = ["company_id = $1"];
     let params = [companyId];
     let pc = 2;
-    if (return_type) { conditions.push(`return_type = $${pc}`); params.push(return_type); pc++; }
-    if (financial_year) { conditions.push(`financial_year = $${pc}`); params.push(financial_year); pc++; }
-    const where = `WHERE ${conditions.join(' AND ')}`;
+    if (return_type) {
+      conditions.push(`return_type = $${pc}`);
+      params.push(return_type);
+      pc++;
+    }
+    if (financial_year) {
+      conditions.push(`financial_year = $${pc}`);
+      params.push(financial_year);
+      pc++;
+    }
+    const where = `WHERE ${conditions.join(" AND ")}`;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     const result = await query(
@@ -645,13 +861,16 @@ class GSTComplianceService {
        FROM gstr_filings ${where}
        ORDER BY return_period DESC
        LIMIT $${pc} OFFSET $${pc + 1}`,
-      [...params, parseInt(limit), offset]
+      [...params, parseInt(limit), offset],
     );
     return result.rows;
   }
 
   async getFiling(id, companyId) {
-    const result = await query(`SELECT * FROM gstr_filings WHERE id = $1 AND company_id = $2`, [id, companyId]);
+    const result = await query(
+      `SELECT * FROM gstr_filings WHERE id = $1 AND company_id = $2`,
+      [id, companyId],
+    );
     const filing = result.rows[0];
     if (filing && filing.json_data) {
       filing.json = JSON.parse(filing.json_data);
@@ -663,7 +882,7 @@ class GSTComplianceService {
     await query(
       `UPDATE gstr_filings SET status = 'filed', filed_date = CURRENT_DATE,
        arn_number = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND company_id = $3`,
-      [arnNumber, id, companyId]
+      [arnNumber, id, companyId],
     );
     return this.getFiling(id, companyId);
   }
@@ -680,17 +899,27 @@ class GSTComplianceService {
     for (const r of records) {
       const key = `${r.tax_rate}-${r.place_of_supply || sellerState}`;
       if (!agg[key]) {
-        agg[key] = { rt: r.tax_rate, pos: r.place_of_supply || sellerState,
-          typ: 'OE', txval: 0, camt: 0, samt: 0, iamt: 0, csamt: 0 };
+        agg[key] = {
+          rt: r.tax_rate,
+          pos: r.place_of_supply || sellerState,
+          typ: "OE",
+          txval: 0,
+          camt: 0,
+          samt: 0,
+          iamt: 0,
+          csamt: 0,
+        };
       }
       agg[key].txval += r.taxable_value;
       agg[key].camt += r.cgst;
       agg[key].samt += r.sgst;
       agg[key].iamt += r.igst;
     }
-    return Object.values(agg).map(a => ({
-      ...a, txval: parseFloat(a.txval.toFixed(2)),
-      camt: parseFloat(a.camt.toFixed(2)), samt: parseFloat(a.samt.toFixed(2)),
+    return Object.values(agg).map((a) => ({
+      ...a,
+      txval: parseFloat(a.txval.toFixed(2)),
+      camt: parseFloat(a.camt.toFixed(2)),
+      samt: parseFloat(a.samt.toFixed(2)),
       iamt: parseFloat(a.iamt.toFixed(2)),
     }));
   }
@@ -700,100 +929,209 @@ class GSTComplianceService {
   // and PDF exports so the two formats can never disagree on what a filing
   // contains.
   _flattenFilingForExport(filing) {
-    const j = filing.json || (filing.json_data ? JSON.parse(filing.json_data) : {});
+    const j =
+      filing.json || (filing.json_data ? JSON.parse(filing.json_data) : {});
 
-    if (filing.return_type === 'GSTR1') {
+    if (filing.return_type === "GSTR1") {
       const b2bRows = [];
-      (j.b2b || []).forEach(buyer => {
-        (buyer.inv || []).forEach(inv => {
+      (j.b2b || []).forEach((buyer) => {
+        (buyer.inv || []).forEach((inv) => {
           const item = (inv.itms && inv.itms[0] && inv.itms[0].itm_det) || {};
           b2bRows.push({
-            gstin: buyer.ctin, invoice_no: inv.inum, date: inv.idt,
-            place_of_supply: inv.pos, invoice_value: inv.val,
-            taxable_value: item.txval || 0, rate: item.rt || 0,
-            cgst: item.camt || 0, sgst: item.samt || 0, igst: item.iamt || 0,
+            gstin: buyer.ctin,
+            invoice_no: inv.inum,
+            date: inv.idt,
+            place_of_supply: inv.pos,
+            invoice_value: inv.val,
+            taxable_value: item.txval || 0,
+            rate: item.rt || 0,
+            cgst: item.camt || 0,
+            sgst: item.samt || 0,
+            igst: item.iamt || 0,
           });
         });
       });
-      const b2csRows = (j.b2cs || []).map(r => ({
-        place_of_supply: r.pos, rate: r.rt || 0, taxable_value: r.txval || 0,
-        cgst: r.camt || 0, sgst: r.samt || 0, igst: r.iamt || 0,
+      const b2csRows = (j.b2cs || []).map((r) => ({
+        place_of_supply: r.pos,
+        rate: r.rt || 0,
+        taxable_value: r.txval || 0,
+        cgst: r.camt || 0,
+        sgst: r.samt || 0,
+        igst: r.iamt || 0,
       }));
       const b2clRows = [];
-      (j.b2cl || []).forEach(entry => {
-        (entry.inv || []).forEach(inv => {
+      (j.b2cl || []).forEach((entry) => {
+        (entry.inv || []).forEach((inv) => {
           const item = (inv.itms && inv.itms[0] && inv.itms[0].itm_det) || {};
           b2clRows.push({
-            place_of_supply: entry.pos, invoice_no: inv.inum, date: inv.idt,
-            invoice_value: inv.val, taxable_value: item.txval || 0,
-            rate: item.rt || 0, igst: item.iamt || 0,
+            place_of_supply: entry.pos,
+            invoice_no: inv.inum,
+            date: inv.idt,
+            invoice_value: inv.val,
+            taxable_value: item.txval || 0,
+            rate: item.rt || 0,
+            igst: item.iamt || 0,
           });
         });
       });
-      const hsnRows = (j.hsn?.data || []).map(h => ({
-        hsn_sac: h.hsn_sc, description: h.desc, quantity: h.qty,
-        taxable_value: h.txval, cgst: h.camt, sgst: h.samt, igst: h.iamt,
+      const hsnRows = (j.hsn?.data || []).map((h) => ({
+        hsn_sac: h.hsn_sc,
+        description: h.desc,
+        quantity: h.qty,
+        taxable_value: h.txval,
+        cgst: h.camt,
+        sgst: h.samt,
+        igst: h.iamt,
         total_value: h.val,
       }));
 
       return {
         sections: [
-          { name: 'B2B (Registered)', rows: b2bRows, columns: [
-            { key: 'gstin', label: 'GSTIN', width: 1.4 }, { key: 'invoice_no', label: 'Invoice No', width: 1.2 },
-            { key: 'date', label: 'Date', width: 0.9 }, { key: 'place_of_supply', label: 'POS', width: 0.6 },
-            { key: 'invoice_value', label: 'Invoice Value', width: 1, align: 'right' },
-            { key: 'taxable_value', label: 'Taxable Value', width: 1, align: 'right' },
-            { key: 'rate', label: 'Rate %', width: 0.6, align: 'right' },
-            { key: 'cgst', label: 'CGST', width: 0.8, align: 'right' }, { key: 'sgst', label: 'SGST', width: 0.8, align: 'right' },
-            { key: 'igst', label: 'IGST', width: 0.8, align: 'right' },
-          ] },
-          { name: 'B2CS (Unregistered)', rows: b2csRows, columns: [
-            { key: 'place_of_supply', label: 'POS', width: 0.8 }, { key: 'rate', label: 'Rate %', width: 0.8, align: 'right' },
-            { key: 'taxable_value', label: 'Taxable Value', width: 1.2, align: 'right' },
-            { key: 'cgst', label: 'CGST', width: 1, align: 'right' }, { key: 'sgst', label: 'SGST', width: 1, align: 'right' },
-            { key: 'igst', label: 'IGST', width: 1, align: 'right' },
-          ] },
-          { name: 'B2CL (Unregistered > ₹2.5L, Inter-State)', rows: b2clRows, columns: [
-            { key: 'place_of_supply', label: 'POS', width: 0.7 }, { key: 'invoice_no', label: 'Invoice No', width: 1.3 },
-            { key: 'date', label: 'Date', width: 0.9 }, { key: 'invoice_value', label: 'Invoice Value', width: 1, align: 'right' },
-            { key: 'taxable_value', label: 'Taxable Value', width: 1, align: 'right' },
-            { key: 'rate', label: 'Rate %', width: 0.6, align: 'right' }, { key: 'igst', label: 'IGST', width: 0.9, align: 'right' },
-          ] },
-          { name: 'HSN Summary', rows: hsnRows, columns: [
-            { key: 'hsn_sac', label: 'HSN/SAC', width: 0.9 }, { key: 'description', label: 'Description', width: 1.6 },
-            { key: 'quantity', label: 'Qty', width: 0.6, align: 'right' },
-            { key: 'taxable_value', label: 'Taxable Value', width: 1, align: 'right' },
-            { key: 'cgst', label: 'CGST', width: 0.8, align: 'right' }, { key: 'sgst', label: 'SGST', width: 0.8, align: 'right' },
-            { key: 'igst', label: 'IGST', width: 0.8, align: 'right' }, { key: 'total_value', label: 'Total Value', width: 1, align: 'right' },
-          ] },
+          {
+            name: "B2B (Registered)",
+            rows: b2bRows,
+            columns: [
+              { key: "gstin", label: "GSTIN", width: 1.4 },
+              { key: "invoice_no", label: "Invoice No", width: 1.2 },
+              { key: "date", label: "Date", width: 0.9 },
+              { key: "place_of_supply", label: "POS", width: 0.6 },
+              {
+                key: "invoice_value",
+                label: "Invoice Value",
+                width: 1,
+                align: "right",
+              },
+              {
+                key: "taxable_value",
+                label: "Taxable Value",
+                width: 1,
+                align: "right",
+              },
+              { key: "rate", label: "Rate %", width: 0.6, align: "right" },
+              { key: "cgst", label: "CGST", width: 0.8, align: "right" },
+              { key: "sgst", label: "SGST", width: 0.8, align: "right" },
+              { key: "igst", label: "IGST", width: 0.8, align: "right" },
+            ],
+          },
+          {
+            name: "B2CS (Unregistered)",
+            rows: b2csRows,
+            columns: [
+              { key: "place_of_supply", label: "POS", width: 0.8 },
+              { key: "rate", label: "Rate %", width: 0.8, align: "right" },
+              {
+                key: "taxable_value",
+                label: "Taxable Value",
+                width: 1.2,
+                align: "right",
+              },
+              { key: "cgst", label: "CGST", width: 1, align: "right" },
+              { key: "sgst", label: "SGST", width: 1, align: "right" },
+              { key: "igst", label: "IGST", width: 1, align: "right" },
+            ],
+          },
+          {
+            name: "B2CL (Unregistered > ₹2.5L, Inter-State)",
+            rows: b2clRows,
+            columns: [
+              { key: "place_of_supply", label: "POS", width: 0.7 },
+              { key: "invoice_no", label: "Invoice No", width: 1.3 },
+              { key: "date", label: "Date", width: 0.9 },
+              {
+                key: "invoice_value",
+                label: "Invoice Value",
+                width: 1,
+                align: "right",
+              },
+              {
+                key: "taxable_value",
+                label: "Taxable Value",
+                width: 1,
+                align: "right",
+              },
+              { key: "rate", label: "Rate %", width: 0.6, align: "right" },
+              { key: "igst", label: "IGST", width: 0.9, align: "right" },
+            ],
+          },
+          {
+            name: "HSN Summary",
+            rows: hsnRows,
+            columns: [
+              { key: "hsn_sac", label: "HSN/SAC", width: 0.9 },
+              { key: "description", label: "Description", width: 1.6 },
+              { key: "quantity", label: "Qty", width: 0.6, align: "right" },
+              {
+                key: "taxable_value",
+                label: "Taxable Value",
+                width: 1,
+                align: "right",
+              },
+              { key: "cgst", label: "CGST", width: 0.8, align: "right" },
+              { key: "sgst", label: "SGST", width: 0.8, align: "right" },
+              { key: "igst", label: "IGST", width: 0.8, align: "right" },
+              {
+                key: "total_value",
+                label: "Total Value",
+                width: 1,
+                align: "right",
+              },
+            ],
+          },
         ],
       };
     }
 
     // GSTR3B — one small summary table
     const rows = [
-      { particulars: 'Outward Taxable Supplies', taxable_value: j['3.1']?.osup_det?.txval || 0,
-        cgst: j['3.1']?.osup_det?.camt || 0, sgst: j['3.1']?.osup_det?.samt || 0, igst: j['3.1']?.osup_det?.iamt || 0 },
-      { particulars: 'Input Tax Credit Available', taxable_value: '',
-        cgst: j['4']?.itc_avl?.camt || 0, sgst: j['4']?.itc_avl?.samt || 0, igst: j['4']?.itc_avl?.iamt || 0 },
-      { particulars: 'Net Tax Payable', taxable_value: '',
-        cgst: j['6.1']?.tax_payable?.camt || 0, sgst: j['6.1']?.tax_payable?.samt || 0, igst: j['6.1']?.tax_payable?.iamt || 0 },
+      {
+        particulars: "Outward Taxable Supplies",
+        taxable_value: j["3.1"]?.osup_det?.txval || 0,
+        cgst: j["3.1"]?.osup_det?.camt || 0,
+        sgst: j["3.1"]?.osup_det?.samt || 0,
+        igst: j["3.1"]?.osup_det?.iamt || 0,
+      },
+      {
+        particulars: "Input Tax Credit Available",
+        taxable_value: "",
+        cgst: j["4"]?.itc_avl?.camt || 0,
+        sgst: j["4"]?.itc_avl?.samt || 0,
+        igst: j["4"]?.itc_avl?.iamt || 0,
+      },
+      {
+        particulars: "Net Tax Payable",
+        taxable_value: "",
+        cgst: j["6.1"]?.tax_payable?.camt || 0,
+        sgst: j["6.1"]?.tax_payable?.samt || 0,
+        igst: j["6.1"]?.tax_payable?.iamt || 0,
+      },
     ];
     return {
-      sections: [{ name: 'GSTR-3B Summary', rows, columns: [
-        { key: 'particulars', label: 'Particulars', width: 2 },
-        { key: 'taxable_value', label: 'Taxable Value', width: 1, align: 'right' },
-        { key: 'cgst', label: 'CGST', width: 1, align: 'right' }, { key: 'sgst', label: 'SGST', width: 1, align: 'right' },
-        { key: 'igst', label: 'IGST', width: 1, align: 'right' },
-      ] }],
+      sections: [
+        {
+          name: "GSTR-3B Summary",
+          rows,
+          columns: [
+            { key: "particulars", label: "Particulars", width: 2 },
+            {
+              key: "taxable_value",
+              label: "Taxable Value",
+              width: 1,
+              align: "right",
+            },
+            { key: "cgst", label: "CGST", width: 1, align: "right" },
+            { key: "sgst", label: "SGST", width: 1, align: "right" },
+            { key: "igst", label: "IGST", width: 1, align: "right" },
+          ],
+        },
+      ],
     };
   }
 
   _formatDate(dateStr) {
-    if (!dateStr) return '';
+    if (!dateStr) return "";
     const d = new Date(dateStr);
-    const dd = String(d.getDate()).padStart(2, '0');
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
     const yyyy = d.getFullYear();
     return `${dd}-${mm}-${yyyy}`;
   }

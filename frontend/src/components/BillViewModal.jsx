@@ -197,10 +197,10 @@ export default function BillViewModal({ isOpen, onClose, invoice, onEdit, onCanc
       <div className="mb-3">
         <div className="flex items-center justify-center gap-3">
           {effectiveLogoUrl && (
-            <img src={effectiveLogoUrl} alt="Agency Logo" className="h-16 w-16 max-w-full object-contain shrink-0" />
+            <img src={effectiveLogoUrl} alt="Agency Logo" className="h-24 w-24 max-w-full object-contain shrink-0" />
           )}
           <div className="text-center">
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-widest text-[#8B1E1E] font-serif uppercase">
+            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-widest text-[#D12525] font-serif uppercase">
               {agencyName}
             </h1>
             <p className="text-[12px] sm:text-[13px] text-black mt-0.5 font-normal">

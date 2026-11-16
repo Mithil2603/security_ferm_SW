@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { Building2, Plus, Loader2, Archive, X, Check, AlertCircle } from 'lucide-react';
+import { confirmDialog } from '../context/ToastContext';
 
 export default function Companies() {
   const { user, switchCompany } = useAuth();
@@ -47,7 +48,13 @@ export default function Companies() {
   };
 
   const handleArchive = async (id, name) => {
-    if (!window.confirm(`Archive "${name}"? It will be hidden from the switcher, but its data is kept.`)) return;
+    const confirmed = await confirmDialog({
+      title: 'Archive Company',
+      message: `Archive "${name}"? It will be hidden from the switcher, but its data is kept.`,
+      confirmText: 'Archive',
+      variant: 'danger'
+    });
+    if (!confirmed) return;
     setBusyId(id);
     try {
       await api.delete(`/companies/${id}`);
