@@ -257,7 +257,7 @@ function generateInvoicePDF(
       if (fs.existsSync(logoPath)) {
         try {
           doc.image(logoPath, startX, 32, {
-            fit: [110, 65],
+            fit: [135, 80],
             align: "left",
             valign: "top",
           });
@@ -305,7 +305,7 @@ function generateInvoicePDF(
     doc
       .font("Times-Bold")
       .fontSize(14)
-      .fillColor("#C03D3D")
+      .fillColor("#D12525")
       .text(agencyName, startX, 32, { width: tableWidth, align: "center" });
     doc
       .font("Helvetica-Bold")
