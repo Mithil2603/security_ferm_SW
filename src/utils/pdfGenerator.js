@@ -256,7 +256,7 @@ function generateInvoicePDF(
       }
       if (fs.existsSync(logoPath)) {
         try {
-          doc.image(logoPath, startX, 32, {
+          doc.image(logoPath, startX, 40, {
             fit: [135, 80],
             align: "left",
             valign: "top",
