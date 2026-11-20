@@ -271,33 +271,35 @@ function generateInvoicePDF(
   // --- Helper: Draw Company Header (Page 1) ---
   function drawCompanyHeader() {
     drawLogo();
+    const halfWidth = tableWidth / 2 - 4;
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#1a365d");
+    doc.text(`GST NO. ${agencyGst}`, startX, 20, {
+      width: halfWidth,
+      align: "left",
+    });
+    doc.text(`PAN NO. ${agencyPan}`, startX + tableWidth - halfWidth, 20, {
+      width: halfWidth,
+      align: "right",
+    });
     doc
       .font("Times-Bold")
       .fontSize(22)
       .fillColor("#D12525")
-      .text(agencyName, startX, 34, { width: tableWidth, align: "center" });
+      .text(agencyName, startX, doc.y + 4, {
+        width: tableWidth,
+        align: "center",
+      });
     doc.font("Helvetica").fontSize(8.5).fillColor("#000000");
     doc.text(agencyAddress.replace(/\n/g, ", "), startX, doc.y + 2, {
       width: tableWidth,
       align: "center",
     });
-    doc.text(`MOBILE NO.${agencyPhone}`, startX, doc.y + 1.5, {
-      width: tableWidth,
-      align: "center",
-    });
-    doc.text(`EMAIL.ID:- ${agencyEmail}`, startX, doc.y + 1.5, {
-      width: tableWidth,
-      align: "center",
-    });
-    doc.font("Helvetica-Bold").fontSize(11).fillColor("#1a365d");
-    doc.text(`GST NO. ${agencyGst}`, startX, doc.y + 3, {
-      width: tableWidth,
-      align: "center",
-    });
-    doc.text(`PAN NO. ${agencyPan}`, startX, doc.y + 1.5, {
-      width: tableWidth,
-      align: "center",
-    });
+    doc.text(
+      `MOBILE NO.${agencyPhone}          EMAIL.ID:- ${agencyEmail}`,
+      startX,
+      doc.y + 1.5,
+      { width: tableWidth, align: "center" },
+    );
   }
 
   // --- Helper: Draw Continuation Header (Pages 2+) ---

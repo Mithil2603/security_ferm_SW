@@ -193,8 +193,12 @@ export default function BillViewModal({ isOpen, onClose, invoice, onEdit, onCanc
         </div>
       )}
 
-      {/* Top Company Header (Logo, Maroon Title, Black Address/Phone, Blue GST/PAN) */}
+      {/* Top Company Header (Logo, Maroon Title, Black Address/Phone/Mobile/Email, Blue GST/PAN) */}
       <div className="mb-3">
+        <div className="flex items-start justify-between gap-2 text-sm font-bold text-[#1a365d] tracking-wide">
+          <span>{agencyGst}</span>
+          <span>{agencyPan}</span>
+        </div>
         <div className="flex items-center justify-center gap-3">
           {effectiveLogoUrl && (
             <img src={effectiveLogoUrl} alt="Agency Logo" className="h-28 w-auto max-w-full object-contain shrink-0 mt-6" />
@@ -206,20 +210,12 @@ export default function BillViewModal({ isOpen, onClose, invoice, onEdit, onCanc
             <p className="text-[12px] sm:text-[13px] text-black mt-0.5 font-normal">
               {agencyAddress}
             </p>
+            <p className="flex items-center justify-center gap-6 text-[12px] sm:text-[13px] text-black font-normal">
+              <span>{agencyMobile}</span>
+              <span>{agencyEmail}</span>
+            </p>
           </div>
         </div>
-        <p className="text-[12px] sm:text-[13px] text-black text-center font-normal">
-          {agencyMobile}
-        </p>
-        <p className="text-[12px] sm:text-[13px] text-black text-center font-normal">
-          {agencyEmail}
-        </p>
-        <p className="text-base sm:text-lg font-bold text-[#1a365d] text-center mt-1 tracking-wide">
-          {agencyGst}
-        </p>
-        <p className="text-base sm:text-lg font-bold text-[#1a365d] text-center tracking-wide">
-          {agencyPan}
-        </p>
       </div>
 
       {/* Boxed Grid Layout - Exactly Matching Reference Format */}
